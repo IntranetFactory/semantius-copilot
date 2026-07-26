@@ -10,9 +10,11 @@
  *
  * Talks the same wire protocol as the frontend FlueClient (raw fetch, like
  * acceptance.mjs): A = provision + POST the message to /agents/hoth/:id;
- * B = ingest the trip-planner bundle from dist-bundle/, then POST the message
- * to /agents/main/:id with the creation seed as `initialData` (plan §6 —
- * without it, turn 1 runs on generic default instructions). The reply is
+ * B = name-based ingest ({ agentName } — the trip-planner definition must
+ * already be deployed via `pnpm deploy:agent hoth-trip-planner`), then POST
+ * the message to /agents/main/:id with the creation seed as `initialData`
+ * (plan §6 — without it, turn 1 runs on generic default instructions; the
+ * seed is built from dist-bundle/, so run `pnpm bundle` first). The reply is
  * polled from `?view=history` until the submission settles.
  */
 import { randomUUID } from 'node:crypto';
@@ -51,7 +53,14 @@ if (backend === 'a') {
   sendBody = { kind: 'user', body: message };
 } else {
   const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf8'));
-  await postJson(`${base}/sessions/${sessionId}/agent`, { bundle });
+  try {
+    await postJson(`${base}/sessions/${sessionId}/agent`, { agentName: bundle.agentName });
+  } catch (err) {
+    if (String(err).includes('404')) {
+      console.error(`agent "${bundle.agentName}" is not deployed — run: pnpm deploy:agent ${bundle.agentName}`);
+    }
+    throw err;
+  }
   const skillCatalog = skillCatalogFromBundle(bundle);
   const seed = {
     agentName: bundle.agentName,

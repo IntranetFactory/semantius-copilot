@@ -19,7 +19,8 @@
 /** The stable prefixes this app writes, with human labels for the browser. */
 export const KV_GROUPS = {
   session: 'Session index (one record per agent session/conversation id)',
-  agent: 'Agent bundle (one immutable bundle per session id)',
+  agentdef: 'Named agent definition (deployed via pnpm deploy:agent; no TTL)',
+  agent: 'Agent bundle (one immutable per-session snapshot of a named definition)',
   bearer: 'Per-container egress bearer (containerId -> token)',
   tag: 'Per-container tenant tag (containerId -> tenant)',
   whitelist: 'Per-container egress whitelist (containerId -> allowed hosts)',
@@ -27,6 +28,15 @@ export const KV_GROUPS = {
 
 export const SESSION_KEY_PREFIX = 'session:';
 export const SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * Named agent definitions (`agentdef:<name>`) are the deployable artifacts
+ * behind `pnpm deploy:agent <name>`: no TTL, overwritten on every deploy.
+ * Deliberately a DIFFERENT prefix from the per-session `agent:<id>` snapshots —
+ * agent names and session ids draw from overlapping alphabets, so sharing the
+ * prefix would let a session id shadow (or delete) a deployed definition.
+ */
+export const AGENT_DEF_KEY_PREFIX = 'agentdef:';
 
 /** Group a key by the segment before its first ':' (e.g. `agent:abc` -> `agent`). */
 export function kvGroupOf(name) {

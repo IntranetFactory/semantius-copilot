@@ -5,26 +5,26 @@
  * Chat: Flue v2 clients are conversation-scoped — one createFlueClient per
  * conversation URL (`<backend>/agents/<mount>/<sessionId>`; mount is `hoth`
  * on A, `main` on B), passed to useFlueAgent({ client }). New session mints a
- * lowercase UUID; for B, pick an agent and POST its one-JSON-string agent
- * bundle and await the 2xx before opening the chat (seeds the bearer mapping
- * and pre-warms the container); for A, POST the provision route (A is fixed
- * to the image-baked hoth-trip-planner agent, so it has no agent selector).
- * The agent list is the bundler output: `pnpm bundle` emits one JSON per
- * agents/<name>/ into src/generated/agents/, glob-imported below — a new
- * agent folder appears here with no code change.
+ * lowercase UUID; for B, pick an agent and POST just its NAME ({ agentName })
+ * — the definition itself lives in KV, deployed via `pnpm deploy:agent
+ * <name>` — and await the 2xx before opening the chat (seeds the bearer
+ * mapping and pre-warms the container); for A, POST the provision route (A is
+ * fixed to the image-baked hoth-trip-planner agent, so it has no agent
+ * selector). The agent list and the turn-1 seed are the bundler output:
+ * `pnpm bundle` emits one JSON per agents/<name>/ into src/generated/agents/,
+ * glob-imported below — a new agent folder appears here with no code change
+ * (deploy it with `pnpm deploy:agent` or sessions for it will 404).
  *
  * Data browser: a generic collection → record → detail tree with breadcrumbs.
  * Each backend exposes its stores as "collections" via /admin/collections:
- *   - kv        — the raw KV namespace (agent bundles, bearers, tags, session index)
+ *   - kv        — the raw KV namespace (named agent definitions, per-session
+ *                 bundle snapshots, bearers, tags, session index)
  *   - sessions  — one record per conversation id (from the session index); the
  *                 detail streams the live conversation held in the Flue agent
  *                 Durable Object (its SQLite conversation stream)
  * (The beta `runs` collection is gone — Flue v2 removed the workflow-run
  * registry.) No id is needed upfront — every level is enumerated from the
  * server.
- *
- * POC caveat (plan §10): the browser as bundle-origin inverts the production
- * trust model — fine for the POC, not the prod seam.
  */
 import { useFlueAgent } from '@flue/react';
 import { createFlueClient } from '@flue/sdk';
@@ -292,9 +292,12 @@ function ChatView({
         nextBackend === 'b'
           ? `${base}/sessions/${id}/agent`
           : `${base}/sessions/${id}/provision`;
+      // B is name-based: the definition must already be deployed to KV via
+      // `pnpm deploy:agent <name>` — the ingest route 404s otherwise. The
+      // generated bundles below still feed the dropdown and the turn-1 seed.
       const body =
         nextBackend === 'b'
-          ? JSON.stringify({ bundle: AGENTS[agentName], tenantTag: `tenant-${id.slice(0, 8)}` })
+          ? JSON.stringify({ agentName, tenantTag: `tenant-${id.slice(0, 8)}` })
           : '{}';
       const response = await fetch(url, {
         method: 'POST',
@@ -308,7 +311,7 @@ function ChatView({
       setPhase('ready');
       setDetail(
         nextBackend === 'b'
-          ? `agent ${payload.agentName}@${payload.version} · ${payload.skills?.length ?? 0} skill(s) → ${payload.reconstructed ? 'reconstructed' : 'already present'}; tag ${payload.tenantTag}`
+          ? `agent ${payload.agentName}@${payload.version}; tag ${payload.tenantTag}`
           : 'static provision OK',
       );
     } catch (err) {

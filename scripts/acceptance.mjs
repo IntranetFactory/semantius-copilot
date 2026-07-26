@@ -24,9 +24,14 @@ if (!API_TOKEN) {
 const AUTH = { authorization: `Bearer ${API_TOKEN}` };
 
 const bundle = JSON.parse(readFileSync(join(here, '..', 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf-8'));
-// Synthetic zero-skill agent (skills: {} is valid) — independent of what the
-// real agents/ folders currently contain.
-const zeroSkillBundle = { ...bundle, skills: {}, version: `${bundle.version.slice(0, 12)}zero` };
+// Synthetic definitions (deployed under their own names each run, stable keys
+// so there is no unbounded KV growth) — independent of what the real agents/
+// folders currently contain.
+// Zero-skill agent: skills: {} is valid.
+const zeroSkillBundle = { ...bundle, agentName: 'acceptance-zero-skill', skills: {}, version: `${bundle.version.slice(0, 12)}zero` };
+// No proxy_whitelist: same skills as the trip agent, must get deny-all egress.
+const { proxyWhitelist: _dropped, ...noEgressBase } = bundle;
+const noEgress = { ...noEgressBase, agentName: 'acceptance-no-egress', version: `${bundle.version.slice(0, 12)}noeg` };
 const bundleFileCount = Object.values(bundle.skills).reduce((n, files) => n + Object.keys(files).length, 0);
 
 let failures = 0;
@@ -42,6 +47,17 @@ function uuid() { return crypto.randomUUID(); }
 async function post(base, path, body) {
   const res = await fetch(`${base}${path}`, {
     method: 'POST',
+    headers: { 'content-type': 'application/json', ...AUTH },
+    body: JSON.stringify(body ?? {}),
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  return { status: res.status, json };
+}
+
+async function put(base, path, body) {
+  const res = await fetch(`${base}${path}`, {
+    method: 'PUT',
     headers: { 'content-type': 'application/json', ...AUTH },
     body: JSON.stringify(body ?? {}),
   });
@@ -69,8 +85,20 @@ async function main() {
   const badKey = await fetch(`${B_URL}/sessions/${uuid()}/agent`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' }, body: '{}' });
   check('auth', 'B rejects request with wrong API key (401)', badKey.status === 401, `status ${badKey.status}`);
 
+  // --- Named-definition deploys (PUT /agents/:name is the trust boundary) --
+  const dep = await put(B_URL, `/agents/${bundle.agentName}`, bundle);
+  check('deploy', 'B deploys hoth-trip-planner as a named definition', dep.status === 200 && dep.json.version === bundle.version, JSON.stringify(dep.json).slice(0, 140));
+  const depAgain = await put(B_URL, `/agents/${bundle.agentName}`, bundle);
+  check('deploy', 'redeploying the same name overwrites (200)', depAgain.status === 200, `status ${depAgain.status}`);
+  const depZero = await put(B_URL, `/agents/${zeroSkillBundle.agentName}`, zeroSkillBundle);
+  check('deploy', 'B deploys a zero-skill definition', depZero.status === 200, `status ${depZero.status}`);
+  const depDeny = await put(B_URL, `/agents/${noEgress.agentName}`, noEgress);
+  check('deploy', 'B deploys a no-whitelist definition', depDeny.status === 200, `status ${depDeny.status}`);
+  const depNoKey = await fetch(`${B_URL}/agents/acceptance-noauth`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bundle) });
+  check('deploy', 'deploy route rejects a missing API key (401)', depNoKey.status === 401, `status ${depNoKey.status}`);
+
   // --- C1: A is OOTB / static (no agent-ingest route) ---------------------
-  const aIngest = await post(A_URL, `/sessions/${uuid()}/agent`, { bundle });
+  const aIngest = await post(A_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName });
   check('C1', 'A has no agent-ingest route (404/405)', aIngest.status === 404 || aIngest.status === 405, `status ${aIngest.status}`);
 
   // --- Provision an A session and a B session -----------------------------
@@ -79,37 +107,36 @@ async function main() {
   check('C1', 'A provision (static bearer) OK', aProv.status === 200, JSON.stringify(aProv.json).slice(0, 120));
 
   const bId = uuid();
-  const bIngest = await post(B_URL, `/sessions/${bId}/agent`, { bundle, tenantTag: 'tenant-alpha' });
+  const bIngest = await post(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-alpha' });
   check(
     'B-ingest',
-    'B agent-bundle ingest + reconstruct OK',
+    'B name-based ingest OK (pinned to the deployed version)',
     bIngest.status === 200 &&
-      bIngest.json.reconstructed === true &&
       bIngest.json.agentName === bundle.agentName &&
-      Array.isArray(bIngest.json.skills) &&
-      bIngest.json.skills.includes('planner'),
+      bIngest.json.version === bundle.version &&
+      bIngest.json.tenantTag === 'tenant-alpha',
     JSON.stringify(bIngest.json).slice(0, 160),
   );
 
   // --- Clean-base positive control: B live sandbox now has the file set ---
+  // (also the reconstruction proof — the ingest response deliberately carries
+  // no provisioning internals, the deterministic file count here is the oracle)
   const bCount = await post(B_URL, `/sessions/${bId}/skill-check`, { op: 'count-skill-files' });
   const bFileCount = Number((bCount.json.stdout ?? '').trim());
   check('clean-base', 'B live sandbox has expected file count after injection', bFileCount === bundleFileCount, `count=${bFileCount}`);
 
   // --- Zero-skill agent: valid bundle, nothing to reconstruct -------------
   const zId = uuid();
-  const zIngest = await post(B_URL, `/sessions/${zId}/agent`, { bundle: zeroSkillBundle, tenantTag: 'tenant-zero' });
-  check('zero-skill', 'B ingests a zero-skill agent (nothing reconstructed)', zIngest.status === 200 && zIngest.json.reconstructed === false && zIngest.json.skills.length === 0, JSON.stringify(zIngest.json).slice(0, 140));
+  const zIngest = await post(B_URL, `/sessions/${zId}/agent`, { agentName: zeroSkillBundle.agentName, tenantTag: 'tenant-zero' });
+  check('zero-skill', 'B ingests a zero-skill agent', zIngest.status === 200 && zIngest.json.agentName === zeroSkillBundle.agentName, JSON.stringify(zIngest.json).slice(0, 140));
   const zCount = await post(B_URL, `/sessions/${zId}/skill-check`, { op: 'count-skill-files' });
   check('zero-skill', 'zero-skill session sandbox holds no skill files', Number((zCount.json.stdout ?? '').trim()) === 0, `count=${(zCount.json.stdout ?? '').trim()}`);
 
   // --- Per-agent egress: an agent WITHOUT proxy_whitelist gets deny-all -----
-  // Same skills as the trip agent, but no whitelist: the opening-times call to
-  // the echo host must be rejected by the outbound handler (fail closed).
-  const { proxyWhitelist: _dropped, ...noEgressBase } = bundle;
-  const noEgress = { ...noEgressBase, version: `${bundle.version.slice(0, 12)}noeg` };
+  // The opening-times call to the echo host must be rejected by the outbound
+  // handler (fail closed).
   const dId = uuid();
-  const dIngest = await post(B_URL, `/sessions/${dId}/agent`, { bundle: noEgress, tenantTag: 'tenant-deny' });
+  const dIngest = await post(B_URL, `/sessions/${dId}/agent`, { agentName: noEgress.agentName, tenantTag: 'tenant-deny' });
   check('egress', 'B ingests an agent without proxy_whitelist', dIngest.status === 200, `status ${dIngest.status}`);
   const dRun = await post(B_URL, `/sessions/${dId}/skill-check`, FIXED);
   const dOut = dRun.json.stdout ?? '';
@@ -179,7 +206,7 @@ async function main() {
 
   // --- C2: two concurrent B sessions get DIFFERENT bearers + tags ---------
   const b2Id = uuid();
-  await post(B_URL, `/sessions/${b2Id}/agent`, { bundle, tenantTag: 'tenant-beta' });
+  await post(B_URL, `/sessions/${b2Id}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-beta' });
   const [b1e, b2e] = await Promise.all([
     post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true }),
     post(B_URL, `/sessions/${b2Id}/skill-check`, { ...FIXED, debugEcho: true }),
@@ -189,15 +216,15 @@ async function main() {
   check('C2', 'concurrent B sessions carry different tenant tags', h1?.['x-tenant-tag'] === 'tenant-alpha' && h2?.['x-tenant-tag'] === 'tenant-beta');
 
   // --- C5: uniqueness guard — a reused id is rejected ---------------------
-  const reuse = await post(B_URL, `/sessions/${bId}/agent`, { bundle });
+  const reuse = await post(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName });
   check('C5', 'B rejects a reused session id (immutable-per-id)', reuse.status === 409, `status ${reuse.status}`);
 
   // --- C5: fail-closed egress — a session with no bearer mapping ----------
   //   Provision the bundle but immediately delete the mapping, then egress.
   const orphanId = uuid();
-  await post(B_URL, `/sessions/${orphanId}/agent`, { bundle, tenantTag: 'tenant-orphan' });
+  await post(B_URL, `/sessions/${orphanId}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-orphan' });
   await del(B_URL, orphanId); // removes bearer + bundle
-  await post(B_URL, `/sessions/${orphanId}/agent`, { bundle, tenantTag: 'tenant-orphan2' }).catch(() => {});
+  await post(B_URL, `/sessions/${orphanId}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-orphan2' }).catch(() => {});
   // Re-ingest re-adds a bearer, so instead test the pure no-mapping path via A:
   // craft an A session that never provisioned → no bearer mapping.
   const aNoBearer = uuid();
@@ -205,7 +232,10 @@ async function main() {
   const failStdout = aFailClosed.json.stdout ?? '';
   check('C5', 'egress fails closed without a bearer mapping (403 from proxy)', /403|egress denied/.test(failStdout) || aFailClosed.json.exitCode !== 0, snippet(failStdout));
 
-  // --- Hostile bundles rejected before reconstruction (plan §13) ----------
+  // --- Hostile bundles rejected at the deploy trust boundary (plan §13) ---
+  // Validation moved with the bundle bytes: ingest only takes a name, so the
+  // deploy route is where a hostile definition must be stopped. The key
+  // agentdef:hostile-probe is never written — every PUT below must 422.
   const hostiles = [
     ['path traversal', { ...bundle, skills: { ...bundle.skills, planner: { ...bundle.skills.planner, '../evil.md': 'x' } } }],
     ['absolute path', { ...bundle, skills: { ...bundle.skills, planner: { ...bundle.skills.planner, '/etc/passwd': 'x' } } }],
@@ -213,9 +243,15 @@ async function main() {
     ['missing instructions', { ...bundle, instructions: '' }],
   ];
   for (const [label, bad] of hostiles) {
-    const r = await post(B_URL, `/sessions/${uuid()}/agent`, { bundle: bad });
-    check('hostile', `B rejects hostile bundle: ${label}`, r.status === 422, `status ${r.status}`);
+    const r = await put(B_URL, '/agents/hostile-probe', bad);
+    check('hostile', `B rejects hostile bundle at deploy: ${label}`, r.status === 422, `status ${r.status}`);
   }
+
+  // --- Name-based ingest negatives -----------------------------------------
+  const unknown = await post(B_URL, `/sessions/${uuid()}/agent`, { agentName: 'acceptance-never-deployed' });
+  check('ingest-404', 'B rejects an undeployed agent name (404)', unknown.status === 404, `status ${unknown.status}`);
+  const legacy = await post(B_URL, `/sessions/${uuid()}/agent`, { bundle });
+  check('ingest-422', 'B rejects the legacy inline-bundle body (422)', legacy.status === 422, `status ${legacy.status}`);
 
   // Cleanup best-effort
   await Promise.all([del(A_URL, aId), del(B_URL, bId), del(B_URL, b2Id), del(B_URL, zId), del(B_URL, dId), del(B_URL, orphanId)]);

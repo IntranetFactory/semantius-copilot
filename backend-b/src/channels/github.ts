@@ -6,7 +6,8 @@
  * GITHUB_WEBHOOK_SECRET over the raw delivery bytes before the handler runs,
  * so its /webhook route is mounted OUTSIDE the API-key guard in app.ts.
  * `issues.opened` and `issue_comment.created` dispatch to the Main agent
- * (running the shared `agent:github-default` bundle) keyed by the canonical
+ * (running the shared `agentdef:github-default` bundle, deployed via
+ * `pnpm deploy:agent <name> --as github-default`) keyed by the canonical
  * instance id (one conversation per issue), so follow-up comments continue
  * the same session.
  *
@@ -18,7 +19,7 @@
 import { env } from 'cloudflare:workers';
 import { createGitHubChannel, type GitHubIssueRef } from '@flue/github';
 import { defineTool, dispatch } from '@flue/runtime';
-import { putSessionIndex, readSession } from '@hoth/core';
+import { AGENT_DEF_KEY_PREFIX, putSessionIndex, readSession } from '@hoth/core';
 import { Octokit } from '@octokit/rest';
 import * as v from 'valibot';
 import { Main } from '../agents/main';
@@ -89,10 +90,10 @@ async function dispatchToAgent(
   await indexConversation(id, ref).catch(() => {});
 }
 
-/** `{ initialData }` from the shared agent:github-default bundle, or {}. */
+/** `{ initialData }` from the shared agentdef:github-default bundle, or {}. */
 async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown> }> {
   try {
-    const raw = await (env as unknown as { STORE: KVNamespace }).STORE.get('agent:github-default');
+    const raw = await (env as unknown as { STORE: KVNamespace }).STORE.get(`${AGENT_DEF_KEY_PREFIX}github-default`);
     if (!raw) return {};
     const bundle = JSON.parse(raw) as Record<string, unknown>;
     return {

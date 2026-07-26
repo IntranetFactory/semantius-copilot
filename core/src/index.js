@@ -30,6 +30,7 @@ export {
   readSession,
   removeSessionIndex,
   SESSION_KEY_PREFIX,
+  AGENT_DEF_KEY_PREFIX,
   adminCollections,
   listCollectionRecords,
   readCollectionRecord,

@@ -7,8 +7,10 @@ Cloudflare Sandbox:
   **baked into the container image**, instructions/model resolved at build time.
 - **Backend B** — dynamic bundle, **multi-agent**: a whole agent (instructions + model
   overrides + ALL its skills) is serialized as **one JSON string** — the *agent bundle* —
-  delivered at session creation, and reconstructed into the sandbox (the multi-tenant
-  path). Which agent a session runs is data, not code.
+  deployed by NAME into Cloudflare KV (`pnpm deploy:agent <name>` → `agentdef:<name>`,
+  no TTL). Session creation submits just `{ agentName }`; the route resolves the named
+  definition, snapshots it per session, and reconstructs it into the sandbox (the
+  multi-tenant path). Which agent a session runs is data, not code.
 
 See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the full design and acceptance criteria.
 
@@ -41,14 +43,16 @@ backend-a/   Flue+CF Worker — the FIXED hoth-trip-planner agent; its skills ar
              into the image (Dockerfile COPY of agents/hoth-trip-planner/skills),
              instructions/model from bundler-generated src/generated/agent.json.
 backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue agent;
-             the agent bundle POSTed per session decides instructions, model, skills.
+             the named agent definition a session references (`{ agentName }` at ingest,
+             resolved from KV `agentdef:<name>`) decides instructions, model, skills.
              First-turn identity rides the creating send's `initialData` (see plan §6).
 frontend/    React + Vite — one chat, New-session button, A/B backend dropdown, and an
              agent dropdown when B is selected (fed by the bundler output).
-scripts/     bundle.mjs (agent bundler CLI) · node-smoke.mjs (portability, zero
-             Cloudflare) · acceptance.mjs (C1–C5) · admin.test.mjs ·
-             chat-probe.mjs (one real LLM turn against a deployed backend —
-             the observability verification driver).
+scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agents/
+             folder and PUT it to backend B as a named KV definition) ·
+             node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C1–C5) ·
+             admin.test.mjs · chat-probe.mjs (one real LLM turn against a deployed
+             backend — the observability verification driver).
 ```
 
 ## Agents & the agent bundle
@@ -69,13 +73,29 @@ scripts/     bundle.mjs (agent bundler CLI) · node-smoke.mjs (portability, zero
 }
 ```
 
-Artifacts per run: `dist-bundle/<name>.agent.json` (canonical, used by acceptance and the
-GitHub-channel seed), `frontend/src/generated/agents/<name>.json` (glob-imported by the UI —
+Artifacts per run: `dist-bundle/<name>.agent.json` (canonical, used by acceptance and
+chat-probe), `frontend/src/generated/agents/<name>.json` (glob-imported by the UI —
 a NEW agents/ folder shows up in the frontend agent dropdown after re-running `pnpm bundle`,
 no code change), and `backend-a/src/generated/agent.json` (meta-only build input for A's
 fixed agent). Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
 instructions ≤64 KiB (`core/src/agent.js`). Zero-skill agents (no `skills/` folder) are
 valid — nothing is provisioned, the bundle still carries instructions/model.
+
+**Deploying an agent to backend B** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
+builds `agents/<name>/` fresh with the same loader and `PUT`s it to backend B's
+authenticated `/agents/:name` route, which validates the bundle (the trust boundary —
+hostile bundles are rejected 422 here) and stores it as KV `agentdef:<name>` — **no TTL,
+overwritten on every deploy**. Sessions then ingest with
+`POST /sessions/:id/agent {"agentName":"<name>"}`; the route snapshots the definition to
+`agent:<sessionId>` (24 h TTL), so redeploying a definition never mutates in-flight
+sessions, and an undeployed name is a 404. The KV key name is authoritative — `--as`
+deploys a folder under a different key (used for the GitHub channel's shared agent):
+
+```bash
+pnpm deploy:agent hoth-trip-planner                     # agents/<name> -> agentdef:<name>
+pnpm deploy:agent hoth-trip-planner --as github-default # alias key for the GitHub channel
+pnpm deploy:agent --all                                 # every agents/ folder
+```
 
 ## Skill delivery to the model (backend B)
 
@@ -173,15 +193,18 @@ pnpm dev:frontend      # http://localhost:5173  (talks to localhost:3583/3584 in
 ## Deploy
 
 ```bash
-pnpm deploy            # bundle + deploy A + B + frontend, in order
-pnpm deploy:agents     # bundle + deploy:frontend — ships agents/ content changes to
-                       # backend B (bundles ride the frontend build; B's worker is the
-                       # generic host and needs no redeploy). NEW sessions only; if
+pnpm deploy            # bundle + deploy A + B + all named agent defs + frontend, in order
+pnpm deploy:agents     # bundle + deploy:agent --all + deploy:frontend — ships agents/
+                       # content changes to backend B (named KV definitions for ingest,
+                       # frontend-built bundles for the dropdown + turn-1 seed; B's worker
+                       # is the generic host and needs no redeploy). NEW sessions only; if
                        # hoth-trip-planner changed, backend A needs deploy:a too, and the
-                       # GitHub channel's agent:github-default KV key its manual re-upload.
+                       # GitHub channel's alias a re-run of:
+                       #   pnpm deploy:agent hoth-trip-planner --as github-default
 # or individually:
 pnpm deploy:a          # vite build + wrangler deploy backend A (creates its container app)
 pnpm deploy:b          # vite build + wrangler deploy backend B
+pnpm deploy:agent <n>  # bundle agents/<n>/ and PUT it to B as KV agentdef:<n> (see above)
 pnpm deploy:frontend   # vite build (URLs from frontend/.env.production) + wrangler deploy
 ```
 
@@ -261,10 +284,12 @@ measurement predates `interceptHttps` — with interception off, no CA exists an
 against the proxy cannot validate. ALL sandbox egress is HTTPS now — `opening-times.js`
 calls the echo host over 443 and the bearer rides inside TLS.
 
-**Session substrate expires after 24 h (fail-closed by design):** the stored agent
-bundle, bearer, and whitelist mappings all carry a 24 h TTL, and chat-session bearers
-are never re-minted (plan §13 C5). A chat session older than that loses egress and — on
-a cold container — its skills; start a new session.
+**Session substrate expires after 24 h (fail-closed by design):** the per-session
+bundle snapshot (`agent:<id>`), bearer, and whitelist mappings all carry a 24 h TTL, and
+chat-session bearers are never re-minted (plan §13 C5). A chat session older than that
+loses egress and — on a cold container — its skills; start a new session. Named agent
+definitions (`agentdef:<name>`) deliberately have NO TTL: they are deployable artifacts,
+overwritten by the next `pnpm deploy:agent`, not session state.
 
 ## Data browser
 
@@ -303,11 +328,11 @@ nothing appears on GitHub.
   mounted in `app.ts` **before** the API-key guard (auth is `X-Hub-Signature-256`, not the
   bearer). The explicit early mount is load-bearing.
 - GitHub conversations load the trip-planner agent bundle from the no-TTL KV entry
-  `agent:github-default`, uploaded manually (from `backend-b/`):
-  `wrangler kv key put agent:github-default --path ../dist-bundle/hoth-trip-planner.agent.json --binding STORE --remote`
-  — re-upload after re-running `pnpm bundle` (and after this refactor: the old
-  `bundle:github-default` key is dead). The agent initializer mints the egress bearer
-  itself (tenantTag `github`) since these conversations never pass the ingest route.
+  `agentdef:github-default` — a named-definition alias deployed with
+  `pnpm deploy:agent hoth-trip-planner --as github-default`; re-run it after changing the
+  agent (the pre-named-definition keys `agent:github-default` and `bundle:github-default`
+  are dead). The agent initializer mints the egress bearer itself (tenantTag `github`)
+  since these conversations never pass the ingest route.
 - Worker secrets: `GITHUB_WEBHOOK_SECRET` (channel creation throws at module init if
   empty — deploy fails until it exists) and `GITHUB_TOKEN` (fine-grained PAT, Issues
   read/write).
@@ -487,11 +512,13 @@ C1 (A is OOTB/static, no agent ingest), C2 (B per-session bearers + tenant tags)
 source of truth — A image == bundle == B reconstructed, byte-identical), C4 (same result A
 vs B — `opening-times.js` stdout byte-for-byte, plus the injected bearer reaching the echo
 upstream while the container sends none), C5 (uniqueness guard + fail-closed egress), plus
-clean-base, zero-skill-agent, per-agent-egress deny-all, and hostile-bundle checks.
+named-definition deploys (`PUT /agents/:name` incl. overwrite + 401), clean-base,
+zero-skill-agent, per-agent-egress deny-all, hostile-bundle-at-deploy (422), and
+name-based-ingest negatives (undeployed name 404, legacy inline-bundle body 422).
 
 ## Verified results
 
-All 30 acceptance checks pass against the deployed Workers, and both backends drive the LLM
+All 37 acceptance checks pass against the deployed Workers, and both backends drive the LLM
 end-to-end with the identical `activate_skill → read → bash` sequence and matching opening
 times. Two wiring findings and the egress HTTP-vs-HTTPS caveat are recorded in
 [`hoth-poc-plan.md`](./hoth-poc-plan.md) §7.

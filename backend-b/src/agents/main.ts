@@ -17,9 +17,10 @@
  * ONE host, many channels: bundle-driven instructions, model, and skill
  * provisioning are shared; a channel only changes where the bundle comes from
  * and how the answer is delivered. Chat sessions read `agent:<sessionId>`
- * (POSTed by the ingest route) and reply in the conversation; GitHub-issue
- * conversations read the shared `agent:github-default` and must deliver
- * through the comment tool.
+ * (snapshotted by the ingest route from the named `agentdef:<name>`
+ * definition) and reply in the conversation; GitHub-issue conversations read
+ * the shared `agentdef:github-default` and must deliver through the comment
+ * tool.
  */
 import { getSandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
@@ -36,6 +37,7 @@ import {
 } from '@flue/runtime';
 import { cloudflareSandbox } from '@flue/runtime/cloudflare';
 import {
+  AGENT_DEF_KEY_PREFIX,
   kvSecretBroker,
   provisionAgentSkills,
   putEgressWhitelist,
@@ -68,7 +70,7 @@ const DEFAULT_INSTRUCTIONS =
  *    without a seed, turn 1 would run on the generic default instructions.
  *  - `usePersistentState` — set by the start callback from the KV bundle
  *    (authoritative; covers instances created without a seed, and the
- *    re-seedable `agent:github-default`). Preferred once present. The
+ *    re-deployable `agentdef:github-default`). Preferred once present. The
  *    `version` field is the change detector.
  */
 type AgentMeta = {
@@ -134,7 +136,7 @@ export function Main({ id }: AgentProps) {
   // plan §13 C5); channel conversations never pass ingest, so they self-heal
   // the mapping here — mint-if-absent, never rotating a warm one.
   const issueRef = gitHubRefFromConversation(id);
-  const bundleKey = issueRef ? 'agent:github-default' : `agent:${id}`;
+  const bundleKey = issueRef ? `${AGENT_DEF_KEY_PREFIX}github-default` : `agent:${id}`;
   const bearerTag = issueRef ? 'github' : undefined;
 
   // Two-path identity resolution (see AgentMeta docs): the persisted meta is

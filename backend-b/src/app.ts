@@ -1,18 +1,24 @@
 /**
- * Backend B HTTP app — the multi-agent dynamic-bundle ingest surface
- * (plan §6/§8).
+ * Backend B HTTP app — the multi-agent named-definition surface (plan §6/§8).
  *
- * POST /sessions/:id/agent:
- *  (a) validates the untrusted agent bundle before anything else,
- *  (b) stores it keyed by session id (read back by the agent initializer),
+ * PUT /agents/:name (the `pnpm deploy:agent <name>` target):
+ *  validates the untrusted agent bundle and persists it as the named
+ *  definition `agentdef:<name>` — no TTL, overwritten on every deploy. The KV
+ *  key name is authoritative; bundle.agentName is informative (an alias like
+ *  github-default deliberately diverges).
+ *
+ * POST /sessions/:id/agent (body: { agentName, tenantTag? }):
+ *  (a) resolves the named definition from KV (404 when not deployed),
+ *  (b) snapshots it keyed by session id (read back by the agent initializer),
+ *      so in-flight sessions are pinned even when the definition is redeployed,
  *  (c) mints a per-session bearer + tenant tag and writes the
  *      KV[containerId] mapping the outbound handler resolves at egress,
  *  (d) pre-warms: eagerly boots the container and reconstructs the skills so
  *      the 1-3 s cold boot overlaps the user typing (plan §15 P1).
  *
- * The route STORES the bundle — reconstruction also lives in the initializer,
- * which self-heals every cold container. A bundle is immutable per id: a
- * reused id is rejected (plan §6/§13 C5).
+ * The route STORES the snapshot — reconstruction also lives in the
+ * initializer, which self-heals every cold container. A snapshot is immutable
+ * per id: a reused id is rejected (plan §6/§13 C5).
  */
 import './braintrust';
 import './otel';
@@ -39,6 +45,8 @@ import {
   removeEgressWhitelist,
   resolveSandboxBinding,
   validateAgentBundle,
+  AGENT_DEF_KEY_PREFIX,
+  SKILL_NAME_RE,
   STREAM_PROTOCOL_HEADERS,
 } from '@hoth/core';
 import { channel } from './channels/github';
@@ -91,6 +99,38 @@ app.get('/admin/collections/:cid/record', async (c) => {
   return c.json(record);
 });
 
+// Named-definition deploy target (`pnpm deploy:agent <name>`). Body is the raw
+// bundle JSON (not `{bundle}`-wrapped) — validated at this trust boundary,
+// then stored byte-exact under `agentdef:<name>` with NO TTL; every deploy
+// overwrites. No bundle.agentName === :name check: the KV key is what sessions
+// resolve, and the github-default alias deliberately diverges. Path-safe next
+// to the /agents/main mount below: `:name` matches a single segment only.
+app.put('/agents/:name', async (c) => {
+  const name = c.req.param('name');
+  if (!SKILL_NAME_RE.test(name) || name.length > 64) {
+    return c.json({ error: 'invalid agent name (lowercase alphanumerics/hyphens, max 64)' }, 400);
+  }
+  const text = await c.req.text();
+  let bundle;
+  try {
+    bundle = validateAgentBundle(text);
+  } catch (err) {
+    if (err instanceof BundleValidationError || err instanceof SyntaxError) {
+      return c.json({ error: String(err instanceof Error ? err.message : err) }, 422);
+    }
+    throw err;
+  }
+  await c.env.STORE.put(`${AGENT_DEF_KEY_PREFIX}${name}`, text);
+  return c.json({
+    ok: true,
+    name,
+    agentName: bundle.agentName,
+    version: bundle.version,
+    skills: Object.keys(bundle.skills),
+    bytes: text.length,
+  });
+});
+
 app.post('/sessions/:id/agent', async (c) => {
   const id = c.req.param('id');
   if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
@@ -100,21 +140,35 @@ app.post('/sessions/:id/agent', async (c) => {
     return c.json({ error: 'session id already has an agent bundle; a changed agent is a new session id' }, 409);
   }
 
-  let bundle;
+  let agentName: string;
   let tenantTag: string;
   try {
-    const body = (await c.req.json()) as { bundle?: unknown; tenantTag?: unknown };
-    bundle = validateAgentBundle(body.bundle ?? body);
+    const body = (await c.req.json()) as { agentName?: unknown; tenantTag?: unknown };
+    if (typeof body.agentName !== 'string' || !SKILL_NAME_RE.test(body.agentName) || body.agentName.length > 64) {
+      return c.json(
+        { error: 'agentName required — deploy the bundle with pnpm deploy:agent <name>, then submit its name' },
+        422,
+      );
+    }
+    agentName = body.agentName;
     tenantTag =
       typeof body.tenantTag === 'string' && /^[a-z0-9-]{1,64}$/.test(body.tenantTag)
         ? body.tenantTag
         : `tenant-${id.slice(0, 8)}`;
   } catch (err) {
-    if (err instanceof BundleValidationError || err instanceof SyntaxError) {
-      return c.json({ error: String(err instanceof Error ? err.message : err) }, 422);
+    if (err instanceof SyntaxError) {
+      return c.json({ error: String(err.message) }, 422);
     }
     throw err;
   }
+
+  // Resolve the named definition. Re-validate on read (defense in depth, same
+  // as the skill-check route) and snapshot the exact stored bytes per session.
+  const raw = await c.env.STORE.get(`${AGENT_DEF_KEY_PREFIX}${agentName}`);
+  if (!raw) {
+    return c.json({ error: `unknown agent "${agentName}" — deploy it with pnpm deploy:agent ${agentName}` }, 404);
+  }
+  const bundle = validateAgentBundle(raw);
 
   // Select the Sandbox binding from the bundle's baseImage; BOTH getSandbox
   // and the bearer KV key must derive from this same binding (plan §7/§16).
@@ -123,7 +177,7 @@ app.post('/sessions/:id/agent', async (c) => {
   const containerId = namespace.idFromName(id).toString();
 
   const bearer = `hoth-b-bearer-${id.slice(0, 8)}-${crypto.randomUUID()}`;
-  await c.env.STORE.put(`agent:${id}`, JSON.stringify(bundle), { expirationTtl: BUNDLE_TTL_SECONDS });
+  await c.env.STORE.put(`agent:${id}`, raw, { expirationTtl: BUNDLE_TTL_SECONDS });
   await kvSecretBroker(c.env.STORE).put(containerId, bearer, tenantTag);
   // Per-agent egress policy: map the bundle's proxy_whitelist to this
   // session's container. No proxy_whitelist in the agent -> [] -> deny all.
@@ -143,18 +197,19 @@ app.post('/sessions/:id/agent', async (c) => {
 
   // Pre-warm + eager reconstruction (plan §8/§15 P1). The initializer will
   // find the dirs present and no-op; on a later cold container it re-creates.
-  const provision = await provisionAgentSkills(getSandbox(namespace, id), bundle);
+  await provisionAgentSkills(getSandbox(namespace, id), bundle);
 
+  // Deliberately minimal: no internals (skills, containerId, provisioning
+  // outcome) — those live in the data browser and the /skill-check oracle.
+  // agentName/version tell the caller which definition snapshot the session
+  // got pinned to (definitions are redeployable, sessions are not).
   return c.json({
     ok: true,
     backend: 'b',
     sessionId: id,
-    containerId,
     agentName: bundle.agentName,
     version: bundle.version,
-    skills: Object.keys(bundle.skills),
     tenantTag,
-    reconstructed: provision.reconstructed,
   });
 });
 
