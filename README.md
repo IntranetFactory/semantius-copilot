@@ -46,7 +46,9 @@ backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue
 frontend/    React + Vite — one chat, New-session button, A/B backend dropdown, and an
              agent dropdown when B is selected (fed by the bundler output).
 scripts/     bundle.mjs (agent bundler CLI) · node-smoke.mjs (portability, zero
-             Cloudflare) · acceptance.mjs (C1–C5) · admin.test.mjs.
+             Cloudflare) · acceptance.mjs (C1–C5) · admin.test.mjs ·
+             chat-probe.mjs (one real LLM turn against a deployed backend —
+             the observability verification driver).
 ```
 
 ## Agents & the agent bundle
@@ -101,18 +103,55 @@ baked into the image and exist at container boot; the pre-nightly "activate_skil
 read → bash" A/B result in Verified results predates this regression. Catalog
 descriptions are truncated to 1024 chars (Flue's SkillDefinition cap). When
 workspace discovery does find the disk copy, the discovered skill wins the
-name-merge over the mounted definition — same content either way.
+name-merge over the mounted definition — same content either way. That
+discovered-wins merge is restored by our `@flue/runtime` patch (see
+Prerequisites): the stock nightly THROWS on the name conflict instead, and
+because the ingest pre-warm provisions the files before the first send,
+discovery often does see them — every submission of such a session then
+failed with a generic `internal_error` (root-caused via `wrangler tail`
+2026-07-26; backend B was undriveable until the patch).
 
-Observability: both backends log every llm span to Braintrust with the EXACT system
-prompt sent in span metadata `flue.system_prompt` (messages are the span input).
-Check there first when the model behaves as if instructions or skills are missing.
+Observability: both backends log every llm span to Braintrust (exact system
+prompt in span metadata `flue.system_prompt`, messages as the span input) and
+export OTel GenAI traces to Arize AX. Check there first when the model behaves
+as if instructions or skills are missing.
 
 ## Prerequisites
 
 - Node **>= 22.18** (Flue requirement; `nvm use 22.22.0`).
 - pnpm, Docker (for building the sandbox container image), a Cloudflare account with
   **Workers Paid + Containers** and **Workers AI** enabled.
-- One dependency patch under `patches/` (applied automatically by `pnpm install`):
+- Three dependency patches under `patches/` (applied automatically by `pnpm install`):
+  - `@earendil-works/pi-ai` — OpenRouter **billed** cost: adds the
+    OpenRouter-only `usage: { include: true }` request field (usage
+    accounting) and prefers the returned inline `usage.cost` over the
+    model-catalog estimate for `cost.total` in `parseChunkUsage`
+    (`dist/api/openai-completions.js`). Stock pi-ai never requests
+    accounting and discards the field, so every downstream cost —
+    conversation metadata, Braintrust, `pnpm sessions`, Arize `llm.cost.*` —
+    was a catalog estimate. No-op for non-OpenRouter providers and when
+    OpenRouter omits the field. Keyed to the exact pi-ai version — on a
+    bump, re-create (same two edits) or drop if upstream keeps the field.
+  - `@flue/runtime` — `mergeSkillCatalog` again lets a workspace-discovered
+    skill silently override a same-name `useSkill()` definition instead of
+    throwing. Backend B delivers every bundle skill on BOTH legs by design
+    (files on disk + explicit mount, see "Skill delivery to the model"), and
+    whether init-time discovery sees the disk copy is a race — on sessions
+    where it does, the stock nightly failed every submission with
+    `[flue] Skill name "planner" appears in both agent definition and
+    workspace discovery`. The upstream throw guards against a real risk —
+    the workspace is runtime-writable, so a silently-winning discovered
+    skill could shadow a vetted code-defined one (injection) — but here
+    both legs are the same bytes from the same validated bundle (the mount
+    is built from the very SKILL.md that is provisioned to disk), so the
+    collision is deliberate redundancy, not ambiguity, and discovered-wins
+    is safe (it even carries the untruncated description). Residual
+    exposure: a same-named SKILL.md from any OTHER source (e.g. an agent
+    writing its own) would now silently shadow a mounted definition.
+    **On every Flue bump:** the patch is keyed to the exact nightly
+    version — re-create it (`pnpm patch @flue/runtime@<new-version>`, remove
+    the conflict `throw` in `mergeSkillCatalog`, `pnpm patch-commit`) unless
+    upstream made the merge tolerant, or B stops double-delivering skills.
   - `@durable-streams/client` — opens the held **SSE** connection on the first `updates`
     request in `live:'sse'` mode. The stock 0.2.6 client (still pinned by @flue/sdk v2) only
     opens SSE after reaching up-to-date, so while an agent is actively generating (never
@@ -244,10 +283,12 @@ Token/cost usage in the Raw JSON view: Flue v2 dropped the beta's per-message
 `metadata.usage` from the conversation read, so both agents re-attach it via
 `useResponseFinish` (one aggregate per response, openrouter specifiers only — which
 includes catalog-known model overrides, since `llm.ts` keeps their `openrouter/...`
-specifier; the placeholder/custom catalogs register zero rates and would report $0). The cost is
-pi-ai's model-catalog computation, not OpenRouter's billed amount: OpenRouter now returns
-actual cost inline on every response (`usage.cost`, last SSE chunk when streaming — the old
-follow-up `/generation` request is obsolete), but pi-ai discards that field.
+specifier; the placeholder/custom catalogs register zero rates and would report $0).
+`cost.total` is OpenRouter's **billed** amount: the `@earendil-works/pi-ai` patch (see
+Prerequisites) requests usage accounting (`usage: { include: true }`, OpenRouter-only)
+and prefers the inline `usage.cost` from the last SSE chunk over the catalog estimate.
+Component costs (input/output/cache) remain pi-ai's model-catalog computation —
+OpenRouter reports only the total — so components may not sum exactly to the total.
 
 ## GitHub channel (backend B)
 
@@ -274,7 +315,43 @@ nothing appears on GitHub.
   Webhooks permission, 403); the end-to-end flow was verified with manually signed
   deliveries (issue #1 answered, incl. follow-up).
 
-## Observability (Braintrust)
+## Observability (Braintrust + Arize + Langfuse)
+
+Three independent sinks, all best-effort on Cloudflare (the observer can't
+`waitUntil`, so spans ending right before the isolate idles can be lost):
+Braintrust (per-message traces, `pnpm sessions` rollup), Arize AX and
+Langfuse (both first-class session views — the reason they were added:
+Braintrust's session transparency is a scripted reassembly, Arize/Langfuse
+group traces by `session.id` natively). Arize and Langfuse share one OTel
+pipeline (src/otel.ts): a common `enrichSpan()` closes each vendor's mapping
+gaps, and one fetch-based OTLP exporter instance per sink POSTs the same
+spans. Verify any sink by driving a real turn:
+`API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs a|b ["message"]`.
+
+### Langfuse
+
+Both backends export to Langfuse Cloud (US region, `LANGFUSE_BASE_URL` var)
+via the OTLP endpoint `/api/public/otel/v1/traces` — Basic auth from the
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` secrets, plus
+`x-langfuse-ingestion-version: 4` for real-time v4 ingestion (without it,
+direct OTel data lags up to 10 min). Mapping notes (all in `enrichSpan()`):
+
+- **Observation types**: roots are stamped `langfuse.observation.type=agent`,
+  tool spans `tool`; chat spans become `generation` automatically (any span
+  with a model attribute). This drives the observation tree and Agent Graph.
+- **Generation input/output**: Langfuse's documented mapping reads
+  `langfuse.observation.input/output` / `gen_ai.prompt` / OpenInference
+  `input.value` — NOT the adapter's `gen_ai.input.messages` — so chat spans
+  mirror the messages JSON into `langfuse.observation.input/output`. Payloads
+  stay in Flue's native parts format (faithful data, renders as JSON there).
+- **Usage/cost**: `gen_ai.usage.*` maps natively incl. the cache split
+  (`input_cached_tokens` in usageDetails); `gen_ai.usage.cost` (stamped from
+  the pi-ai billed total) lands as `costDetails.total` — verified end-to-end
+  2026-07-26 by reading the trace back via `GET /api/public/traces/:id`.
+- The `langfuse` agent skill (Langfuse docs + CLI workflows) is installed at
+  `.claude/skills/langfuse` (from github.com/langfuse/skills).
+
+### Braintrust
 
 Both backends export traces to the Braintrust project **`hoth-poc`** via the Flue tooling
 blueprint (`flue add tooling braintrust` — it prints an agent-directed blueprint, it does not
@@ -309,6 +386,93 @@ Verify: send a chat turn, then check the project logs — llm spans should be na
   session — messages, llm/tool calls, tokens, cost, wall time — over the last 24h
   (`--hours N`); `--session <id>` adds that session's per-message breakdown. In the
   Logs UI, filter by `metadata.flue.instance_id` to read one session's traces in order.
+
+### Arize AX (OpenTelemetry)
+
+Both backends also export to the Arize AX project **`hoth-poc`** via Flue's own
+OTel adapter — `@flue/opentelemetry` (pinned to the same runtime nightly) +
+`src/otel.ts` per backend (imported next to `./braintrust` in `app.ts`). The
+adapter projects runtime observations onto OTel **GenAI semconv** spans
+(`invoke_agent` / `chat` / `execute_tool` / `flue.operation …`), and Arize
+normalizes `gen_ai.*` into OpenInference at ingestion (span kind inferred from
+`gen_ai.operation.name`), so kinds, messages, token counts, and tool args
+render natively — no client-side mapping.
+
+- **Keys**: `ARIZE_SPACE_ID` + `ARIZE_API_KEY` are Worker secrets
+  (`wrangler secret put`, `.dev.vars` locally). No secrets = the bridge is a
+  no-op. `ARIZE_PROJECT_NAME=hoth-poc` is a `wrangler.jsonc` var.
+- **Custom fetch exporter (do not "simplify" to a stock one)**: the official
+  OTLP exporters transport over `node:http`/XHR, neither of which exists in
+  workerd. `ArizeOtlpExporter` serializes with `ProtobufTraceSerializer` and
+  POSTs to `https://otlp.arize.com/v1/traces` via fetch
+  (`application/x-protobuf`). It sends BOTH auth-header spellings
+  (`arize-space-id`/`arize-api-key` and `space_id`/`api_key`) because Arize's
+  docs disagree with themselves and warn the wrong form drops spans silently.
+- **Sessions**: the exporter stamps `session.id` from
+  `gen_ai.conversation.id` (fallback `flue.instance.id`) on every span —
+  that's what Arize's session view groups by.
+- **Root-span output enrichment (why the exporter is more than a POST)**:
+  Arize's session conversation renders each trace from the ROOT
+  `invoke_agent` span's input/output — but the pinned nightly emits
+  conversation-prompt `operation` results that `@flue/opentelemetry` cannot
+  project (`agentOutput` absent; structured `data` results dropped), so the
+  root span has no `gen_ai.output.messages` and sessions showed an empty AI
+  side (root-caused 2026-07-26 by dumping exported attributes via
+  `wrangler tail`). The exporter therefore remembers each trace's latest
+  `chat` span output (children end before their root) and stamps it on an
+  output-less root, plus plain-text OpenInference `input.value` /
+  `output.value` (explicit OpenInference attributes beat Arize's derived
+  GenAI mapping, which had left the agent span's output empty even when
+  messages were present). Re-check on every Flue bump — if the adapter
+  starts projecting agent output itself, the enrichment becomes a no-op.
+- **No global OTel state**: the tracer is handed straight to the
+  instrumentation (parenting is explicit inside `@flue/opentelemetry`), and
+  `SimpleSpanProcessor` exports per-span — batching timers may never fire
+  before the isolate idles.
+- **Cost**: chat spans carry OpenInference `llm.cost.*` (prompt, completion,
+  cache details, total), which Arize uses as-is — no per-model cost config
+  needed. The numbers come from the runtime `turn` events' `usage.cost`
+  (recorded by an observe wrapper in `src/otel.ts`, keyed by turn identity,
+  stamped by the exporter): billed OpenRouter total via the pi-ai patch,
+  catalog-derived components.
+- **Cached-token split**: the exporter also stamps OpenInference
+  `llm.token_count.*` (prompt cache-inclusive, completion, total, and
+  `prompt_details.cache_read`/`cache_write`) on chat spans. The Flue adapter
+  emits the split as `gen_ai.usage.cache_read.input_tokens` /
+  `gen_ai.usage.cache_creation.input_tokens`, but Arize's ingestion
+  normalization only maps the plain input/output totals — without the
+  client-side stamp Arize showed no cached-token separation while Braintrust
+  (which gets the raw pi-ai `usage` object) did (verified end-to-end via
+  GraphQL span readback 2026-07-26: `prompt_details.cache_read` stored).
+- **Tool results on execute_tool spans**: the adapter writes string-shaped
+  tool results to flue-private `flue.tool.call.result` (only object-shaped
+  ones land on `gen_ai.tool.call.result`), and Arize maps neither onto the
+  tool span's output — the trace view showed arguments but empty results.
+  The exporter stamps `output.value` from either attribute. Note the
+  storage-level ground truth (confirmed by GraphQL readback of stored spans):
+  ALL spans arrive in Arize — roots, every chat turn (full input/output
+  messages incl. reasoning + tool_call parts), every tool span. Arize's
+  Session-Conversation TAB only renders the root span's input/output text;
+  turn-by-turn inspection lives in the per-trace tree view.
+- **REVERTED — turn-activity log in the session tab**: an iteration appended
+  a synthesized `[thinking]`/`[tool]` timeline to the root span's
+  `output.value` and `gen_ai.output.messages` so the Session-Conversation tab
+  would show turn internals. Arize renders the LAST assistant message of the
+  root, so the log REPLACED the final answer (and collapsed to one unreadable
+  line). Message attributes must stay exactly what the model produced —
+  turn-by-turn inspection lives in the per-trace tree view. Operational note:
+  Arize's span readback API (`spanRecordsPublic`) lags ingestion by ~10-30 min
+  and paginates lossily at large windows — use narrow time windows when
+  auditing.
+- **Data export**: like Braintrust, traces carry full prompts, outputs, and
+  tool args/results (Flue's default content policy). Revisit with the
+  instrumentation's `content: { transform }` hook before real tenant data.
+
+Verify: `node scripts/chat-probe.mjs a` (or `b`), then open the Arize space →
+project `hoth-poc` → the session should appear with the full
+invoke_agent → chat → execute_tool tree. Export failures surface as
+`arize: OTLP export …` warnings in `wrangler tail`. A direct probe of the
+endpoint from Node (same serializer + headers) returned 200 on 2026-07-26.
 
 ## Acceptance
 

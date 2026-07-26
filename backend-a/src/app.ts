@@ -8,6 +8,7 @@
  * (the frontend awaits the 2xx before chatting).
  */
 import './braintrust';
+import './otel';
 import { getSandbox } from '@cloudflare/sandbox';
 import { createAgentRouter } from '@flue/runtime/routing';
 import { Hono } from 'hono';

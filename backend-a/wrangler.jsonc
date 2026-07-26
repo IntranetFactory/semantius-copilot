@@ -43,6 +43,14 @@
     // Braintrust tracing (src/braintrust.ts): traces land in this project.
     // The API key is the BRAINTRUST_API_KEY secret (.dev.vars locally,
     // wrangler secret put when deployed) — never a vars value. No key = no export.
-    "BRAINTRUST_PROJECT_NAME": "hoth-poc"
+    "BRAINTRUST_PROJECT_NAME": "hoth-poc",
+    // Arize AX tracing (src/otel.ts): traces land in this Arize project.
+    // ARIZE_SPACE_ID + ARIZE_API_KEY are secrets (.dev.vars locally,
+    // wrangler secret put when deployed). No secrets = no export.
+    "ARIZE_PROJECT_NAME": "hoth-poc",
+    // Langfuse tracing (src/otel.ts): OTLP endpoint region. The project is
+    // selected by the LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY secrets
+    // (.dev.vars locally, wrangler secret put when deployed). No keys = no export.
+    "LANGFUSE_BASE_URL": "https://us.cloud.langfuse.com"
   }
 }

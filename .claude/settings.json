@@ -14,6 +14,9 @@
       "Bash(node -e \"const v=require\\('/c/dev/hoth-poc/backend-b/node_modules/@earendil-works/pi-ai/dist/providers/data/openrouter.json'\\); const ids=Object.values\\(v\\).map\\(m=>m.id\\); console.log\\(ids.length\\); console.log\\(ids.filter\\(i=>i.includes\\('deepseek'\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(node --input-type=module -e \"import v from 'file:///c/dev/hoth-poc/backend-b/node_modules/@earendil-works/pi-ai/dist/providers/data/openrouter.json' with {type:'json'}; const ids=Object.values\\(v\\).map\\(m=>m.id\\); console.log\\(ids.length\\); console.log\\(ids.filter\\(i=>i.includes\\('deepseek'\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(node -e \"const v=require\\('c:/dev/hoth-poc/backend-b/node_modules/@earendil-works/pi-ai/dist/providers/data/openrouter.json'\\); const ids=Object.values\\(v\\).map\\(m=>m.id\\); console.log\\('total', ids.length\\); console.log\\(ids.filter\\(i=>i.includes\\('deepseek'\\)\\).join\\('\\\\n'\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\MARTIN~1\\AppData\\Local\\Temp\\claude\\pi-ai-patch\\dist\\api"
     ]
   }
 }

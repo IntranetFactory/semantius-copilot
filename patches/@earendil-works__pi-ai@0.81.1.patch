@@ -1,0 +1,31 @@
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index a7718b47f2622a3d4de09b5871620072cdd980d5..458d3b6c444678cda2a7805cb5310744cc85102e 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -463,6 +463,12 @@ function buildParams(model, context, options, compat = getCompat(model), cacheRe
+     if (compat.supportsUsageInStreaming !== false) {
+         params.stream_options = { include_usage: true };
+     }
++    // PATCH (hoth-poc): OpenRouter usage accounting — makes the final usage
++    // chunk carry the BILLED cost (usage.cost, USD); consumed in
++    // parseChunkUsage below. OpenRouter-only request field.
++    if (model.baseUrl.includes("openrouter.ai")) {
++        params.usage = { include: true };
++    }
+     if (compat.supportsStore) {
+         params.store = false;
+     }
+@@ -984,6 +990,13 @@ function parseChunkUsage(rawUsage, model) {
+         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+     };
+     calculateCost(model, usage);
++    // PATCH (hoth-poc): prefer the provider's billed amount (OpenRouter
++    // usage.cost, requested via `usage: { include: true }` above) over the
++    // catalog estimate for the TOTAL. Component costs stay catalog-derived —
++    // OpenRouter only reports the total.
++    if (typeof rawUsage.cost === "number" && rawUsage.cost > 0) {
++        usage.cost.total = rawUsage.cost;
++    }
+     return usage;
+ }
+ function mapStopReason(reason) {

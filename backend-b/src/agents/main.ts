@@ -154,10 +154,11 @@ export function Main({ id }: AgentProps) {
   // specifier (llm.ts resolves them against the Pi catalog with real
   // per-token rates), so this gate covers them; only the agent-<name>
   // placeholder/custom providers register zero rates — $0 would read as
-  // "free", so those attach nothing. The cost is pi-ai's catalog-rate
-  // computation, not OpenRouter's billed amount (OpenRouter now returns
-  // actual cost inline in usage.cost, but pi-ai discards it and prices
-  // tokens from its model catalog).
+  // "free", so those attach nothing. cost.total is OpenRouter's BILLED
+  // amount (the pi-ai patch requests usage accounting and prefers the
+  // inline usage.cost over the catalog estimate); the per-component costs
+  // remain pi-ai's catalog-rate computation, so components may not sum
+  // exactly to the total.
   if (specifier.startsWith('openrouter/')) {
     useResponseFinish(({ response }) => ({ usage: response.usage, model: specifier }));
   }
