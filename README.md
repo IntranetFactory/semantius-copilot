@@ -1,30 +1,30 @@
 # Hoth Trip-Planner POC
 
-Proves that **two agent-delivery mechanisms yield identical agent behavior** on Flue +
-Cloudflare Sandbox:
+**Multi-agent, multi-tenant dynamic skill delivery** on Flue + Cloudflare Sandbox: a
+whole agent (instructions + model overrides + ALL its skills) is serialized as **one
+JSON string** — the *agent bundle* — deployed by NAME into Cloudflare KV
+(`pnpm deploy:agent <name>` → `agentdef:<name>`, no TTL). Session creation submits just
+`{ agentName }`; the route resolves the named definition, snapshots it per session, and
+reconstructs it into the sandbox. Which agent a session runs is data, not code.
 
-- **Backend A** — hard-coded / OOTB: the fixed `hoth-trip-planner` agent, its skills
-  **baked into the container image**, instructions/model resolved at build time.
-- **Backend B** — dynamic bundle, **multi-agent**: a whole agent (instructions + model
-  overrides + ALL its skills) is serialized as **one JSON string** — the *agent bundle* —
-  deployed by NAME into Cloudflare KV (`pnpm deploy:agent <name>` → `agentdef:<name>`,
-  no TTL). Session creation submits just `{ agentName }`; the route resolves the named
-  definition, snapshots it per session, and reconstructs it into the sandbox (the
-  multi-tenant path). Which agent a session runs is data, not code.
+(The POC originally ran a second backend — "A", the same agent hard-baked into a
+container image — to prove image-baked and dynamically-delivered skills behave
+identically. That thesis was proven — see [`hoth-poc-plan.md`](./hoth-poc-plan.md) and
+git history — and backend A has since been removed; "backend B" naming survives in the
+worker/package names.)
 
-See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the full design and acceptance criteria.
+See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the original design and acceptance criteria.
 
 ## Deployed
 
 | Deployable | URL |
 | ---------- | --- |
-| Frontend (A/B chat UI) | https://hoth-poc-frontend.ma532.workers.dev |
-| Backend A — image-baked skills | https://hoth-poc-backend-a.ma532.workers.dev |
-| Backend B — dynamic bundle (multi-agent) | https://hoth-poc-backend-b.ma532.workers.dev |
+| Frontend (chat UI) | https://hoth-poc-frontend.ma532.workers.dev |
+| Backend — dynamic bundle (multi-agent) | https://hoth-poc-backend-b.ma532.workers.dev |
 
-All three run on Cloudflare Workers (account `Ma@adenin.com`). Backends A and B each own a
-container app (Containers) and a private KV namespace; the frontend is a static SPA served
-from Workers assets with the two backend URLs baked in at build time.
+Both run on Cloudflare Workers (account `Ma@adenin.com`). The backend owns a container
+app (Containers) and a private KV namespace; the frontend is a static SPA served from
+Workers assets with the backend URL baked in at build time.
 
 ## Layout
 
@@ -37,22 +37,22 @@ agents/      SOURCE OF TRUTH for every agent. One folder per agent:
 core/        Host-agnostic Flue-core seams (no Cloudflare imports):
              agent-bundle format + validation, tar reconstruction (2-RPC),
              provisionAgentSkills, egress/secret broker interface, API-key guard,
+             Semantius user identity (identity.js — `<org>:<jwt>` → userinfo),
              deterministic skill-check. `@hoth/core/node` adds the bundler library
              (fs walk, JSONC parse via jsonc-parser).
-backend-a/   Flue+CF Worker — the FIXED hoth-trip-planner agent; its skills are baked
-             into the image (Dockerfile COPY of agents/hoth-trip-planner/skills),
-             instructions/model from bundler-generated src/generated/agent.json.
 backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue agent;
              the named agent definition a session references (`{ agentName }` at ingest,
              resolved from KV `agentdef:<name>`) decides instructions, model, skills.
              First-turn identity rides the creating send's `initialData` (see plan §6).
-frontend/    React + Vite — one chat, New-session button, A/B backend dropdown, and an
-             agent dropdown when B is selected (fed by the bundler output).
+frontend/    React + Vite — one chat with a New-session button and an agent dropdown
+             (fed by the bundler output), plus the Data browser.
 scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agents/
-             folder and PUT it to backend B as a named KV definition) ·
-             node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C1–C5) ·
-             admin.test.mjs · chat-probe.mjs (one real LLM turn against a deployed
-             backend — the observability verification driver).
+             folder and PUT it to the backend as a named KV definition) ·
+             node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C2–C5) ·
+             admin.test.mjs · chat-probe.mjs (one real LLM turn against the deployed
+             backend — the observability verification driver) · mint-token.mjs
+             (`pnpm mint-token` — a Semantius user token for the chat gate) ·
+             lib/semantius.mjs (the .env-driven token exchange those share).
 ```
 
 ## Agents & the agent bundle
@@ -74,32 +74,32 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
 ```
 
 Artifacts per run: `dist-bundle/<name>.agent.json` (canonical, used by acceptance and
-chat-probe), `frontend/src/generated/agents/<name>.json` (glob-imported by the UI —
+chat-probe) and `frontend/src/generated/agents/<name>.json` (glob-imported by the UI —
 a NEW agents/ folder shows up in the frontend agent dropdown after re-running `pnpm bundle`,
-no code change), and `backend-a/src/generated/agent.json` (meta-only build input for A's
-fixed agent). Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
+no code change). Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
 instructions ≤64 KiB (`core/src/agent.js`). Zero-skill agents (no `skills/` folder) are
 valid — nothing is provisioned, the bundle still carries instructions/model.
 
-**Deploying an agent to backend B** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
-builds `agents/<name>/` fresh with the same loader and `PUT`s it to backend B's
+**Deploying an agent** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
+builds `agents/<name>/` fresh with the same loader and `PUT`s it to the backend's
 authenticated `/agents/:name` route, which validates the bundle (the trust boundary —
 hostile bundles are rejected 422 here) and stores it as KV `agentdef:<name>` — **no TTL,
 overwritten on every deploy**. Sessions then ingest with
 `POST /sessions/:id/agent {"agentName":"<name>"}`; the route snapshots the definition to
 `agent:<sessionId>` (24 h TTL), so redeploying a definition never mutates in-flight
-sessions, and an undeployed name is a 404. The KV key name is authoritative — `--as`
-deploys a folder under a different key (used for the GitHub channel's shared agent):
+sessions, and an undeployed name is a 404. The body also accepts an optional
+`sessionContext` object (see "Per-session data channels" below). The KV key name is authoritative — `--as`
+deploys a folder under a different key (generic alias mechanism; nothing in the app
+depends on one — the GitHub channel reads `agentdef:hoth-trip-planner` directly):
 
 ```bash
 pnpm deploy:agent hoth-trip-planner                     # agents/<name> -> agentdef:<name>
-pnpm deploy:agent hoth-trip-planner --as github-default # alias key for the GitHub channel
 pnpm deploy:agent --all                                 # every agents/ folder
 ```
 
-## Skill delivery to the model (backend B)
+## Skill delivery to the model
 
-Skill delivery has TWO legs on backend B, and both are required:
+Skill delivery has TWO legs, and both are required:
 
 - **Files on disk** — `provisionAgentSkills` extracts the bundle into
   `/workspace/.agents/skills/` (eagerly at ingest, self-healed on every delivered
@@ -113,14 +113,12 @@ Skill delivery has TWO legs on backend B, and both are required:
   the skills in its system-prompt "Available Skills" section.
 
 Why the second leg exists: Flue discovers workspace skills once at session init and
-caches the catalog for the conversation. On B, fully provisioned sessions still
+caches the catalog for the conversation. Fully provisioned sessions still
 composed system prompts with an EMPTY catalog (verified 2026-07-23 on the
 2.x nightly: the Braintrust-logged system prompt had no skills section while the
 deterministic skill-check proved the same container held all 70 files, and the SDK
 `exists()` probe — surfaced as `sdkExists` in the skill-check response — returned
-true when tested moments later). Backend A never hits this because its skills are
-baked into the image and exist at container boot; the pre-nightly "activate_skill →
-read → bash" A/B result in Verified results predates this regression. Catalog
+true when tested moments later). Catalog
 descriptions are truncated to 1024 chars (Flue's SkillDefinition cap). When
 workspace discovery does find the disk copy, the discovered skill wins the
 name-merge over the mounted definition — same content either way. That
@@ -131,9 +129,9 @@ discovery often does see them — every submission of such a session then
 failed with a generic `internal_error` (root-caused via `wrangler tail`
 2026-07-26; backend B was undriveable until the patch).
 
-Observability: both backends log every llm span to Braintrust (exact system
+Observability: the backend logs every llm span to Braintrust (exact system
 prompt in span metadata `flue.system_prompt`, messages as the span input) and
-export OTel GenAI traces to Arize AX. Check there first when the model behaves
+exports OTel GenAI traces to Arize AX. Check there first when the model behaves
 as if instructions or skills are missing.
 
 ## Prerequisites
@@ -187,49 +185,105 @@ pnpm install
 pnpm bundle            # scan agents/ -> one agent bundle per folder; round-trip assert; emit
 pnpm smoke             # Node smoke test — core agent-bundle flow with zero Cloudflare present
 
-pnpm dev:frontend      # http://localhost:5173  (talks to localhost:3583/3584 in dev)
+pnpm dev:frontend      # http://localhost:5173  (talks to localhost:3584 in dev)
 ```
 
 ## Deploy
 
 ```bash
-pnpm deploy            # bundle + deploy A + B + all named agent defs + frontend, in order
+pnpm deploy            # bundle + deploy worker + all named agent defs + frontend, in order
 pnpm deploy:agents     # bundle + deploy:agent --all + deploy:frontend — ships agents/
-                       # content changes to backend B (named KV definitions for ingest,
-                       # frontend-built bundles for the dropdown + turn-1 seed; B's worker
-                       # is the generic host and needs no redeploy). NEW sessions only; if
-                       # hoth-trip-planner changed, backend A needs deploy:a too, and the
-                       # GitHub channel's alias a re-run of:
-                       #   pnpm deploy:agent hoth-trip-planner --as github-default
+                       # content changes (named KV definitions for ingest, frontend-built
+                       # bundles for the dropdown + turn-1 seed; the worker is the generic
+                       # host and needs no redeploy). NEW sessions only; the GitHub
+                       # channel reads agentdef:hoth-trip-planner, so --all covers it.
 # or individually:
-pnpm deploy:a          # vite build + wrangler deploy backend A (creates its container app)
-pnpm deploy:b          # vite build + wrangler deploy backend B
-pnpm deploy:agent <n>  # bundle agents/<n>/ and PUT it to B as KV agentdef:<n> (see above)
-pnpm deploy:frontend   # vite build (URLs from frontend/.env.production) + wrangler deploy
+pnpm deploy:b          # vite build + wrangler deploy the backend worker
+pnpm deploy:agent <n>  # bundle agents/<n>/ and PUT it to KV as agentdef:<n> (see above)
+pnpm deploy:frontend   # vite build (URL from frontend/.env.production) + wrangler deploy
 ```
 
-First deploy of each backend creates its Cloudflare Container application and prompts to
-confirm. Backends need **Workers AI** and **Containers** enabled on the account. The frontend
-build reads the two backend URLs from [`frontend/.env.production`](./frontend/.env.production).
+First deploy of the backend creates its Cloudflare Container application and prompts to
+confirm. It needs **Workers AI** and **Containers** enabled on the account. The frontend
+build reads the backend URL from [`frontend/.env.production`](./frontend/.env.production).
 
 ## Authentication
 
-Both backends are behind a shared **API-key guard** (`core/src/auth.js`): every route except
+The backend is behind an **API-key guard** (`core/src/auth.js`): every route except
 `/health` requires `Authorization: Bearer <API_TOKEN>`, and fails closed (503) if `API_TOKEN`
-is unset. Set it as a Cloudflare secret per backend, and locally via `.dev.vars`:
+is unset. Set it as a Cloudflare secret, and locally via `.dev.vars`:
 
 ```bash
 node -e "console.log('hoth_'+require('crypto').randomBytes(24).toString('base64url'))" > .api-token
-cd backend-a && printf 'API_TOKEN="%s"\n' "$(cat ../.api-token)" > .dev.vars   # local dev
-wrangler secret put API_TOKEN --config backend-a/wrangler.jsonc                 # deployed (paste the value)
-# repeat for backend-b
+cd backend-b && printf 'API_TOKEN="%s"\n' "$(cat ../.api-token)" > .dev.vars   # local dev
+wrangler secret put API_TOKEN --config backend-b/wrangler.jsonc                 # deployed (paste the value)
 ```
 
 The **frontend never bakes the key in** — you type it into the API-key field on the page
 (persisted to `localStorage`), and it rides every request: the FlueClient `token` option
-(chat + SSE) and an explicit header on the session-setup fetches. This is a gate against
-outside abuse, not per-tenant identity — real multi-tenant auth is the server-side
-`verify token → tenant` from plan §9.6.
+(chat + SSE) and an explicit header on the session-setup fetches. The API key says *this is
+our frontend*; **who** is chatting is the separate Semantius identity below.
+
+### User identity — no chat without a verified Semantius user
+
+Chat is only open to a real Semantius user. The client proves one with the request's own
+`Authorization: Bearer <org>:<jwt>` — the user surface (`userTokenGuard`, `core/src/auth.js`)
+takes a Semantius access token where the admin surface takes the deployment key. The
+transport form is **`<org>:<jwt>`** because the JWT alone doesn't say who issued it, and
+the org is what selects the tenant host (every org has its own subdomain).
+
+The guard splits the value on the first colon and verifies it live
+(`core/src/identity.js`), by calling that org's OIDC userinfo endpoint with the JWT as a
+bearer:
+
+```
+GET https://<org>.semantius.cloud/api/auth/oauth2/userinfo
+Authorization: Bearer <jwt>
+→ 200 {"sub":"user3","name":"Wei Chen","email":"admin@test.com","email_verified":true}
+```
+
+The issuer decides — no key material, JWKS fetch, or clock handling lives in this repo;
+an expired, malformed, foreign, or unknown-org token gets a non-2xx there and a **401**
+here, with no session written. On success the token's three identity facts are pinned to
+`session_context` on THE session record — and nowhere else:
+
+| field | value | read by |
+| --- | --- | --- |
+| `user` | the projected claims (`sub`, `name`, `email`, `email_verified`, `org`, `verifiedAt`) | the chat gate, to prove ownership on every later request |
+| `semantius_org` | the token's `<org>` half — **which tenant** the session acts on | `provisionSemantiusEnv` (`SEMANTIUS_ORG` in the container), and the echo egress header `x-semantius-org` |
+| `semantius_user` | the token's `sub` — **as whom** it acts | the record's own audit surface (data browser, session listing) |
+
+`semantius_jwt` (the bare credential) sits beside them; see "Egress" below. **Nothing
+identity- or tenant-shaped is ever taken from the request body**: those four keys are
+stripped from whatever `sessionContext` the client sends and rewritten from the verified
+token, so no caller can hand itself an org, a `sub`, or a user. The ingest response echoes
+`user` (what the frontend's status line shows) — there is no separate tenant field on the
+record, because the tenant *is* `semantius_org`.
+
+The **chat gate** (`app.use('/agents/main/*', …)` in `backend-b/src/app.ts`) then admits
+a conversation only when its session record carries such a `user` — send, history read,
+and stream alike answer **401** otherwise, so a session created with no token can be
+provisioned and skill-checked but never chatted with. Consequences worth knowing:
+
+- The token is verified **per request** on the chat surface (`userTokenGuard` runs with the
+  gate), not pinned at creation: tokens live ~1 h while a session lives 24 h, so the client
+  re-presents a fresh one and the gate re-checks it against the record's `user`. When the
+  presented JWT differs from the stored one, the whole identity trio
+  (`semantius_jwt`/`semantius_org`/`semantius_user`) is re-stamped in one merge — that is
+  how a long conversation's sandbox credential stays live. Write-on-change only.
+- GitHub-issue conversations reach the same agent through **in-process dispatch**
+  (`channels/github.ts`), never through this HTTP route, so the webhook path is unaffected.
+- The frontend requires the token box before **New session** is enabled, and prints the
+  resolved user (`Wei Chen <admin@test.com> @tests`) in its status line.
+
+`pnpm mint-token` (`scripts/mint-token.mjs`) mints a token to paste there: it exchanges a
+Semantius API key for a user JWT via the `client_credentials` grant against
+`https://<org>.semantius.cloud/token` and prints `<org>:<jwt>`. Credentials come from a
+gitignored `.env` at the repo root (`SEMANTIUS_API_KEY`, `SEMANTIUS_ORG`), loaded via
+Node's built-in `process.loadEnvFile` — no dotenv wrapper; already-set environment
+variables win when there is no `.env`. The exchange lives in `scripts/lib/semantius.mjs`,
+shared with `chat-probe.mjs` (which mints per run, since the gate would reject it
+otherwise) and the acceptance suite. Tokens are short-lived (~1 h), so mint per session.
 
 ## LLM configuration
 
@@ -254,8 +308,8 @@ Two layers:
   a dedicated one-model provider `agent-<name>` reuses the catalog entry with only the
   transport swapped; only a catalog miss falls back to a conservative placeholder entry
   (no reasoning, 128k window). `model_base_url` overrides transport only — auth is always
-  the worker-wide `LLM_API_KEY` secret. Backend A applies its fixed agent's override at
-  build time; backend B per session from the bundle.
+  the worker-wide `LLM_API_KEY` secret. The override is applied per session from the
+  agent's bundle.
 
 ## Egress (per-agent proxy_whitelist)
 
@@ -263,13 +317,101 @@ Egress from an agent's sandbox is governed by the agent's own `proxy_whitelist` 
 `agent.jsonc` — an array of host globs (`"www.semantius.com"` exact, `"*.semantius.ai"`
 subdomains only). **Deny-all when absent**: an agent without the property (or with an
 empty list) can make no outbound request at all. There is no global whitelist anymore.
-The list rides the agent bundle as `proxyWhitelist`; backend B maps it to the session's
-container in KV at ingest (`whitelist:<containerId>`, self-healed by the agent
-initializer — a deleted session stays deny-all) and both outbound handlers in
-`src/cloudflare.ts` resolve it per invocation. Backend A bakes its fixed agent's list at
-build time from the generated meta. The sentinel→key swap (`brokerEgress`) and the echo
-bearer injection both sit behind this gate; a request to a non-whitelisted host is
-rejected with 403 even when it carries the credential sentinel.
+The list rides the agent bundle as `proxyWhitelist`; the ingest route writes it into
+**THE session record** — `session:<sessionId>`, the single mutable per-session document
+(browse meta, `egress_secrets`, `whitelist`, and the four data channels) — plus the
+`container:<containerId> → sessionId` pointer, the only containerId-keyed KV entry
+(outbound handlers receive only `ctx.containerId`, and `idFromName` is one-way; every
+other code path *computes* the container id — the record's `containerId` field is
+stored for visibility, not read by code). Both
+outbound handlers in `backend-b/src/cloudflare.ts` resolve pointer → session record per
+invocation; the agent initializer self-heals the egress fields each message
+(write-on-change only — a deleted session stays deny-all). The sentinel→credential swap
+(`brokerEgress`) and the zero-knowledge `egress_secrets` injection both sit behind the
+whitelist gate; a request to a non-whitelisted host is rejected with 403 even when it
+carries the credential sentinel.
+
+### `egress_secrets` — per-session downstream credentials
+
+A session's downstream credentials live on the record as a **map of host glob →
+credential**, matched with the same globber as the whitelist:
+
+```json
+"egress_secrets": { "postman-echo.com": "hoth-tourism-key-671e2acf-5fac94ed-…" }
+```
+
+The container is given **nothing** for these hosts — not the value, not a placeholder, not
+the knowledge that auth happens. The skill fetches the host with no `Authorization` header;
+[`injectAndForward`](core/src/egress.js#L246) looks the host up in the map and *adds* the
+header on the way out. Zero-knowledge injection: the sandbox cannot leak, misdirect, or
+even name a credential it has never seen.
+
+Rules, all covered by `pnpm test`:
+
+- **Registering a host as credential-required is what makes absence fatal.** A host handled
+  by this path with no matching map entry gets **403** — never an unauthenticated forward.
+  That's the fail-closed rule behind plan §13 C5: a chat session's credentials are never
+  re-minted, so an expired session whose policy self-heals recovers its whitelist but not
+  its ability to call the downstream API.
+- **Mint-if-absent, per host.** A warm entry never rotates; a new host can be added to a
+  live session without touching existing ones.
+- **Per session, keyed by the container→session pointer**, so tenant A's key can never
+  surface in tenant B's container. C2 proves it: two concurrent sessions present different
+  credentials to the same upstream.
+
+The POC's only entry is the fictional **Hoth Tourism API** — the trip-planner skill's
+partner API, played by `postman-echo.com` because it reflects the headers it received, which
+is what makes the injection assertable. There's no vault here, so ingest mints a per-session
+stand-in for what production would store as a secret *reference* (plan §12). Adding another
+downstream credential is a map entry, not a code change at egress.
+
+**Not in this map: the session user's Semantius JWT** (`session_context.semantius_jwt`).
+It's the one credential with two jobs — the backend verifies it to authenticate the user
+*and* egress forwards it — so it belongs with the identity, and it needs the sentinel swap
+rather than zero-knowledge injection because the vendored `semantius` CLI insists on a
+credential in its env. Also not in this map: `SEMANTIUS_API_KEY`, which is a Worker secret
+guarding *inbound* admin routes and never enters a session record or a container.
+
+**The sandbox acts as the session's user (Semantius).** There is no shared org API key
+in this path any more — the credential is the JWT of the user who opened the session.
+Three pieces make that work:
+
+1. **The image bakes no credential and no org.** `backend-b/Dockerfile` sets only
+   `ENV SEMANTIUS_JWT=__sak__` — the sentinel (`SEMANTIUS_JWT_SENTINEL`,
+   `core/src/config.js`). `SEMANTIUS_ORG` is deliberately *not* baked: a hardcoded org
+   would point every session at one tenant.
+2. **Per-session container environment.** `provisionSemantiusEnv`
+   (`core/src/sandbox-env.js`) calls the sandbox SDK's `setEnvVars` with
+   `SEMANTIUS_ORG=<the token's org>` and `SEMANTIUS_JWT=<sentinel>`. Applied at ingest
+   (pre-warm) and re-applied by the agent's start callback on every message, because a
+   cold container comes back with only the image's environment — the same absent→write
+   self-heal shape as skill provisioning. A session with no verified user gets no
+   Semantius environment at all, so its CLI is unconfigured rather than pointed at
+   someone else's tenant.
+3. **The swap at egress.** The catch-all outbound handler resolves
+   `session_context.semantius_jwt` per invocation and hands it to `brokerEgress` as the
+   secret: every outbound header containing the sentinel gets it replaced with that JWT,
+   and requests to `SEMANTIUS_HOSTS` (`*.semantius.ai`, `www.semantius.com`)
+   additionally have `Authorization` overwritten with `Bearer <jwt>` **before** the
+   sentinel scan, so the swap never re-touches the injected header. **No fallback:** a
+   session without a JWT has no credential to lend, so a sentinel-bearing request fails
+   closed (503) instead of silently borrowing org-wide access. The whitelist 403 gate
+   stays first — a credential is never attached to a denied request.
+
+The token arrives as the request's own `Authorization: Bearer <org>:<jwt>` on
+`POST /sessions/:id/agent` (and on every chat request), which the user guard verifies (see
+"User identity"). Ingest stores it split into its halves — the **bare** `semantius_jwt`
+beside `semantius_org` and `semantius_user` — in the `session_context` field of THE
+session record (24 h TTL, deleted with the session; the self-heal preserves it but can
+never reconstruct it — only a live token can). The `<org>:` prefix is a transport
+convention for getting the token to the backend, never part of the credential.
+
+Proven live by the acceptance `credentials` checks: inside the container
+`SEMANTIUS_JWT=__sak__` and `SEMANTIUS_ORG=<org>` are set with **no `SEMANTIUS_API_KEY`
+at all**, and `semantius whoami` comes back as the session's user (`admin@test.com` /
+Wei Chen / org `tests` against `https://tests.semantius.ai`). The semantius-admin agent's
+instructions tell it the workspace is already authenticated as that user, so it never
+asks for an API key the way the vendored skill docs otherwise would.
 
 **HTTPS transport note:** with `interceptHttps = true` the sandbox runtime provisions the
 interceptor CA at `/etc/cloudflare/certs/cloudflare-containers-ca.crt`, MITMs port 443,
@@ -282,38 +424,98 @@ working trust, so **a whitelisted host works from every tool** with no per-image
 by the `curl-check` skill-check op in acceptance). Plan §7's early "port 443 hangs"
 measurement predates `interceptHttps` — with interception off, no CA exists and TLS
 against the proxy cannot validate. ALL sandbox egress is HTTPS now — `opening-times.js`
-calls the echo host over 443 and the bearer rides inside TLS.
+calls the echo host over 443 and the injected credential rides inside TLS.
 
-**Session substrate expires after 24 h (fail-closed by design):** the per-session
-bundle snapshot (`agent:<id>`), bearer, and whitelist mappings all carry a 24 h TTL, and
-chat-session bearers are never re-minted (plan §13 C5). A chat session older than that
-loses egress and — on a cold container — its skills; start a new session. Named agent
-definitions (`agentdef:<name>`) deliberately have NO TTL: they are deployable artifacts,
-overwritten by the next `pnpm deploy:agent`, not session state.
+**Session substrate expires 24 h after last activity (fail-closed by design):** the
+bundle snapshot (`agent:<id>`), THE session record (`session:<id>`), and the container
+pointer (`container:<containerId>`) all carry a 24 h TTL; every merge into the session
+record (e.g. the per-response `session_state` mirror) refreshes its TTL, so an idle
+session expires 24 h after its last response. A chat session's `egress_secrets` are never
+re-minted after expiry (plan §13 C5) — an expired chat session loses egress and, on a cold
+container, its skills; start a new one. Named agent definitions (`agentdef:<name>`)
+deliberately have NO TTL: they are deployable artifacts, overwritten by the next
+`pnpm deploy:agent`, not session state. (Historical: the per-concern keys
+`bearer:`/`tag:`/`whitelist:`/`context:<containerId>` and the interim
+`egress:<sessionId>` record are gone — everything mutable merged into the session
+record; orphaned keys drained via TTL. The record's own single-credential `bearer` field
+became the `egress_secrets` map, and the client-chosen `tenantTag` was replaced by the
+verified token's `semantius_org`; both drain the same way.)
 
 ## Data browser
 
 The frontend **Data** tab navigates all Cloudflare-stored data as a generic
-collection → record → detail tree, backed by the read-only `/admin/collections` routes on
-both backends (behind the API-key guard; host-agnostic logic in `core/src/admin.js`, tests
+collection → record → detail tree, backed by the read-only `/admin/collections` routes
+(behind the API-key guard; host-agnostic logic in `core/src/admin.js`, tests
 in `scripts/admin.test.mjs`, `pnpm test`).
 
 Non-obvious constraint: Cloudflare cannot list Durable Object instances, so conversations
-are enumerable only via the `session:<id>` KV records each backend writes at
-provision/ingest (`putSessionIndex`) — sessions created before that index existed don't
-appear. Conversation *content* is streamed by the frontend via the Flue conversation
-client, not an admin endpoint.
+are enumerable only via the `session:<id>` KV records (THE session record, written at
+ingest and merged into thereafter) — sessions whose record expired or predates the index
+don't appear. Conversation *content* is streamed by the frontend via the Flue
+conversation client, not an admin endpoint.
 
 Token/cost usage in the Raw JSON view: Flue v2 dropped the beta's per-message
-`metadata.usage` from the conversation read, so both agents re-attach it via
-`useResponseFinish` (one aggregate per response, openrouter specifiers only — which
-includes catalog-known model overrides, since `llm.ts` keeps their `openrouter/...`
-specifier; the placeholder/custom catalogs register zero rates and would report $0).
+`metadata.usage` from the conversation read, so the agent re-attaches response metadata
+via `useResponseFinish`. Every response carries `session_state` (the running
+per-session totals, see "Per-session data channels"); the per-response `usage`/`model`
+fields remain openrouter-specifiers-only — which includes catalog-known model
+overrides, since `llm.ts` keeps their `openrouter/...` specifier; the
+placeholder/custom catalogs register zero rates and would report $0.
 `cost.total` is OpenRouter's **billed** amount: the `@earendil-works/pi-ai` patch (see
 Prerequisites) requests usage accounting (`usage: { include: true }`, OpenRouter-only)
 and prefers the inline `usage.cost` from the last SSE chunk over the catalog estimate.
 Component costs (input/output/cache) remain pi-ai's model-catalog computation —
 OpenRouter reports only the total — so components may not sum exactly to the total.
+THE session record carries the mirrored `session_state` (and `payload`/`session_data`),
+so the sessions collection shows all of it without opening the conversation.
+
+## Per-session data channels (session_context, payload, session_data, session_state)
+
+Four per-session data channels, split by who may see and who may write them. All four
+are visible on **THE session record** (`session:<id>`); the authoritative copies of the
+agent-facing ones live in the conversation's Durable Object:
+
+**`session_context` — infra-only, client-provided at creation.** Optional
+`sessionContext` object on the ingest body (plain JSON object, ≤ 8 KiB serialized,
+422 otherwise). Stored as the `session_context` field of THE session record
+(24 h TTL, removed by `DELETE /sessions/:id`) and **never delivered to the agent, the
+model, or the sandbox** — its two consumers are the identity gate at ingest and the egress
+handler, both reading `semantius_jwt` (see "User identity" below and "Session-context JWT
+injection" under Egress). The frontend's Chat tab has a token textarea (persisted in
+localStorage like the API key); its value is sent as `sessionContext` with **New session** —
+ingest is create-only (reused id → 409), so the token cannot be swapped on a live session.
+
+**`payload` — model-visible, client-provided at creation.** Optional `payload` field
+on the creation seed (the `initialData` of the instance-creating send — Flue records
+it exactly once; `payload` on later sends is ignored). The agent appends it verbatim
+to its instructions ("Session payload …", ≤ 16 KiB serialized, silently dropped
+otherwise) and mirrors it into the session record's `payload` field at each response
+finish. `chat-probe.mjs --payload='{"k":"v"}'` exercises it end-to-end.
+
+**`session_data` — model-writable, durable.** The `update_session_data` tool
+(`main.ts`) persists key/value facts into `usePersistentState('agentData')` — durable
+`state_write` records in the conversation's Durable Object, one instance per session.
+Current values are surfaced back into the instructions ("Session data …") so later
+turns (and cold containers) see what was stored, and mirrored into the session
+record's `session_data` field at each response finish (including tool writes from the
+same response). Flue natively provides both halves: `useInitialData` = what the
+session is *about* (immutable), `usePersistentState` = what the agent has *learned*
+(mutable from tool `run()`/lifecycle callbacks, never during render).
+
+**`session_state` — infra-written runtime aggregation.** Running totals per session:
+`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+`total_tokens`, `cost_total` (OpenRouter billed USD, micro-dollar rounded),
+`tool_calls_count`, `llm_calls_count`. Accumulated in the agent's unconditional
+`useResponseFinish`: tokens/cost from `response.usage`, tool calls from
+`response.toolCalls.length`, and LLM calls drained from `backend-b/src/usage.ts` — an
+isolate-global `observe()` counter of Flue `turn` events (one per model call,
+compaction included; isolate-local, so a mid-response eviction undercounts and an
+aborted submission's turns fold into the next response). The authoritative copy lives
+in `usePersistentState('sessionState')` (the DO record stream); each response also
+(a) attaches `session_state` to the response metadata (visible via `?view=history`
+and the Raw JSON view) and (b) fire-and-forget merges state/data/payload into THE
+session record (`mergeSessionRecord` — best-effort, healed at the next response; also
+refreshes the record's 24 h TTL, keeping active GitHub conversations browsable).
 
 ## GitHub channel (backend B)
 
@@ -327,12 +529,15 @@ nothing appears on GitHub.
 - Webhook endpoint: `https://hoth-poc-backend-b.ma532.workers.dev/channels/github/webhook`,
   mounted in `app.ts` **before** the API-key guard (auth is `X-Hub-Signature-256`, not the
   bearer). The explicit early mount is load-bearing.
-- GitHub conversations load the trip-planner agent bundle from the no-TTL KV entry
-  `agentdef:github-default` — a named-definition alias deployed with
-  `pnpm deploy:agent hoth-trip-planner --as github-default`; re-run it after changing the
-  agent (the pre-named-definition keys `agent:github-default` and `bundle:github-default`
-  are dead). The agent initializer mints the egress bearer itself (tenantTag `github`)
-  since these conversations never pass the ingest route.
+- GitHub conversations run the trip-planner agent directly from the no-TTL KV entry
+  `agentdef:hoth-trip-planner` (`GITHUB_AGENT_NAME` in `channels/github.ts`) — the same
+  definition chat sessions ingest by name; a normal `pnpm deploy:agent hoth-trip-planner`
+  (or `--all`) updates both. No alias key exists anymore (the former
+  `agentdef:github-default` and the pre-named-definition keys are dead). The agent
+  initializer mints the `egress_secrets` entry itself (tagged `github` inside the credential
+  value) since these conversations never pass the ingest route. They carry no Semantius
+  identity, so they get no `semantius_org` — and therefore no `x-semantius-org` header
+  and no Semantius credential at egress.
 - Worker secrets: `GITHUB_WEBHOOK_SECRET` (channel creation throws at module init if
   empty — deploy fails until it exists) and `GITHUB_TOKEN` (fine-grained PAT, Issues
   read/write).
@@ -493,7 +698,7 @@ render natively — no client-side mapping.
   tool args/results (Flue's default content policy). Revisit with the
   instrumentation's `content: { transform }` hook before real tenant data.
 
-Verify: `node scripts/chat-probe.mjs a` (or `b`), then open the Arize space →
+Verify: `node scripts/chat-probe.mjs`, then open the Arize space →
 project `hoth-poc` → the session should appear with the full
 invoke_agent → chat → execute_tool tree. Export failures surface as
 `arize: OTLP export …` warnings in `wrangler tail`. A direct probe of the
@@ -502,30 +707,50 @@ endpoint from Node (same serializer + headers) returned 200 on 2026-07-26.
 ## Acceptance
 
 ```bash
-API_TOKEN=$(cat .api-token) node scripts/acceptance.mjs        # default deployed URLs
-API_TOKEN=... A_URL=... B_URL=... node scripts/acceptance.mjs
+API_TOKEN=$(cat .api-token) node scripts/acceptance.mjs        # default deployed URL
+API_TOKEN=... B_URL=... node scripts/acceptance.mjs
 ```
 
-Drives the **deterministic core** (the bounded `/sessions/:id/skill-check` route) so the A/B
-comparison is isolated from LLM nondeterminism. Covers: auth (401 without/with wrong key),
-C1 (A is OOTB/static, no agent ingest), C2 (B per-session bearers + tenant tags), C3 (single
-source of truth — A image == bundle == B reconstructed, byte-identical), C4 (same result A
-vs B — `opening-times.js` stdout byte-for-byte, plus the injected bearer reaching the echo
-upstream while the container sends none), C5 (uniqueness guard + fail-closed egress), plus
-named-definition deploys (`PUT /agents/:name` incl. overwrite + 401), clean-base,
-zero-skill-agent, per-agent-egress deny-all, hostile-bundle-at-deploy (422), and
-name-based-ingest negatives (undeployed name 404, legacy inline-bundle body 422).
+Drives the **deterministic core** (the bounded `/sessions/:id/skill-check` route) so the
+checks are isolated from LLM nondeterminism. Covers: auth (401 without/with wrong key),
+named-definition deploys (`PUT /agents/:name` incl. overwrite + 401), name-based ingest
+(pinned to the deployed version), C2 (per-session downstream credentials, distinct across
+concurrent sessions, each carrying the verified token's org as `x-semantius-org`), C3
+(single source of truth — reconstructed sandbox files == bundle bytes, sha256 per file),
+C4 (`opening-times.js` runs deterministically, and the injected `egress_secrets` credential
+reaches the echo upstream while the container sends none), C5
+(uniqueness guard + fail-closed egress after teardown), plus clean-base, zero-skill-agent,
+per-agent-egress deny-all, session_context / session record (THE `session:<id>` record
+carries JWT context + egress_secrets + whitelist + containerId in one document, the
+`container:<containerId>` pointer maps back to the session id, 422 on
+non-object/oversize bodies, record + pointer removed on DELETE),
+hostile-bundle-at-deploy (422), and name-based-ingest negatives (undeployed name 404,
+legacy inline-bundle body 422). (C1 — "backend A is OOTB/static" — retired with backend A.)
+
+The **identity** checks cover both directions of the chat gate. The negatives need no
+Semantius account: four invalid tokens rejected at ingest (no `<org>:` prefix, a JWT the
+issuer refuses, an unknown org, junk), plus 401 on send, history read, and an unknown
+conversation id. The positives (org/JWT split stored separately, user resolved from
+userinfo, chat admitted) need a live token, so they run only when `.env` carries
+`SEMANTIUS_API_KEY`/`SEMANTIUS_ORG` and print a skip note otherwise.
+
+The **credentials** checks close the loop inside the sandbox, on a semantius-admin
+session (its `proxy_whitelist` covers `*.semantius.ai`): the container carries
+`SEMANTIUS_JWT=__sak__` plus the token's `SEMANTIUS_ORG` and **no `SEMANTIUS_API_KEY`**,
+and `semantius whoami` returns the session user's own identity — proving the sentinel was
+swapped for their JWT at egress. Same credential requirement as the identity positives.
 
 ## Verified results
 
-All 37 acceptance checks pass against the deployed Workers, and both backends drive the LLM
-end-to-end with the identical `activate_skill → read → bash` sequence and matching opening
-times. Two wiring findings and the egress HTTP-vs-HTTPS caveat are recorded in
-[`hoth-poc-plan.md`](./hoth-poc-plan.md) §7.
+All 51 acceptance checks pass against the deployed Workers. (The original A/B thesis —
+image-baked and dynamically-delivered skills produce byte-identical sandboxes and
+identical `activate_skill → read → bash` behavior — was proven while backend A still
+existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are
+recorded in [`hoth-poc-plan.md`](./hoth-poc-plan.md) §7.
 
 ## The `/sessions/:id/skill-check` route
 
 A **bounded** test affordance (behind the API-key guard): it runs one of a fixed set of
 deterministic commands (`opening-times`, `hash-skill`, `count-skill-files`, `curl-check`,
-`semantius-whoami`) built server-side from strictly validated structured params — **not**
+`semantius-whoami`, `semantius-env`) built server-side from strictly validated structured params — **not**
 arbitrary shell. It exists to drive the acceptance oracle; it is not a product route.

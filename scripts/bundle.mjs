@@ -6,13 +6,9 @@
  * and emits the artifacts where the consumers pick them up:
  *   - dist-bundle/<name>.agent.json                 (canonical artifacts)
  *   - frontend/src/generated/agents/<name>.json     (import.meta.glob'd by the UI)
- *   - backend-a/src/generated/agent.json            (meta only — instructions/
- *     model for the fixed hoth-trip-planner agent; skills reach A's image via
- *     the Dockerfile COPY of the same folder, so no file content is inlined
- *     into A's worker bundle)
  *
- * The SAME agents/<name>/skills folder backend A bakes into its image is the
- * input — agent defined once, all consumers derive from it.
+ * Deployment to the backend is separate: scripts/deploy-agent.mjs builds the
+ * same bundle and PUTs it to the worker as a named KV definition.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,9 +19,6 @@ import { createAgentBundleFromDir, assertAgentRoundTrip, scanAgentsDir, skillFil
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const agentsDir = join(root, 'agents');
-
-/** The one agent backend A bakes into its image. */
-const BACKEND_A_AGENT = 'hoth-trip-planner';
 
 const { agents, skipped } = scanAgentsDir(agentsDir);
 for (const name of skipped) console.warn(`skipping agents/${name} (no agent.jsonc)`);
@@ -38,7 +31,6 @@ if (agents.length === 0) {
 // artifacts of the pre-multi-agent layout if they linger.
 rmSync(join(root, 'frontend', 'src', 'generated', 'agents'), { recursive: true, force: true });
 rmSync(join(root, 'frontend', 'src', 'generated', 'hoth-bundle.json'), { force: true });
-rmSync(join(root, 'backend-a', 'dist-bundle'), { recursive: true, force: true });
 
 const bundles = new Map();
 const scratch = mkdtempSync(join(tmpdir(), 'hoth-bundle-'));
@@ -80,26 +72,3 @@ for (const [name, bundle] of bundles) {
     }
   }
 }
-
-// Backend A's build-time meta for its fixed agent — fail hard if it is gone.
-const backendAAgent = bundles.get(BACKEND_A_AGENT);
-if (!backendAAgent) {
-  console.error(`agents/${BACKEND_A_AGENT} is required (backend A bakes this agent into its image)`);
-  process.exit(1);
-}
-const metaOut = join(root, 'backend-a', 'src', 'generated', 'agent.json');
-mkdirSync(dirname(metaOut), { recursive: true });
-writeFileSync(
-  metaOut,
-  JSON.stringify({
-    agentName: backendAAgent.agentName,
-    version: backendAAgent.version,
-    instructions: backendAAgent.instructions,
-    ...(backendAAgent.model ? { model: backendAAgent.model } : {}),
-    ...(backendAAgent.modelBaseUrl ? { modelBaseUrl: backendAAgent.modelBaseUrl } : {}),
-    // Egress allow list for A's outbound handlers — deny-all when absent.
-    proxyWhitelist: backendAAgent.proxyWhitelist ?? [],
-  }),
-  'utf-8',
-);
-console.log(`wrote ${metaOut} (backend-a build-time meta)`);

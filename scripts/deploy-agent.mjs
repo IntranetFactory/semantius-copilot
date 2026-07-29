@@ -7,8 +7,9 @@
  *   API_TOKEN=$(cat .api-token) node scripts/deploy-agent.mjs --all
  *
  * `--as <key>` deploys the bundle under a different KV key than its folder
- * name — the GitHub channel's shared agent is an alias:
- *   node scripts/deploy-agent.mjs hoth-trip-planner --as github-default
+ * name (generic alias mechanism; nothing in the app depends on an alias —
+ * the GitHub channel reads `agentdef:hoth-trip-planner` directly):
+ *   node scripts/deploy-agent.mjs <name> --as <alias-key>
  *
  * Builds fresh from agents/<name>/ via createAgentBundleFromDir (same loader
  * as bundle.mjs), so it never depends on a stale dist-bundle artifact. The

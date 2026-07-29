@@ -7,6 +7,5 @@ dist-bundle/
 .env
 .wrangler/
 frontend/src/generated/
-backend-a/src/generated/
 *.tsbuildinfo
 .api-token

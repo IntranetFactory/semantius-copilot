@@ -1,6 +1,5 @@
 packages:
   - core
-  - backend-a
   - backend-b
   - frontend
 allowBuilds:

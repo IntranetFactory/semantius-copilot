@@ -6,10 +6,10 @@
  * GITHUB_WEBHOOK_SECRET over the raw delivery bytes before the handler runs,
  * so its /webhook route is mounted OUTSIDE the API-key guard in app.ts.
  * `issues.opened` and `issue_comment.created` dispatch to the Main agent
- * (running the shared `agentdef:github-default` bundle, deployed via
- * `pnpm deploy:agent <name> --as github-default`) keyed by the canonical
- * instance id (one conversation per issue), so follow-up comments continue
- * the same session.
+ * (running the trip-planner definition directly — GITHUB_AGENT_NAME below,
+ * `agentdef:hoth-trip-planner`, the same entry chat sessions ingest by name;
+ * no alias key) keyed by the canonical instance id (one conversation per
+ * issue), so follow-up comments continue the same session.
  *
  * Egress: the agent posts replies through the comment_on_github_issue tool
  * (Octokit + GITHUB_TOKEN). Every reply carries AGENT_MARKER and the webhook
@@ -28,6 +28,14 @@ const secrets = env as Record<string, string | undefined>;
 
 /** Appended (as an invisible HTML comment) to every agent reply. */
 const AGENT_MARKER = '<!-- hoth-agent-reply -->';
+
+/**
+ * The named definition GitHub conversations run — the trip-planner agent,
+ * read straight from `agentdef:hoth-trip-planner` (no alias key: the KV
+ * namespace holds exactly one definition per agents/ folder). Also consumed
+ * by main.ts to pick the bundle key for issue-bound conversations.
+ */
+export const GITHUB_AGENT_NAME = 'hoth-trip-planner';
 
 export const channel = createGitHubChannel({
   webhookSecret: secrets.GITHUB_WEBHOOK_SECRET ?? '',
@@ -90,10 +98,10 @@ async function dispatchToAgent(
   await indexConversation(id, ref).catch(() => {});
 }
 
-/** `{ initialData }` from the shared agentdef:github-default bundle, or {}. */
+/** `{ initialData }` from the GitHub agent's named definition, or {}. */
 async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown> }> {
   try {
-    const raw = await (env as unknown as { STORE: KVNamespace }).STORE.get(`${AGENT_DEF_KEY_PREFIX}github-default`);
+    const raw = await (env as unknown as { STORE: KVNamespace }).STORE.get(`${AGENT_DEF_KEY_PREFIX}${GITHUB_AGENT_NAME}`);
     if (!raw) return {};
     const bundle = JSON.parse(raw) as Record<string, unknown>;
     return {
@@ -122,7 +130,10 @@ async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown
 async function indexConversation(id: string, ref: GitHubIssueRef): Promise<void> {
   const store = (env as { STORE: KVNamespace }).STORE;
   const existing = await readSession(store, id);
+  // Spread the existing record first: refreshes must not drop fields other
+  // writers merged in meanwhile (session_state from the response-finish seam).
   await putSessionIndex(store, id, {
+    ...(existing ?? {}),
     backend: 'b',
     channel: 'github',
     repo: `${ref.owner}/${ref.repo}`,

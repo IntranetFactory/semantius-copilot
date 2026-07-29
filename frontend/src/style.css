@@ -10,6 +10,7 @@ header h1 { margin: 0 0 0.75rem; font-size: 1.4rem; }
 .tabs-sub .tab { font-size: 0.85rem; padding: 0.3rem 0.6rem; }
 .apikey { min-width: 12rem; font-family: ui-monospace, monospace; }
 .sessionid { min-width: 22rem; font-family: ui-monospace, monospace; font-size: 0.82rem; }
+.jwt { flex: 1 1 100%; font-family: ui-monospace, monospace; font-size: 0.78rem; resize: vertical; }
 .linkbtn { background: transparent; color: #2b6cb0; border: none; padding: 0.45rem 0.3rem; }
 .linkbtn:hover { text-decoration: underline; }
 /* Scoped to legacy chrome only. Tailwind/ai-elements (Panel B) now lives in the
@@ -19,6 +20,7 @@ header h1 { margin: 0 0 0.75rem; font-size: 1.4rem; }
    inside .controls or .chat; Radix portals mount on <body>, outside both. */
 :where(.controls, .chat) select,
 :where(.controls, .chat) input,
+:where(.controls, .chat) textarea,
 :where(.controls, .chat) button { font: inherit; padding: 0.45rem 0.7rem; border: 1px solid #cbd5e0; border-radius: 6px; background: #fff; }
 :where(.controls, .chat) button { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
 :where(.controls, .chat) button:disabled { opacity: 0.5; cursor: default; }

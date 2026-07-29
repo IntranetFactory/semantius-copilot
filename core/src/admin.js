@@ -1,11 +1,11 @@
 /**
  * Read-only admin/data-browser seam (host-agnostic).
  *
- * The two backends persist all their app-owned durable state in a single KV
- * namespace each (A: SECRETS, B: STORE). These helpers enumerate and read that
- * namespace so a frontend can navigate and inspect every stored entry. They are
- * pure logic over the minimal KV shape ({ list, get }); the backends wire them
- * to Hono routes behind the existing API-key guard.
+ * The backend persists all its app-owned durable state in a single KV
+ * namespace (STORE). These helpers enumerate and read that namespace so a
+ * frontend can navigate and inspect every stored entry. They are pure logic
+ * over the minimal KV shape ({ list, get }); the backend wires them to Hono
+ * routes behind the existing API-key guard.
  *
  * READ ONLY by design: the data browser never mutates state. Values can be
  * large (skill bundles), so listing returns keys only — values are fetched
@@ -18,12 +18,10 @@
 
 /** The stable prefixes this app writes, with human labels for the browser. */
 export const KV_GROUPS = {
-  session: 'Session index (one record per agent session/conversation id)',
+  session: 'THE session record: meta, egress fields (bearer/whitelist), session_context, payload, session_data, session_state',
   agentdef: 'Named agent definition (deployed via pnpm deploy:agent; no TTL)',
   agent: 'Agent bundle (one immutable per-session snapshot of a named definition)',
-  bearer: 'Per-container egress bearer (containerId -> token)',
-  tag: 'Per-container tenant tag (containerId -> tenant)',
-  whitelist: 'Per-container egress whitelist (containerId -> allowed hosts)',
+  container: 'Container pointer (containerId -> session id; the only containerId-keyed entry)',
 };
 
 export const SESSION_KEY_PREFIX = 'session:';
@@ -93,14 +91,16 @@ export async function readKvEntry(kv, key) {
 }
 
 // ---------------------------------------------------------------------------
-// Session index — the enumeration seam for agent conversations.
+// THE session record (`session:<id>`) — one mutable document per session.
 //
-// Durable Object instances (the per-conversation FlueHothAgent DOs holding the
-// SQLite conversation stream) cannot be listed by the platform, and Flue has
-// no cross-conversation index. So to let the browser enumerate sessions
-// without knowing ids upfront, each backend records one `session:<id>` KV
-// entry when it provisions a session. This is the only durable record that
-// maps a browsable id back to a conversation.
+// Durable Object instances (the per-conversation agent DOs holding the SQLite
+// conversation stream) cannot be listed by the platform, so this record is
+// what makes a session enumerable — and since the single-record refactor it
+// also carries everything else session-scoped that is not the (large,
+// immutable) bundle snapshot: the egress fields (egress_secrets, whitelist) the
+// outbound proxy reads via the container pointer, and the four data channels
+// (session_context, payload, session_data, session_state) — plus containerId
+// (derivable via idFromName, stored for visibility).
 // ---------------------------------------------------------------------------
 
 /**
@@ -109,7 +109,7 @@ export async function readKvEntry(kv, key) {
  *
  * @param {{ put(k: string, v: string, o?: object): Promise<void> }} kv
  * @param {string} id session/conversation id
- * @param {Record<string, unknown>} [meta] extra fields (backend, containerId, tenantTag, …)
+ * @param {Record<string, unknown>} [meta] extra fields (backend, containerId, agentName, …)
  */
 export async function putSessionIndex(kv, id, meta = {}) {
   const record = { id, ...meta };
@@ -185,6 +185,28 @@ export async function readSession(kv, id) {
   }
 }
 
+/**
+ * Merge a patch into THE session record (`session:<id>`), creating it when
+ * absent. The record is the single mutable per-session document: browse meta
+ * (agentName, version, createdAt), the egress fields (egress_secrets,
+ * whitelist), and the four data channels (session_context, payload,
+ * session_data, session_state). All writers go through this read-merge-write
+ * so nobody drops another writer's fields; last-write-wins per merge (KV has
+ * no CAS — the rare heal/mirror interleave self-heals on the next write).
+ * Refreshes the 24 h TTL, so a session expires 24 h after its last activity.
+ *
+ * @param {{ get(k: string): Promise<string | null>, put(k: string, v: string, o?: object): Promise<void> }} kv
+ * @param {string} id session/conversation id
+ * @param {Record<string, unknown>} patch fields to set/overwrite
+ * @returns {Promise<Record<string, unknown>>} the merged record as written
+ */
+export async function mergeSessionRecord(kv, id, patch) {
+  const existing = (await readSession(kv, id)) ?? {};
+  const merged = { id, ...existing, ...patch };
+  await putSessionIndex(kv, id, merged);
+  return merged;
+}
+
 // ---------------------------------------------------------------------------
 // Generic collection model — powers the frontend's entities -> records ->
 // record tree. Every backing store (KV, the session index) is presented as a
@@ -200,7 +222,7 @@ export async function readSession(kv, id) {
 /** The collections a backend exposes, given its KV namespace name. */
 export function adminCollections(kvName) {
   return [
-    { id: 'kv', label: `KV · ${kvName}`, kind: 'kv', description: 'Raw key/value entries (agent bundles, bearers, tags, session index).' },
+    { id: 'kv', label: `KV · ${kvName}`, kind: 'kv', description: 'Raw key/value entries (agent bundles, egress policies, session index).' },
     { id: 'sessions', label: 'Agent sessions', kind: 'sessions', description: 'One record per conversation id (from the session index).' },
   ];
 }

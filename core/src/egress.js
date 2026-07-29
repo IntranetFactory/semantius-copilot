@@ -1,24 +1,31 @@
 /**
- * Egress/Secret broker seam (plan §2/§7): the one capability Flue does not
- * abstract. The POC ships only the Cloudflare (outbound-handler) consumer of
- * this interface; a Docker egress-proxy sidecar is future work behind the
- * same seam.
+ * Egress seam (plan §2/§7): the one capability Flue does not abstract. The
+ * POC ships only the Cloudflare (outbound-handler) consumer of this
+ * interface; a Docker egress-proxy sidecar is future work behind the same
+ * seam.
  *
- * The broker resolves per-container credentials at egress time. The sandbox
- * never holds the raw token; handlers must resolve from containerId on EVERY
- * invocation — no closure/module caching (plan §7/§9.2: the handler registry
- * is isolate-global, caching bleeds across concurrent sessions).
+ * Since the single-record refactor there is no separate egress store: the
+ * per-session egress fields (egress_secrets, whitelist) and the opaque client
+ * session_context live INSIDE THE session record (`session:<id>`, admin.js).
+ * The only egress-owned key is the container pointer:
  *
- * @typedef {Object} SecretBroker
- * @property {(containerId: string) => Promise<{ bearer: string, tenantTag: string | null } | null>} resolve
- * @property {(containerId: string, bearer: string, tenantTag: string | null, ttlSeconds?: number) => Promise<void>} put
- * @property {(containerId: string) => Promise<void>} remove
+ *   container:<containerId> -> sessionId
+ *
+ * It exists because outbound handlers receive ONLY ctx.containerId and
+ * idFromName() is one-way — the pointer is the reverse index for the one
+ * party that starts from the container side. Every other code path holds the
+ * session id and simply computes the container id.
+ *
+ * Handlers resolve pointer -> session record on EVERY invocation — no
+ * closure/module caching (plan §7/§9.2: the handler registry is
+ * isolate-global, caching bleeds across concurrent sessions). Missing
+ * pointer or record means DENY ALL egress (fail-closed).
  */
+import { mergeSessionRecord, readSession } from './admin.js';
 
-export const BEARER_KEY_PREFIX = 'bearer:';
-export const TAG_KEY_PREFIX = 'tag:';
-export const WHITELIST_KEY_PREFIX = 'whitelist:';
+export const CONTAINER_KEY_PREFIX = 'container:';
 export const DEFAULT_SECRET_TTL_SECONDS = 24 * 60 * 60;
+export const SESSION_CONTEXT_MAX_BYTES = 8 * 1024;
 
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
@@ -50,49 +57,142 @@ export function isWhitelistedHost(host, whitelist) {
   return whitelist.some((pattern) => hostMatchesPattern(host, pattern));
 }
 
+/**
+ * Pick the credential for `host` out of an `egress_secrets` map: host glob ->
+ * credential, matched with the same globber as the whitelist, so an entry can
+ * cover a whole subdomain family (`*.partner.example`) or one exact host.
+ * First match wins (POC cardinality — one or two entries per session).
+ *
+ * Undefined means "this container has no credential for that host", which the
+ * caller MUST treat as deny, not as "forward unauthenticated" (see
+ * injectAndForward).
+ *
+ * @param {Record<string, unknown> | undefined} secrets
+ * @param {string} host
+ * @returns {string | undefined}
+ */
+export function egressSecretForHost(secrets, host) {
+  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) return undefined;
+  for (const [pattern, value] of Object.entries(secrets)) {
+    if (typeof value === 'string' && value && hostMatchesPattern(host, pattern)) return value;
+  }
+  return undefined;
+}
+
+/** The egress_secrets map off a record, or undefined when absent/malformed. */
+function readEgressSecrets(record) {
+  const secrets = record?.egress_secrets;
+  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) return undefined;
+  const entries = Object.entries(secrets).filter(([, v]) => typeof v === 'string' && v);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 // ---------------------------------------------------------------------------
-// Per-container egress whitelist store. The whitelist is PER AGENT
-// (agent.jsonc `proxy_whitelist`), delivered in the agent bundle and mapped to
-// the session's containerId so the isolate-global outbound handlers can
-// resolve it per invocation — same pattern, same KV namespace, and same
-// fail-closed posture as the bearer mapping: NO MAPPING (or an empty list)
-// MEANS DENY ALL EGRESS. Backend A skips this store — its single fixed agent's
-// list is baked at build time.
+// Container pointer + policy resolution over the session record.
 // ---------------------------------------------------------------------------
 
 /**
  * @param {{ put(k: string, v: string, o?: object): Promise<void> }} kv
  * @param {string} containerId
- * @param {string[]} hosts the agent's proxyWhitelist ([] = deny all)
+ * @param {string} sessionId
  * @param {number} [ttlSeconds]
  */
-export async function putEgressWhitelist(kv, containerId, hosts, ttlSeconds = DEFAULT_SECRET_TTL_SECONDS) {
-  await kv.put(WHITELIST_KEY_PREFIX + containerId, JSON.stringify(hosts), { expirationTtl: ttlSeconds });
-}
-
-/**
- * @param {{ get(k: string): Promise<string | null> }} kv
- * @param {string} containerId
- * @returns {Promise<string[] | null>} null when no mapping exists (deny all)
- */
-export async function resolveEgressWhitelist(kv, containerId) {
-  const raw = await kv.get(WHITELIST_KEY_PREFIX + containerId);
-  if (!raw) return null; // fail closed
-  try {
-    const hosts = JSON.parse(raw);
-    return Array.isArray(hosts) ? hosts.filter((h) => typeof h === 'string') : null;
-  } catch {
-    return null;
-  }
+export async function putContainerPointer(kv, containerId, sessionId, ttlSeconds = DEFAULT_SECRET_TTL_SECONDS) {
+  await kv.put(CONTAINER_KEY_PREFIX + containerId, sessionId, { expirationTtl: ttlSeconds });
 }
 
 /**
  * @param {{ delete(k: string): Promise<void> }} kv
  * @param {string} containerId
  */
-export async function removeEgressWhitelist(kv, containerId) {
-  await kv.delete(WHITELIST_KEY_PREFIX + containerId);
+export async function removeContainerPointer(kv, containerId) {
+  await kv.delete(CONTAINER_KEY_PREFIX + containerId);
 }
+
+/**
+ * Resolve a container's egress policy: pointer -> session record -> the
+ * egress-relevant slice. Null when the pointer or record is absent/expired —
+ * DENY ALL. A record without a whitelist field is deny-all too ([]).
+ *
+ * The tenant a session acts on is NOT a separate stored field: it is
+ * `session_context.semantius_org`, the org half of the user's verified token
+ * (identity has exactly one home — see the ingest route). Sessions with no
+ * verified user (channel conversations) resolve without one.
+ *
+ * Two credential shapes come back, deliberately kept apart:
+ *  - `egressSecrets` — the record's `egress_secrets` map (host glob ->
+ *    credential) for downstream services the SANDBOX NEVER SEES. Nothing is
+ *    baked into the container, so the injection is zero-knowledge.
+ *  - `context.semantius_jwt` — the session user's own token, the one credential
+ *    that is NOT just an egress secret: the backend verifies it to authenticate
+ *    the user (auth.js/identity.js) and egress additionally forwards it, so it
+ *    lives with the identity in session_context and is swapped in through the
+ *    sentinel (brokerEgress) because the vendored CLI insists on an env var.
+ *
+ * @param {{ get(k: string): Promise<string | null> }} kv
+ * @param {string} containerId
+ * @returns {Promise<{ sessionId: string, egressSecrets?: Record<string, string>, semantiusOrg?: string, whitelist: string[], context?: Record<string, unknown> } | null>}
+ */
+export async function resolveEgressPolicy(kv, containerId) {
+  const sessionId = await kv.get(CONTAINER_KEY_PREFIX + containerId);
+  if (!sessionId) return null; // fail closed
+  const record = await readSession(kv, sessionId);
+  if (!record) return null; // fail closed
+  const whitelist = Array.isArray(record.whitelist) ? record.whitelist.filter((h) => typeof h === 'string') : [];
+  const context =
+    record.session_context && typeof record.session_context === 'object' && !Array.isArray(record.session_context)
+      ? record.session_context
+      : undefined;
+  const org = context?.semantius_org;
+  const egressSecrets = readEgressSecrets(record);
+  return {
+    sessionId,
+    ...(egressSecrets ? { egressSecrets } : {}),
+    ...(typeof org === 'string' && org ? { semantiusOrg: org } : {}),
+    whitelist,
+    ...(context ? { context } : {}),
+  };
+}
+
+/**
+ * Per-message self-heal (agent initializer and the skill-check route): make
+ * sure the pointer exists and the session record carries the bundle's
+ * whitelist. Semantics preserved across refactors:
+ *  - egress secrets are minted only when the caller passes `mintSecrets`
+ *    (channel sessions) and only for host keys the record does not already
+ *    have — a chat session's secrets are NEVER re-minted after expiry (plan
+ *    §13 C5), and a warm session's existing entries never rotate;
+ *  - everything else on the record (session_context, payload, session_data,
+ *    session_state, meta) is preserved by the merge, never reconstructed.
+ * Writes only on change: a warm session costs two reads, zero writes.
+ *
+ * @param {{ get(k: string): Promise<string | null>, put(k: string, v: string, o?: object): Promise<void> }} kv
+ * @param {string} containerId
+ * @param {string} sessionId
+ * @param {{ whitelist: string[], mintSecrets?: () => Record<string, string> }} desired
+ */
+export async function ensureEgressPolicy(kv, containerId, sessionId, desired) {
+  const record = (await readSession(kv, sessionId)) ?? {};
+  const patch = {};
+  const existingWhitelist = Array.isArray(record.whitelist) ? record.whitelist : null;
+  if (JSON.stringify(existingWhitelist) !== JSON.stringify(desired.whitelist)) patch.whitelist = desired.whitelist;
+  if (desired.mintSecrets) {
+    // Per-host mint-if-absent: add only keys this record lacks, so an existing
+    // credential is never rotated under a live conversation.
+    const existing = readEgressSecrets(record) ?? {};
+    const minted = Object.entries(desired.mintSecrets()).filter(([host]) => !existing[host]);
+    if (minted.length > 0) patch.egress_secrets = { ...existing, ...Object.fromEntries(minted) };
+  }
+  if (record.containerId !== containerId) patch.containerId = containerId;
+  if (Object.keys(patch).length > 0) await mergeSessionRecord(kv, sessionId, patch);
+  if ((await kv.get(CONTAINER_KEY_PREFIX + containerId)) !== sessionId) {
+    await putContainerPointer(kv, containerId, sessionId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Egress response builders (pure over the resolved policy).
+// ---------------------------------------------------------------------------
 
 /**
  * Catch-all secret broker with a domain whitelist (plan §7 secret-at-egress).
@@ -104,39 +204,57 @@ export async function removeEgressWhitelist(kv, containerId) {
  *   host NOT whitelisted                -> reject (a sentinel here is an
  *                                          exfiltration attempt — never leak the key)
  *
+ * Session-context JWT precedence: when `policy.jwt` is present AND the host
+ * matches `jwt.hosts`, the request's `Authorization` header is overwritten
+ * with `Bearer <jwt.token>` — AFTER the whitelist gate (the 403 stays
+ * authoritative) but BEFORE the sentinel scan, so the sentinel swap never
+ * re-touches the injected header and a JWT-only request cannot 503 on a
+ * missing worker-side secret. The session's user JWT thus takes precedence
+ * over the shared API key; sessions without a JWT behave exactly as before.
+ *
  * Matching is by substring, not whole-value equality: semantius sends the key
  * on an MCP `Authorization: Bearer <key>` header, so the value is
  * `Bearer __sak__` — replacing just the sentinel span preserves the `Bearer `
  * scheme; a bare `__sak__` value becomes exactly `secret`.
  *
  * @param {Request} request
- * @param {{ whitelist: string[], sentinel: string, secret: string | undefined }} policy
+ * @param {{ whitelist: string[], sentinel: string, secret: string | undefined, jwt?: { token: string, hosts: string[] } }} policy
  * @param {typeof fetch} fetchImpl
  */
 export async function brokerEgress(request, policy, fetchImpl = fetch) {
-  const { whitelist, sentinel, secret } = policy;
+  const { whitelist, sentinel, secret, jwt } = policy;
   const host = new URL(request.url).hostname;
   const headers = new Headers(request.headers);
-  // Collect first, then set — mutating Headers mid-iteration is unsafe.
-  const hits = [];
-  for (const [name, value] of headers) {
-    if (value.includes(sentinel)) hits.push([name, value]);
-  }
+  const sentinelPresent = [...headers].some(([, value]) => value.includes(sentinel));
 
   if (!isWhitelistedHost(host, whitelist)) {
     // Deny by default. If the request carried the sentinel this is an attempt to
     // send the real key somewhere it shouldn't go — reject WITHOUT swapping.
     return jsonResponse(403, {
-      error: hits.length
+      error: sentinelPresent
         ? 'egress denied: credential sentinel present but host not in whitelist'
         : 'egress denied: host not in whitelist',
       host,
     });
   }
 
+  // Session-context JWT (see precedence note above): overwrite Authorization
+  // before the sentinel scan so the swap below never sees the sentinel there.
+  let jwtApplied = false;
+  if (jwt?.token && isWhitelistedHost(host, jwt.hosts)) {
+    headers.set('authorization', `Bearer ${jwt.token}`);
+    jwtApplied = true;
+  }
+
+  // Collect first, then set — mutating Headers mid-iteration is unsafe.
+  const hits = [];
+  for (const [name, value] of headers) {
+    if (value.includes(sentinel)) hits.push([name, value]);
+  }
+
   // Whitelisted host, no credential to inject: legitimate follow-up traffic
-  // (e.g. JWT-bearing MCP calls). Forward unchanged.
-  if (hits.length === 0) return fetchImpl(request);
+  // (e.g. JWT-bearing MCP calls). Forward unchanged (mutated only by the JWT).
+  if (hits.length === 0) return jwtApplied ? fetchImpl(new Request(request, { headers })) : fetchImpl(request);
 
   if (!secret) {
     // Never forward the raw placeholder.
@@ -147,54 +265,33 @@ export async function brokerEgress(request, policy, fetchImpl = fetch) {
 }
 
 /**
- * KV-backed SecretBroker (the Cloudflare implementation of the seam).
- * `kv` is anything with get/put/delete(key) — a Workers KV namespace binding,
- * or an in-memory Map adapter in tests.
+ * Zero-knowledge credential injection for a downstream service: look the
+ * request's host up in the session's `egress_secrets` and ADD the
+ * `Authorization` header the sandbox never held — the container sends no
+ * credential and no placeholder, so it cannot leak or misdirect one. Fails
+ * closed when the session has no credential for that host (deleted session,
+ * or a chat session whose policy self-healed without one — plan §13 C5).
+ * Host-agnostic: the Cloudflare outbound handler calls this with its own fetch.
  *
- * @param {{ get(k: string): Promise<string | null>, put(k: string, v: string, o?: object): Promise<void>, delete(k: string): Promise<void> }} kv
- * @returns {SecretBroker}
- */
-export function kvSecretBroker(kv) {
-  return {
-    async resolve(containerId) {
-      const bearer = await kv.get(BEARER_KEY_PREFIX + containerId);
-      if (!bearer) return null; // fail closed (plan §13 C5)
-      const tenantTag = await kv.get(TAG_KEY_PREFIX + containerId);
-      return { bearer, tenantTag: tenantTag ?? null };
-    },
-    async put(containerId, bearer, tenantTag, ttlSeconds = DEFAULT_SECRET_TTL_SECONDS) {
-      // TTL + delete-on-session-end: defence-in-depth even though ids are unique (plan §7)
-      await kv.put(BEARER_KEY_PREFIX + containerId, bearer, { expirationTtl: ttlSeconds });
-      if (tenantTag) await kv.put(TAG_KEY_PREFIX + containerId, tenantTag, { expirationTtl: ttlSeconds });
-    },
-    async remove(containerId) {
-      await kv.delete(BEARER_KEY_PREFIX + containerId);
-      await kv.delete(TAG_KEY_PREFIX + containerId);
-    },
-  };
-}
-
-/**
- * Build the egress response for an intercepted request: inject the
- * per-container bearer (and tenant tag) that the sandbox never held, or fail
- * closed when no mapping exists. Host-agnostic — the Cloudflare outbound
- * handler calls this with its own fetch.
+ * Callers gate on the whitelist FIRST — this function assumes the host is
+ * already allowed and only answers "which credential, if any".
+ *
+ * `x-semantius-org` rides along to say WHOSE tenant the session acts on; the
+ * credential is what differs per session. A session with no verified user
+ * carries no org header (channel conversations act on no Semantius tenant).
  *
  * @param {Request} request
- * @param {SecretBroker} broker
- * @param {string} containerId
+ * @param {{ egressSecrets?: Record<string, string>, semantiusOrg?: string } | null | undefined} policy
  * @param {typeof fetch} fetchImpl
  */
-export async function injectAndForward(request, broker, containerId, fetchImpl = fetch) {
-  const creds = await broker.resolve(containerId);
-  if (!creds) {
-    return new Response(
-      JSON.stringify({ error: 'egress denied: no credential mapping for this container' }),
-      { status: 403, headers: { 'content-type': 'application/json' } },
-    );
+export async function injectAndForward(request, policy, fetchImpl = fetch) {
+  const host = new URL(request.url).hostname;
+  const secret = egressSecretForHost(policy?.egressSecrets, host);
+  if (!secret) {
+    return jsonResponse(403, { error: 'egress denied: no credential mapping for this container', host });
   }
   const headers = new Headers(request.headers);
-  headers.set('authorization', `Bearer ${creds.bearer}`);
-  if (creds.tenantTag) headers.set('x-tenant-tag', creds.tenantTag);
+  headers.set('authorization', `Bearer ${secret}`);
+  if (policy?.semantiusOrg) headers.set('x-semantius-org', policy.semantiusOrg);
   return fetchImpl(new Request(request, { headers }));
 }

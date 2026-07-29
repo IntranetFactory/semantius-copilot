@@ -58,13 +58,25 @@ export function buildSkillCheckCommand(req) {
       // No interpolation — fully fixed string.
       return `curl -sS -o /dev/null -w '%{http_code}' -m 20 -X POST 'https://${ECHO_HOST}/post?api=hoth-tourism&query=curl-check' 2>&1`;
     case 'semantius-whoami':
-      // End-to-end egress proof: semantius reads the image-baked __sak__
-      // placeholder and calls https://<org>.semantius.ai; the Worker's
-      // brokerEgress swaps __sak__ for the real key on the whitelisted host.
-      // A successful identity response means the whole secret-at-egress path
-      // (baked env + interceptHttps + CA trust + swap + whitelist) works. No
-      // interpolation — fully fixed string. SEMANTIUS_TIMEOUT bounds a hang.
+      // End-to-end egress proof: semantius reads the container's __sak__
+      // placeholder and its per-session SEMANTIUS_ORG, and calls
+      // https://<org>.semantius.ai; the Worker's brokerEgress swaps __sak__ for
+      // THIS session's user JWT on the whitelisted host. A successful identity
+      // response means the whole credential-at-egress path (per-session env +
+      // interceptHttps + CA trust + swap + whitelist) works, and the identity
+      // it reports is the session's user. No interpolation — fully fixed
+      // string. SEMANTIUS_TIMEOUT bounds a hang.
       return `SEMANTIUS_TIMEOUT=20 semantius whoami 2>&1`;
+    case 'semantius-env':
+      // Diagnostic for the credential wiring: the CLI version shipped in the
+      // image, which SEMANTIUS_* variables that build documents, and what the
+      // container actually holds. Safe to print — the container's values are
+      // only the org and the sentinel, never a real credential.
+      return (
+        `semantius --version 2>&1; ` +
+        `echo '--- container env ---'; env | grep '^SEMANTIUS_' | sort; ` +
+        `echo '--- cli honors ---'; semantius --help 2>&1 | grep -oE 'SEMANTIUS_[A-Z_]+' | sort -u`
+      );
     default:
       throw new SkillCheckError(`unknown op: ${String(op)}`);
   }

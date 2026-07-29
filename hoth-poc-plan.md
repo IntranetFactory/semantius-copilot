@@ -363,9 +363,20 @@ comparison by driving the deterministic core directly. Grouped by the five contr
   agent"); "OOTB" = skill delivery only (§6). Not a violation — required so the same skill runs on both.
 
 **C2 — B per-tenant, differs per session.**
-- Two concurrent B sessions carry **different bearers AND a distinguishable per-tenant config token**
-  (`tenantTag`); each session's echo reflects **its own** tag and bearer, and neither container `env`
-  holds the raw bearer — proving per-session runtime injection drives behavior, not a baked/shared value.
+- Two concurrent B sessions carry **different bearers**, and each echo also reflects the tenant the
+  session acts on (`x-semantius-org`); neither container `env` holds the raw bearer — proving
+  per-session runtime injection drives behavior, not a baked/shared value.
+- Amended after the identity work (see README "User identity"): the tenant marker is no longer a
+  client-chosen `tenantTag` on the record but `session_context.semantius_org`, the org half of the
+  **verified** token. Two sessions of one user therefore share the org (correctly) and are still
+  distinguished by their credentials; a client-supplied tenant string was security theater, since
+  anyone could pick any value.
+- Also amended: "the bearer" is no longer a single record field. Downstream credentials live in
+  `egress_secrets` — a map of **host glob → credential** (README "`egress_secrets`") — so a session
+  can hold several, each injected zero-knowledge for its own host, mint-if-absent per host, and
+  fail-closed (403) where a host has no entry. The user's Semantius JWT stays out of the map: it is
+  both the token the backend authenticates with and an egress secret, so it lives with the identity
+  in `session_context` and uses the sentinel swap that the vendored CLI requires.
 
 **C3 — Single source of truth (A-image == bundle == B-reconstructed, byte-identical).**
 - **Triple-hash:** `find . -type f | sort | xargs sha256sum` inside **A's built image**, == per-file

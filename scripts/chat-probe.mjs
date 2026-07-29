@@ -1,41 +1,56 @@
+#!/usr/bin/env node
 /**
- * chat-probe.mjs — drive ONE real LLM chat turn against a deployed backend
+ * chat-probe.mjs — drive ONE real LLM chat turn against the deployed backend
  * and print the assistant reply.
  *
  * Exists so observability changes (Braintrust, Arize/OTel) can be verified
  * without clicking through the frontend: send a turn here, then check the
  * Braintrust `hoth-poc` logs / Arize `hoth-poc` project for the trace.
  *
- *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs [a|b] ["message"]
+ *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}']
  *
  * Talks the same wire protocol as the frontend FlueClient (raw fetch, like
- * acceptance.mjs): A = provision + POST the message to /agents/hoth/:id;
- * B = name-based ingest ({ agentName } — the trip-planner definition must
- * already be deployed via `pnpm deploy:agent hoth-trip-planner`), then POST
- * the message to /agents/main/:id with the creation seed as `initialData`
- * (plan §6 — without it, turn 1 runs on generic default instructions; the
- * seed is built from dist-bundle/, so run `pnpm bundle` first). The reply is
- * polled from `?view=history` until the submission settles.
+ * acceptance.mjs): name-based ingest ({ agentName } — the trip-planner
+ * definition must already be deployed via `pnpm deploy:agent
+ * hoth-trip-planner`), then POST the message to /agents/main/:id with the
+ * creation seed as `initialData` (plan §6 — without it, turn 1 runs on
+ * generic default instructions; the seed is built from dist-bundle/, so run
+ * `pnpm bundle` first). The reply is polled from `?view=history` until the
+ * submission settles.
+ *
+ * Ingest carries a freshly minted `<org>:<jwt>` as sessionContext because the
+ * chat route rejects sessions without a verified Semantius user — so this
+ * needs the same `.env` credentials as `pnpm mint-token`.
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { skillCatalogFromBundle } from '../core/src/index.js';
+import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const backend = process.argv[2] ?? 'a';
-const message = process.argv[3] ?? 'Reply with the single word OK.';
-if (backend !== 'a' && backend !== 'b') {
-  console.error('usage: node scripts/chat-probe.mjs [a|b] ["message"]');
+const args = process.argv.slice(2);
+if (args[0] === 'b') args.shift(); // legacy [a|b] selector — B is all that's left
+if (args[0] === 'a') {
+  console.error('backend A was removed — the probe drives the one remaining backend');
   process.exit(2);
 }
-const token = process.env.API_TOKEN || readFileSync(join(root, '.api-token'), 'utf8').trim();
-const base =
-  backend === 'a'
-    ? (process.env.A_URL ?? 'https://hoth-poc-backend-a.ma532.workers.dev')
-    : (process.env.B_URL ?? 'https://hoth-poc-backend-b.ma532.workers.dev');
-const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+// --payload='{"k":"v"}' rides the creation seed as `payload` (initialData) —
+// the agent surfaces it in its instructions, so a message asking about it
+// proves the payload E2E path.
+let payload;
+const payloadArg = args.find((arg) => arg.startsWith('--payload='));
+if (payloadArg) payload = JSON.parse(payloadArg.slice('--payload='.length));
+const message = args.find((arg) => !arg.startsWith('--')) ?? 'Reply with the single word OK.';
+const adminKey = process.env.API_TOKEN || readFileSync(join(root, '.api-token'), 'utf8').trim();
+const base = process.env.B_URL ?? 'https://hoth-poc-backend-b.ma532.workers.dev';
+// The chat surface authenticates as the USER (their own Semantius token as the
+// bearer), the admin surface with the shared deployment key. The probe drives
+// both: chat for the turn itself, admin for the session-record read at the end.
+const semantiusToken = await mintSemantiusToken();
+const headers = { authorization: `Bearer ${semantiusToken}`, 'content-type': 'application/json' };
+const adminHeaders = { authorization: `Bearer ${adminKey}`, 'content-type': 'application/json' };
 
 async function postJson(url, body) {
   const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -45,37 +60,34 @@ async function postJson(url, body) {
 }
 
 const sessionId = randomUUID();
-let conversationUrl;
-let sendBody;
-if (backend === 'a') {
-  await postJson(`${base}/sessions/${sessionId}/provision`, {});
-  conversationUrl = `${base}/agents/hoth/${sessionId}`;
-  sendBody = { kind: 'user', body: message };
-} else {
-  const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf8'));
-  try {
-    await postJson(`${base}/sessions/${sessionId}/agent`, { agentName: bundle.agentName });
-  } catch (err) {
-    if (String(err).includes('404')) {
-      console.error(`agent "${bundle.agentName}" is not deployed — run: pnpm deploy:agent ${bundle.agentName}`);
-    }
-    throw err;
+const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf8'));
+console.log(`minted semantius token for org ${semantiusToken.slice(0, semantiusToken.indexOf(':'))}`);
+try {
+  // No credential in the body any more: the bearer IS the user's token, and the
+  // backend pins the identity it verifies onto the session as its owner.
+  const ingest = await postJson(`${base}/sessions/${sessionId}/agent`, { agentName: bundle.agentName });
+  console.log(`session user: ${JSON.stringify(ingest?.user ?? null)}`);
+} catch (err) {
+  if (String(err).includes('404')) {
+    console.error(`agent "${bundle.agentName}" is not deployed — run: pnpm deploy:agent ${bundle.agentName}`);
   }
-  const skillCatalog = skillCatalogFromBundle(bundle);
-  const seed = {
-    agentName: bundle.agentName,
-    version: bundle.version,
-    baseImage: bundle.baseImage,
-    instructions: bundle.instructions,
-    ...(bundle.model ? { model: bundle.model } : {}),
-    ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
-    ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
-  };
-  conversationUrl = `${base}/agents/main/${sessionId}`;
-  sendBody = { initialData: seed, kind: 'user', body: message };
+  throw err;
 }
+const skillCatalog = skillCatalogFromBundle(bundle);
+const seed = {
+  agentName: bundle.agentName,
+  version: bundle.version,
+  baseImage: bundle.baseImage,
+  instructions: bundle.instructions,
+  ...(bundle.model ? { model: bundle.model } : {}),
+  ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
+  ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
+  ...(payload !== undefined ? { payload } : {}),
+};
+const conversationUrl = `${base}/agents/main/${sessionId}`;
+const sendBody = { initialData: seed, kind: 'user', body: message };
 
-console.log(`session ${sessionId} on backend ${backend} — sending: ${JSON.stringify(message)}`);
+console.log(`session ${sessionId} — sending: ${JSON.stringify(message)}`);
 const admission = await postJson(conversationUrl, sendBody);
 const submissionId = admission?.submissionId;
 if (!submissionId) throw new Error(`send admission carried no submissionId: ${JSON.stringify(admission)}`);
@@ -105,4 +117,20 @@ for (;;) {
   console.log(`settled completed in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   console.log(`reply: ${text || JSON.stringify(assistant ?? null)}`);
   break;
+}
+
+// session_state: aggregated at the response-finish seam and mirrored into the
+// session:<id> index record fire-and-forget. The mirror is written in the
+// DO's colo; this read runs in ours — KV propagation can take up to ~60 s
+// (observed live), so poll a full propagation window before failing.
+let sessionState;
+for (let attempt = 0; attempt < 12 && !sessionState; attempt++) {
+  if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 6000));
+  const record = await fetch(`${base}/admin/collections/kv/record?id=session:${sessionId}`, { headers: adminHeaders });
+  if (record.ok) sessionState = (await record.json())?.json?.session_state;
+}
+console.log(`session_state: ${JSON.stringify(sessionState ?? null)}`);
+if (!sessionState || !(sessionState.llm_calls_count >= 1) || !(sessionState.total_tokens > 0)) {
+  console.error('FAIL: session_state missing or counters not positive');
+  process.exitCode = 1;
 }

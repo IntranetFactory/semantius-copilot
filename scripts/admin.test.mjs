@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
- * Data-browser (admin) unit tests — the host-agnostic collection model in
- * @hoth/core, exercised with an in-memory KV. Zero Cloudflare/Flue present,
- * so this runs anywhere `node` does.
+ * Host-agnostic core unit tests — the admin collection model and the egress
+ * policy over an in-memory KV. Zero Cloudflare/Flue present, so this runs
+ * anywhere `node` does (`pnpm test`).
  *
  * Covers: KV listing (cursor pagination + grouping + sort), value reads
- * (JSON vs opaque vs missing), the session index round-trip, and the generic
- * collection resolvers (kv / sessions). The beta `runs` collection is gone —
- * Flue v2 removed the workflow-run registry.
+ * (JSON vs opaque vs missing), the session index round-trip, the generic
+ * collection resolvers (kv / sessions), and the `egress_secrets` rules
+ * (host-glob lookup, mint-if-absent, fail-closed when a host has no entry).
+ * The beta `runs` collection is gone — Flue v2 removed the workflow-run
+ * registry.
  */
 import {
   listKvEntries,
@@ -17,10 +19,18 @@ import {
   listSessions,
   readSession,
   removeSessionIndex,
+  mergeSessionRecord,
   adminCollections,
   listCollectionRecords,
   readCollectionRecord,
 } from '../core/src/admin.js';
+import {
+  egressSecretForHost,
+  ensureEgressPolicy,
+  injectAndForward,
+  putContainerPointer,
+  resolveEgressPolicy,
+} from '../core/src/egress.js';
 
 let failures = 0;
 function check(name, ok, extra = '') {
@@ -68,37 +78,42 @@ const bundleJson = JSON.stringify({ agentName: 'trip-planner', version: 'v1', ba
 
 await (async function run() {
   // --- kvGroupOf ---------------------------------------------------------
-  check('kvGroupOf splits on first colon', kvGroupOf('bearer:abc') === 'bearer');
+  check('kvGroupOf splits on first colon', kvGroupOf('container:abc') === 'container');
   check('kvGroupOf handles no colon', kvGroupOf('flat') === '(ungrouped)');
 
   // --- listKvEntries: pagination + grouping + sort -----------------------
   const kv = fakeKv({
-    'tag:c2': 'tenant-9f',
-    'bearer:c1': 'hoth-bearer-1',
+    'agentdef:trip': JSON.stringify({ agentName: 'trip' }),
+    'container:c1': 'sess-1111',
     'agent:9f8a': bundleJson,
-    'bearer:c2': 'hoth-bearer-2',
-    'session:9f8a': JSON.stringify({ id: '9f8a', backend: 'b' }),
+    'container:c2': 'sess-2222',
+    'session:9f8a': JSON.stringify({
+      id: '9f8a',
+      backend: 'b',
+      egress_secrets: { 'postman-echo.com': 'hoth-tourism-key-1' },
+      whitelist: ['postman-echo.com'],
+    }),
   });
   const keys = await listKvEntries(kv);
   check('listKvEntries collects all pages', keys.length === 5, `got ${keys.length}`);
-  check('listKvEntries sorts by name', keys[0].name === 'agent:9f8a' && keys.at(-1).name === 'tag:c2');
-  check('listKvEntries assigns groups', keys.find((k) => k.name === 'agent:9f8a')?.group === 'agent');
+  check('listKvEntries sorts by name', keys[0].name === 'agent:9f8a' && keys.at(-1).name === 'session:9f8a');
+  check('listKvEntries assigns groups', keys.find((k) => k.name === 'container:c1')?.group === 'container');
 
   // --- readKvEntry: json / opaque / missing ------------------------------
   const bundleEntry = await readKvEntry(kv, 'agent:9f8a');
   check('readKvEntry parses JSON', bundleEntry?.json?.agentName === 'trip-planner');
   check('readKvEntry reports size', bundleEntry?.size === bundleJson.length);
-  const bearerEntry = await readKvEntry(kv, 'bearer:c1');
-  check('readKvEntry leaves opaque strings unparsed', bearerEntry?.json === null && bearerEntry?.value === 'hoth-bearer-1');
+  const pointerEntry = await readKvEntry(kv, 'container:c1');
+  check('readKvEntry leaves opaque strings unparsed', pointerEntry?.json === null && pointerEntry?.value === 'sess-1111');
   check('readKvEntry returns null when absent', (await readKvEntry(kv, 'nope')) === null);
 
   // --- session index round-trip ------------------------------------------
   const skv = fakeKv();
-  await putSessionIndex(skv, 'aaaa-1111', { backend: 'b', tenantTag: 'tenant-aa', createdAt: '2026-07-19T10:00:00.000Z' });
+  await putSessionIndex(skv, 'aaaa-1111', { backend: 'b', agentName: 'trip-planner', createdAt: '2026-07-19T10:00:00.000Z' });
   await putSessionIndex(skv, 'bbbb-2222', { backend: 'a', createdAt: '2026-07-19T12:00:00.000Z' });
   const sessions = await listSessions(skv);
   check('listSessions enumerates indexed sessions', sessions.length === 2, `got ${sessions.length}`);
-  check('listSessions preserves metadata', sessions.find((s) => s.id === 'aaaa-1111')?.tenantTag === 'tenant-aa');
+  check('listSessions preserves metadata', sessions.find((s) => s.id === 'aaaa-1111')?.agentName === 'trip-planner');
 
   // --- ordering: newest first, undated last ------------------------------
   const okv = fakeKv();
@@ -118,6 +133,30 @@ await (async function run() {
   await removeSessionIndex(skv, 'aaaa-1111');
   check('removeSessionIndex deletes the record', (await readSession(skv, 'aaaa-1111')) === null);
   check('removeSessionIndex leaves others', (await listSessions(skv)).length === 1);
+
+  // --- mergeSessionRecord: patches merge into THE session record -----------
+  const mkv = fakeKv();
+  await mergeSessionRecord(mkv, 'merge-1', {
+    backend: 'b',
+    createdAt: '2026-07-20T00:00:00.000Z',
+    egress_secrets: { 'x.example': 'key-1' },
+    whitelist: ['x.example'],
+    session_context: { semantius_org: 'tests', semantius_user: 'user3' },
+  });
+  await mergeSessionRecord(mkv, 'merge-1', { session_state: { total_tokens: 42, llm_calls_count: 1 } });
+  const merged = await readSession(mkv, 'merge-1');
+  check(
+    'mergeSessionRecord preserves existing fields',
+    merged?.session_context?.semantius_org === 'tests' &&
+      merged?.session_context?.semantius_user === 'user3' &&
+      merged?.egress_secrets?.['x.example'] === 'key-1' &&
+      merged?.createdAt === '2026-07-20T00:00:00.000Z',
+  );
+  check('mergeSessionRecord writes the patch', merged?.session_state?.total_tokens === 42 && merged?.whitelist?.[0] === 'x.example');
+  await mergeSessionRecord(mkv, 'merge-1', { session_state: { total_tokens: 99, llm_calls_count: 2 } });
+  check('mergeSessionRecord replaces patched fields', (await readSession(mkv, 'merge-1'))?.session_state?.llm_calls_count === 2);
+  const mergedNew = await mergeSessionRecord(mkv, 'merge-new', { session_state: { total_tokens: 7 } });
+  check('mergeSessionRecord creates a record when none exists', mergedNew?.id === 'merge-new' && mergedNew?.session_state?.total_tokens === 7);
 
   // --- collections descriptor --------------------------------------------
   const cols = adminCollections('STORE');
@@ -146,6 +185,65 @@ await (async function run() {
   check('readCollectionRecord(kv) missing -> null', (await readCollectionRecord('kv', 'nope', deps)) === null);
   check('readCollectionRecord(runs) is gone in v2', (await readCollectionRecord('runs', 'run-1', deps)) === null);
   check('readCollectionRecord(unknown) -> null', (await readCollectionRecord('zzz', 'x', deps)) === null);
+
+  // --- egress_secrets: host-glob lookup, mint-if-absent, fail-closed -------
+  // The record field is a MAP (host glob -> credential the sandbox never
+  // holds), so these cover the three rules that make it safe: match by the same
+  // globber as the whitelist, never rotate a warm credential, and deny when a
+  // host has no entry (that last one is plan §13 C5 — an expired chat session
+  // whose policy self-heals must not get egress back).
+  check('egressSecretForHost matches an exact host', egressSecretForHost({ 'postman-echo.com': 'k1' }, 'postman-echo.com') === 'k1');
+  check('egressSecretForHost matches a subdomain glob', egressSecretForHost({ '*.partner.example': 'k2' }, 'api.partner.example') === 'k2');
+  check('egressSecretForHost does not match a glob against the bare apex', egressSecretForHost({ '*.partner.example': 'k2' }, 'partner.example') === undefined);
+  check('egressSecretForHost ignores non-string values', egressSecretForHost({ 'h.example': 42 }, 'h.example') === undefined);
+  check('egressSecretForHost tolerates a missing map', egressSecretForHost(undefined, 'h.example') === undefined);
+
+  const ekv = fakeKv();
+  await mergeSessionRecord(ekv, 'sess-e', {
+    whitelist: ['postman-echo.com'],
+    egress_secrets: { 'postman-echo.com': 'tourism-key-1' },
+    session_context: { semantius_org: 'tests' },
+  });
+  await putContainerPointer(ekv, 'cid-e', 'sess-e');
+  const pol = await resolveEgressPolicy(ekv, 'cid-e');
+  check('resolveEgressPolicy returns the egress_secrets map', pol?.egressSecrets?.['postman-echo.com'] === 'tourism-key-1');
+  check('resolveEgressPolicy derives semantiusOrg from session_context', pol?.semantiusOrg === 'tests');
+
+  let forwarded = null;
+  const injected = await injectAndForward(new Request('https://postman-echo.com/post', { method: 'POST' }), pol, async (req) => {
+    forwarded = req;
+    return new Response('ok');
+  });
+  check('injectAndForward adds the matching credential', forwarded?.headers.get('authorization') === 'Bearer tourism-key-1');
+  check('injectAndForward stamps x-semantius-org', forwarded?.headers.get('x-semantius-org') === 'tests');
+  check('injectAndForward forwards the request (200)', injected.status === 200);
+  let leaked = false;
+  const denied = await injectAndForward(new Request('https://other.example/x'), pol, async () => {
+    leaked = true;
+    return new Response('should never be sent');
+  });
+  check('injectAndForward denies a host with no entry (403, nothing forwarded)', denied.status === 403 && !leaked);
+
+  const skv2 = fakeKv();
+  const desired = { whitelist: ['postman-echo.com'] };
+  await ensureEgressPolicy(skv2, 'cid-m', 'sess-m', { ...desired, mintSecrets: () => ({ 'postman-echo.com': 'minted-1' }) });
+  const firstMint = (await readSession(skv2, 'sess-m'))?.egress_secrets?.['postman-echo.com'];
+  await ensureEgressPolicy(skv2, 'cid-m', 'sess-m', { ...desired, mintSecrets: () => ({ 'postman-echo.com': 'minted-2' }) });
+  const secondMint = (await readSession(skv2, 'sess-m'))?.egress_secrets?.['postman-echo.com'];
+  check('ensureEgressPolicy mints a missing credential', firstMint === 'minted-1');
+  check('ensureEgressPolicy never rotates a warm credential', secondMint === 'minted-1');
+  await ensureEgressPolicy(skv2, 'cid-m', 'sess-m', { ...desired, mintSecrets: () => ({ '*.partner.example': 'minted-3' }) });
+  const grown = (await readSession(skv2, 'sess-m'))?.egress_secrets;
+  check(
+    'ensureEgressPolicy adds a new host without touching the existing one',
+    grown?.['*.partner.example'] === 'minted-3' && grown?.['postman-echo.com'] === 'minted-1',
+  );
+  await ensureEgressPolicy(skv2, 'cid-n', 'sess-n', desired);
+  check(
+    'ensureEgressPolicy without mintSecrets heals the whitelist but no credential (C5)',
+    (await readSession(skv2, 'sess-n'))?.egress_secrets === undefined &&
+      (await readSession(skv2, 'sess-n'))?.whitelist?.[0] === 'postman-echo.com',
+  );
 })();
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);

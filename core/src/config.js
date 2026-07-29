@@ -7,20 +7,36 @@
 export const ECHO_HOST = 'postman-echo.com';
 
 /**
- * Placeholder the sandbox is given in place of the real Semantius API key. The
- * container only ever holds this sentinel — the real key never enters the
- * sandbox. The catch-all egress handler scans EVERY outbound request header and
- * swaps any header whose value is exactly this sentinel for the real secret
- * (see brokerEgress in egress.js). Keep this value in sync with the
- * `ENV SEMANTIUS_API_KEY` line baked into both backends' Dockerfiles.
+ * Placeholder the sandbox is given in place of the session user's Semantius
+ * JWT. The container only ever holds this sentinel — no real credential enters
+ * the sandbox. The catch-all egress handler scans EVERY outbound request header
+ * and swaps any occurrence of this sentinel for the session's JWT (see
+ * brokerEgress in egress.js and the `secret` it is called with in
+ * backend-b/src/cloudflare.ts). Keep this value in sync with the
+ * `ENV SEMANTIUS_JWT` line baked into the backend's Dockerfile.
+ *
+ * The image bakes it as `SEMANTIUS_JWT` (NOT `SEMANTIUS_API_KEY`): what the
+ * sandbox authenticates with is the user's own token for this session, not a
+ * shared org key. The other half of that pair, `SEMANTIUS_ORG`, cannot be baked
+ * at all — it is per session (the `<org>` half of the user's token), applied to
+ * the container by provisionSemantiusEnv (`core/src/sandbox-env.js`).
  */
-export const SEMANTIUS_KEY_SENTINEL = '__sak__';
+export const SEMANTIUS_JWT_SENTINEL = '__sak__';
+
+/**
+ * Semantius API hosts eligible for session-context JWT injection at egress
+ * (see brokerEgress `policy.jwt`). Mirrors the semantius-admin agent's
+ * proxy_whitelist: the JWT must never ride to non-Semantius hosts, so the
+ * injection is scoped to these patterns independently of the (per-agent)
+ * egress whitelist.
+ */
+export const SEMANTIUS_HOSTS = ['*.semantius.ai', 'www.semantius.com'];
 
 // The egress whitelist is PER AGENT since the proxy_whitelist refactor:
-// agent.jsonc `proxy_whitelist` -> bundle `proxyWhitelist` -> resolved per
-// containerId at egress (backend B: KV mapping via putEgressWhitelist;
-// backend A: baked build-time meta). An agent without the property gets
-// DENY-ALL egress. See core/agent.schema.json and core/src/egress.js.
+// agent.jsonc `proxy_whitelist` -> bundle `proxyWhitelist` -> the `whitelist`
+// field of THE session record, resolved at egress via the container pointer
+// (resolveEgressPolicy). An agent without the property gets DENY-ALL egress.
+// See core/agent.schema.json and core/src/egress.js.
 
 /** Default LLM settings; override per-worker with the LLM_PROVIDER /
  * LLM_MODEL / LLM_BASE_URL vars and the LLM_API_KEY secret. Provider
@@ -28,7 +44,7 @@ export const SEMANTIUS_KEY_SENTINEL = '__sak__';
 export const DEFAULT_LLM = { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' };
 
 /**
- * Env-driven LLM setup shared by both backends. Registers any provider
+ * Env-driven LLM setup. Registers any provider
  * override and returns the model specifier to hand to useModel().
  *
  * LLM_PROVIDER: "cloudflare" (AI binding, keyless) | "openrouter" |

@@ -1,27 +1,35 @@
 #!/usr/bin/env node
 /**
- * Acceptance tests (plan §11 step 8, §13) against the DEPLOYED backends.
+ * Acceptance tests (plan §11 step 8, §13) against the DEPLOYED backend.
  * Every check names a concrete oracle; LLM nondeterminism is isolated by
  * driving the deterministic core (the bounded /skill-check route) directly.
  *
- * Requires the shared API key (both backends are behind the guard):
+ * Needs BOTH credentials, because the backend has two auth surfaces: the
+ * shared deployment key for admin/CLI routes, and a real Semantius user token
+ * for creating and using sessions (minted from .env — see lib/semantius.mjs).
  *   API_TOKEN=<key> node scripts/acceptance.mjs
- *   API_TOKEN=<key> A_URL=https://... B_URL=https://... node scripts/acceptance.mjs
+ *   API_TOKEN=<key> B_URL=https://... node scripts/acceptance.mjs
+ *
+ * (Check ids C2-C5 keep their plan §13 numbering; C1 — "backend A is
+ * OOTB/static" — retired with backend A itself.)
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const A_URL = process.env.A_URL ?? 'https://hoth-poc-backend-a.ma532.workers.dev';
 const B_URL = process.env.B_URL ?? 'https://hoth-poc-backend-b.ma532.workers.dev';
 const API_TOKEN = process.env.API_TOKEN;
 if (!API_TOKEN) {
-  console.error('API_TOKEN env var is required (both backends are behind the API-key guard).');
+  console.error('API_TOKEN env var is required (the backend is behind the API-key guard).');
   process.exit(2);
 }
 const AUTH = { authorization: `Bearer ${API_TOKEN}` };
+// Filled in by main() before any check runs: the USER surface (session creation
+// and chat) authenticates with a real Semantius token, never with AUTH.
+let USER_AUTH = {};
 
 const bundle = JSON.parse(readFileSync(join(here, '..', 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf-8'));
 // Synthetic definitions (deployed under their own names each run, stable keys
@@ -66,69 +74,125 @@ async function put(base, path, body) {
   return { status: res.status, json };
 }
 
+async function get(base, path) {
+  const res = await fetch(`${base}${path}`, { headers: { ...AUTH } });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  return { status: res.status, json };
+}
+
 async function del(base, id) {
   await fetch(`${base}/sessions/${id}`, { method: 'DELETE', headers: { ...AUTH } }).catch(() => {});
 }
 
+/** POST on the USER surface — `Authorization: Bearer <org>:<jwt>`. */
+async function upost(base, path, body, auth = USER_AUTH) {
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...auth },
+    body: JSON.stringify(body ?? {}),
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  return { status: res.status, json };
+}
+
+/** GET on the USER surface. */
+async function uget(base, path, auth = USER_AUTH) {
+  const res = await fetch(`${base}${path}`, { headers: { ...auth } });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  return { status: res.status, json };
+}
+
 const FIXED = { op: 'opening-times', sites: ['Echo Base Thermal Springs'], from: '2026-08-01', to: '2026-08-03' };
 
+/** One built bundle from dist-bundle/, or null when it wasn't built. */
+function readBundle(fileName) {
+  try {
+    return JSON.parse(readFileSync(join(here, '..', 'dist-bundle', fileName), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/** `<org>:<jwt>` -> [org, jwt] (split on the first colon only). */
+function splitToken(token) {
+  const i = token.indexOf(':');
+  return [token.slice(0, i), token.slice(i + 1)];
+}
+
+/**
+ * A live Semantius user token. REQUIRED: sessions are created on the user
+ * surface now, so without one there is nothing to test — the suite stops
+ * rather than reporting a wall of misleading 401s.
+ */
+let semantiusToken = null;
+
 async function main() {
-  console.log(`A: ${A_URL}\nB: ${B_URL}\n`);
+  console.log(`B: ${B_URL}\n`);
+  semantiusToken = await mintSemantiusToken().catch((err) => {
+    console.error(`a Semantius user token is required: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  });
+  USER_AUTH = { authorization: `Bearer ${semantiusToken}` };
+  const [tokenOrg] = splitToken(semantiusToken);
 
   // Health (public, no auth)
-  const [ha, hb] = await Promise.all([fetch(`${A_URL}/health`).then((r) => r.json()), fetch(`${B_URL}/health`).then((r) => r.json())]);
-  check('health', 'both backends healthy', ha.ok && hb.ok, `A=${ha.delivery} B=${hb.delivery}`);
+  const hb = await fetch(`${B_URL}/health`).then((r) => r.json());
+  check('health', 'backend healthy', hb.ok === true, `delivery=${hb.delivery}`);
 
-  // --- Auth: protected routes reject missing/wrong key ---------------------
-  const noKey = await fetch(`${A_URL}/sessions/${uuid()}/provision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-  check('auth', 'A rejects request with no API key (401)', noKey.status === 401, `status ${noKey.status}`);
+  // --- Auth: two surfaces, and neither credential works on the other -------
+  const noKey = await fetch(`${B_URL}/sessions/${uuid()}/agent`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  check('auth', 'session create rejects a request with no bearer (401)', noKey.status === 401, `status ${noKey.status}`);
   const badKey = await fetch(`${B_URL}/sessions/${uuid()}/agent`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' }, body: '{}' });
-  check('auth', 'B rejects request with wrong API key (401)', badKey.status === 401, `status ${badKey.status}`);
+  check('auth', 'session create rejects a junk bearer (401)', badKey.status === 401, `status ${badKey.status}`);
+  // The split itself: the deployment key must NOT open the user surface, and a
+  // user token must NOT open the admin surface. Either direction failing would
+  // mean the two are still one gate.
+  const adminKeyOnChat = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName }, AUTH);
+  check('auth', 'the admin API key cannot create a session (401)', adminKeyOnChat.status === 401, `status ${adminKeyOnChat.status}`);
+  const userTokenOnAdmin = await uget(B_URL, '/admin/collections');
+  check('auth', 'a user token cannot browse data (401)', userTokenOnAdmin.status === 401, `status ${userTokenOnAdmin.status}`);
+  const userTokenOnDeploy = await fetch(`${B_URL}/agents/acceptance-noauth`, { method: 'PUT', headers: { 'content-type': 'application/json', ...USER_AUTH }, body: JSON.stringify(bundle) });
+  check('auth', 'a user token cannot deploy an agent (401)', userTokenOnDeploy.status === 401, `status ${userTokenOnDeploy.status}`);
 
   // --- Named-definition deploys (PUT /agents/:name is the trust boundary) --
   const dep = await put(B_URL, `/agents/${bundle.agentName}`, bundle);
-  check('deploy', 'B deploys hoth-trip-planner as a named definition', dep.status === 200 && dep.json.version === bundle.version, JSON.stringify(dep.json).slice(0, 140));
+  check('deploy', 'deploys hoth-trip-planner as a named definition', dep.status === 200 && dep.json.version === bundle.version, JSON.stringify(dep.json).slice(0, 140));
   const depAgain = await put(B_URL, `/agents/${bundle.agentName}`, bundle);
   check('deploy', 'redeploying the same name overwrites (200)', depAgain.status === 200, `status ${depAgain.status}`);
   const depZero = await put(B_URL, `/agents/${zeroSkillBundle.agentName}`, zeroSkillBundle);
-  check('deploy', 'B deploys a zero-skill definition', depZero.status === 200, `status ${depZero.status}`);
+  check('deploy', 'deploys a zero-skill definition', depZero.status === 200, `status ${depZero.status}`);
   const depDeny = await put(B_URL, `/agents/${noEgress.agentName}`, noEgress);
-  check('deploy', 'B deploys a no-whitelist definition', depDeny.status === 200, `status ${depDeny.status}`);
+  check('deploy', 'deploys a no-whitelist definition', depDeny.status === 200, `status ${depDeny.status}`);
   const depNoKey = await fetch(`${B_URL}/agents/acceptance-noauth`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bundle) });
   check('deploy', 'deploy route rejects a missing API key (401)', depNoKey.status === 401, `status ${depNoKey.status}`);
 
-  // --- C1: A is OOTB / static (no agent-ingest route) ---------------------
-  const aIngest = await post(A_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName });
-  check('C1', 'A has no agent-ingest route (404/405)', aIngest.status === 404 || aIngest.status === 405, `status ${aIngest.status}`);
-
-  // --- Provision an A session and a B session -----------------------------
-  const aId = uuid();
-  const aProv = await post(A_URL, `/sessions/${aId}/provision`, {});
-  check('C1', 'A provision (static bearer) OK', aProv.status === 200, JSON.stringify(aProv.json).slice(0, 120));
-
+  // --- Name-based session ingest -------------------------------------------
   const bId = uuid();
-  const bIngest = await post(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-alpha' });
+  const bIngest = await upost(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName });
   check(
-    'B-ingest',
-    'B name-based ingest OK (pinned to the deployed version)',
+    'ingest',
+    'name-based ingest OK (pinned to the deployed version)',
     bIngest.status === 200 &&
       bIngest.json.agentName === bundle.agentName &&
       bIngest.json.version === bundle.version &&
-      bIngest.json.tenantTag === 'tenant-alpha',
+      bIngest.json.user?.org === tokenOrg,
     JSON.stringify(bIngest.json).slice(0, 160),
   );
 
-  // --- Clean-base positive control: B live sandbox now has the file set ---
+  // --- Clean-base positive control: the live sandbox now has the file set --
   // (also the reconstruction proof — the ingest response deliberately carries
   // no provisioning internals, the deterministic file count here is the oracle)
   const bCount = await post(B_URL, `/sessions/${bId}/skill-check`, { op: 'count-skill-files' });
   const bFileCount = Number((bCount.json.stdout ?? '').trim());
-  check('clean-base', 'B live sandbox has expected file count after injection', bFileCount === bundleFileCount, `count=${bFileCount}`);
+  check('clean-base', 'live sandbox has expected file count after injection', bFileCount === bundleFileCount, `count=${bFileCount}`);
 
   // --- Zero-skill agent: valid bundle, nothing to reconstruct -------------
   const zId = uuid();
-  const zIngest = await post(B_URL, `/sessions/${zId}/agent`, { agentName: zeroSkillBundle.agentName, tenantTag: 'tenant-zero' });
-  check('zero-skill', 'B ingests a zero-skill agent', zIngest.status === 200 && zIngest.json.agentName === zeroSkillBundle.agentName, JSON.stringify(zIngest.json).slice(0, 140));
+  const zIngest = await upost(B_URL, `/sessions/${zId}/agent`, { agentName: zeroSkillBundle.agentName });
+  check('zero-skill', 'ingests a zero-skill agent', zIngest.status === 200 && zIngest.json.agentName === zeroSkillBundle.agentName, JSON.stringify(zIngest.json).slice(0, 140));
   const zCount = await post(B_URL, `/sessions/${zId}/skill-check`, { op: 'count-skill-files' });
   check('zero-skill', 'zero-skill session sandbox holds no skill files', Number((zCount.json.stdout ?? '').trim()) === 0, `count=${(zCount.json.stdout ?? '').trim()}`);
 
@@ -136,8 +200,8 @@ async function main() {
   // The opening-times call to the echo host must be rejected by the outbound
   // handler (fail closed).
   const dId = uuid();
-  const dIngest = await post(B_URL, `/sessions/${dId}/agent`, { agentName: noEgress.agentName, tenantTag: 'tenant-deny' });
-  check('egress', 'B ingests an agent without proxy_whitelist', dIngest.status === 200, `status ${dIngest.status}`);
+  const dIngest = await upost(B_URL, `/sessions/${dId}/agent`, { agentName: noEgress.agentName });
+  check('egress', 'ingests an agent without proxy_whitelist', dIngest.status === 200, `status ${dIngest.status}`);
   const dRun = await post(B_URL, `/sessions/${dId}/skill-check`, FIXED);
   const dOut = dRun.json.stdout ?? '';
   check(
@@ -147,90 +211,244 @@ async function main() {
     snippet(dOut),
   );
 
-  // --- C3: single source of truth (A image == bundle == B reconstructed) --
-  // Leg 1 (A image) and clean-base(0) were checked at build time via docker;
-  // here we compare the two LIVE sandboxes' hashes to the bundle values.
+  // --- C3: single source of truth — reconstructed files == bundle bytes ----
   // hash-skill cds into the planner skill dir, so expected keys are ./<rel>
   // over the planner skill's files.
   const bundleHashes = {};
   for (const [rel, content] of Object.entries(bundle.skills.planner)) {
     bundleHashes[`./${rel}`] = createHash('sha256').update(content).digest('hex');
   }
-  const [aHash, bHash] = await Promise.all([
-    post(A_URL, `/sessions/${aId}/skill-check`, { op: 'hash-skill' }),
-    post(B_URL, `/sessions/${bId}/skill-check`, { op: 'hash-skill' }),
-  ]);
+  const bHash = await post(B_URL, `/sessions/${bId}/skill-check`, { op: 'hash-skill' });
   const parseHashes = (stdout) => Object.fromEntries((stdout ?? '').trim().split('\n').filter(Boolean).map((line) => {
     const [h, p] = line.trim().split(/\s+/);
     return [p, h];
   }));
-  const aHashes = parseHashes(aHash.json.stdout);
   const bHashes = parseHashes(bHash.json.stdout);
-  check('C3', 'A live sandbox hashes == bundle', JSON.stringify(sorted(aHashes)) === JSON.stringify(sorted(bundleHashes)));
-  check('C3', 'B live sandbox hashes == bundle', JSON.stringify(sorted(bHashes)) === JSON.stringify(sorted(bundleHashes)));
-  check('C3', 'A live == B live (byte-identical skill)', JSON.stringify(sorted(aHashes)) === JSON.stringify(sorted(bHashes)));
+  check('C3', 'live sandbox hashes == bundle (byte-identical skill)', JSON.stringify(sorted(bHashes)) === JSON.stringify(sorted(bundleHashes)));
 
-  // --- C4: same result A vs B (the thesis) — deterministic exec oracle -----
-  const [aRun, bRun] = await Promise.all([
-    post(A_URL, `/sessions/${aId}/skill-check`, FIXED),
-    post(B_URL, `/sessions/${bId}/skill-check`, FIXED),
-  ]);
-  const aOut = normalizeTimes(aRun.json.stdout);
+  // --- C4: the skill runs deterministically in the sandbox ----------------
+  const bRun = await post(B_URL, `/sessions/${bId}/skill-check`, FIXED);
   const bOut = normalizeTimes(bRun.json.stdout);
-  check('C4', 'A opening-times.js runs (exit 0)', aRun.json.exitCode === 0);
-  check('C4', 'B opening-times.js runs (exit 0)', bRun.json.exitCode === 0);
-  check('C4', 'A stdout JSON == B stdout JSON (byte-for-byte)', aOut !== null && aOut === bOut, aOut ? `${aOut.length} chars` : 'unparseable');
+  check('C4', 'opening-times.js runs (exit 0)', bRun.json.exitCode === 0);
+  check('C4', 'opening-times.js stdout is the expected JSON payload', bOut !== null, bOut ? `${bOut.length} chars` : 'unparseable');
 
   // --- Per-process TLS trust: curl (system CA path, via the baked
   //     CURL_CA_BUNDLE/SSL_CERT_FILE) reaches the whitelisted echo host over
   //     HTTPS through the interceptor — a whitelisted host works from EVERY
   //     tool, not just node ------------------------------------------------
-  const [aCurl, bCurl] = await Promise.all([
-    post(A_URL, `/sessions/${aId}/skill-check`, { op: 'curl-check' }),
-    post(B_URL, `/sessions/${bId}/skill-check`, { op: 'curl-check' }),
-  ]);
-  check('curl-tls', 'A: curl reaches whitelisted host over HTTPS (200)', (aCurl.json.stdout ?? '').trim() === '200', `got ${(aCurl.json.stdout ?? '').trim() || aCurl.json.stderr}`);
-  check('curl-tls', 'B: curl reaches whitelisted host over HTTPS (200)', (bCurl.json.stdout ?? '').trim() === '200', `got ${(bCurl.json.stdout ?? '').trim() || bCurl.json.stderr}`);
+  const bCurl = await post(B_URL, `/sessions/${bId}/skill-check`, { op: 'curl-check' });
+  check('curl-tls', 'curl reaches whitelisted host over HTTPS (200)', (bCurl.json.stdout ?? '').trim() === '200', `got ${(bCurl.json.stdout ?? '').trim() || bCurl.json.stderr}`);
 
-  // --- C4 egress trace: the echo upstream saw this session's bearer, the
-  //     container sent none ------------------------------------------------
-  const [aEcho, bEcho] = await Promise.all([
-    post(A_URL, `/sessions/${aId}/skill-check`, { ...FIXED, debugEcho: true }),
-    post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true }),
-  ]);
-  const aHdr = echoHeaders(aEcho.json.stdout);
+  // --- C4 egress trace: the echo upstream saw this session's downstream
+  //     credential, the container sent none --------------------------------
+  const bEcho = await post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true });
   const bHdr = echoHeaders(bEcho.json.stdout);
-  check('C4', 'A egress: upstream received an injected Bearer', !!aHdr?.authorization?.startsWith('Bearer '), aHdr?.authorization ?? 'none');
-  check('C4', 'B egress: upstream received an injected Bearer', !!bHdr?.authorization?.startsWith('Bearer '), bHdr?.authorization ?? 'none');
-  check('C2', "B egress carries this session's tenant tag", bHdr?.['x-tenant-tag'] === 'tenant-alpha', bHdr?.['x-tenant-tag'] ?? 'none');
+  // Zero-knowledge injection: the sandbox sent no credential and holds none
+  // (not even a placeholder), yet the upstream saw this session's entry from
+  // the record's egress_secrets map.
+  check(
+    'C4',
+    'egress: upstream received the injected downstream credential',
+    bHdr?.authorization?.startsWith('Bearer hoth-tourism-key-') === true,
+    bHdr?.authorization ?? 'none',
+  );
+  // The tenant on the wire is the org of the verified token — never a value the
+  // client picked (the ingest body carries nothing tenant-shaped any more).
+  check('C2', "egress carries the session's Semantius org", bHdr?.['x-semantius-org'] === tokenOrg, bHdr?.['x-semantius-org'] ?? 'none');
 
-  // --- C2: two concurrent B sessions get DIFFERENT bearers + tags ---------
+  // --- C2: two concurrent sessions get DIFFERENT credentials, SAME tenant --
+  // Per-session separation is the egress_secrets entry (keyed by the
+  // container→session mapping, so tenant A's key can never surface in tenant
+  // B's container); the org is identity, so two sessions of one user must agree
+  // on it (a differing org would mean a session invented its tenant instead of
+  // taking it from the token).
   const b2Id = uuid();
-  await post(B_URL, `/sessions/${b2Id}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-beta' });
+  await upost(B_URL, `/sessions/${b2Id}/agent`, { agentName: bundle.agentName });
   const [b1e, b2e] = await Promise.all([
     post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true }),
     post(B_URL, `/sessions/${b2Id}/skill-check`, { ...FIXED, debugEcho: true }),
   ]);
   const h1 = echoHeaders(b1e.json.stdout), h2 = echoHeaders(b2e.json.stdout);
-  check('C2', 'concurrent B sessions carry different bearers', !!h1?.authorization && !!h2?.authorization && h1.authorization !== h2.authorization);
-  check('C2', 'concurrent B sessions carry different tenant tags', h1?.['x-tenant-tag'] === 'tenant-alpha' && h2?.['x-tenant-tag'] === 'tenant-beta');
+  check('C2', 'concurrent sessions carry different downstream credentials', !!h1?.authorization && !!h2?.authorization && h1.authorization !== h2.authorization);
+  check(
+    'C2',
+    "concurrent sessions of one user carry that user's org",
+    h1?.['x-semantius-org'] === tokenOrg && h2?.['x-semantius-org'] === tokenOrg,
+    `${h1?.['x-semantius-org'] ?? 'none'} / ${h2?.['x-semantius-org'] ?? 'none'}`,
+  );
 
   // --- C5: uniqueness guard — a reused id is rejected ---------------------
-  const reuse = await post(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName });
-  check('C5', 'B rejects a reused session id (immutable-per-id)', reuse.status === 409, `status ${reuse.status}`);
+  const reuse = await upost(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName });
+  check('C5', 'rejects a reused session id (immutable-per-id)', reuse.status === 409, `status ${reuse.status}`);
 
-  // --- C5: fail-closed egress — a session with no bearer mapping ----------
-  //   Provision the bundle but immediately delete the mapping, then egress.
+  // --- C5: fail-closed egress — a session whose egress policy is gone -----
+  // Ingest pre-warms the container (skill files land on its disk), DELETE then
+  // removes the egress policy (pointer + record) + bundle. The warm container
+  // still holds the files, so the skill RUNS — but its egress must be
+  // rejected (no policy).
   const orphanId = uuid();
-  await post(B_URL, `/sessions/${orphanId}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-orphan' });
-  await del(B_URL, orphanId); // removes bearer + bundle
-  await post(B_URL, `/sessions/${orphanId}/agent`, { agentName: bundle.agentName, tenantTag: 'tenant-orphan2' }).catch(() => {});
-  // Re-ingest re-adds a bearer, so instead test the pure no-mapping path via A:
-  // craft an A session that never provisioned → no bearer mapping.
-  const aNoBearer = uuid();
-  const aFailClosed = await post(A_URL, `/sessions/${aNoBearer}/skill-check`, { ...FIXED, debugEcho: true });
-  const failStdout = aFailClosed.json.stdout ?? '';
-  check('C5', 'egress fails closed without a bearer mapping (403 from proxy)', /403|egress denied/.test(failStdout) || aFailClosed.json.exitCode !== 0, snippet(failStdout));
+  await upost(B_URL, `/sessions/${orphanId}/agent`, { agentName: bundle.agentName });
+  await del(B_URL, orphanId); // removes egress policy + bundle snapshot
+  const orphanRun = await post(B_URL, `/sessions/${orphanId}/skill-check`, { ...FIXED, debugEcho: true });
+  const orphanOut = orphanRun.json.stdout ?? '';
+  check('C5', 'egress fails closed without an egress policy (403 from proxy)', /403|egress denied/.test(orphanOut) || orphanRun.json.exitCode !== 0, snippet(orphanOut));
+
+  // --- session_context / session record: written at ingest, removed on DELETE
+  // THE session record (session:<id>) carries meta + egress_secrets/whitelist +
+  // session_context in ONE document; the container:<containerId> pointer is
+  // the only containerId-keyed entry. containerId is stored nowhere (it is
+  // derivable in the Worker), so the pointer is located by scanning the
+  // container group for the value === session id. Admin API shape: parsed
+  // value under .json, raw string under .value.
+  const ctxId = uuid();
+  // No credential travels in the body any more: the bearer IS the user's token.
+  // Whatever opaque context the client sends is kept, but the identity and the
+  // JWT come only from the verified bearer.
+  const ctxIngest = await upost(B_URL, `/sessions/${ctxId}/agent`, {
+    agentName: bundle.agentName,
+    sessionContext: {
+      probe: `client-supplied-${ctxId.slice(0, 8)}`,
+      // Reserved identity keys a caller must never be able to set.
+      semantius_org: 'attacker-org',
+      semantius_user: 'attacker-sub',
+    },
+  });
+  check('context', 'ingest accepts sessionContext (200)', ctxIngest.status === 200, `status ${ctxIngest.status}`);
+  const ctxRecord = await get(B_URL, `/admin/collections/kv/record?id=session:${ctxId}`);
+  const ctxStored = ctxRecord.json?.json?.session_context ?? {};
+  check(
+    'context',
+    'session record carries the client context, egress_secrets, and whitelist in one document',
+    ctxRecord.status === 200 &&
+      ctxStored.probe === `client-supplied-${ctxId.slice(0, 8)}` &&
+      typeof ctxRecord.json?.json?.egress_secrets?.['postman-echo.com'] === 'string' &&
+      Array.isArray(ctxRecord.json?.json?.whitelist),
+    JSON.stringify(ctxRecord.json?.json ?? ctxRecord.json).slice(0, 140),
+  );
+  check(
+    'context',
+    'egress_secrets is a host-glob map, not a bare credential field',
+    ctxRecord.json?.json?.bearer === undefined && typeof ctxRecord.json?.json?.egress_secrets === 'object',
+    JSON.stringify(ctxRecord.json?.json?.egress_secrets ?? null).slice(0, 120),
+  );
+  {
+    // The org prefix is a transport convention, not part of the credential:
+    // the record must hold the BARE jwt (what egress injects) beside the org.
+    const [ctxOrg, ctxBareJwt] = splitToken(semantiusToken);
+    check(
+      'identity',
+      'ingest splits <org>:<jwt> — record stores the bare JWT + its org',
+      ctxStored.semantius_jwt === ctxBareJwt && ctxStored.semantius_org === ctxOrg,
+      JSON.stringify({ semantius_org: ctxStored.semantius_org, prefixed: String(ctxStored.semantius_jwt).startsWith(`${ctxOrg}:`) }),
+    );
+    check(
+      'identity',
+      'session_context.user is the owner resolved from the org userinfo endpoint',
+      typeof ctxIngest.json?.user?.sub === 'string' &&
+        ctxIngest.json.user.org === ctxOrg &&
+        ctxStored.user?.sub === ctxIngest.json.user.sub,
+      JSON.stringify(ctxStored.user ?? null).slice(0, 140),
+    );
+    check(
+      'identity',
+      'session_context carries semantius_org + semantius_user (the token\'s org and sub), body values ignored',
+      ctxStored.semantius_org === ctxOrg && ctxStored.semantius_user === ctxIngest.json?.user?.sub,
+      JSON.stringify({ semantius_org: ctxStored.semantius_org, semantius_user: ctxStored.semantius_user }),
+    );
+    check(
+      'identity',
+      'the record holds NO invented tenant field beside it',
+      ctxRecord.json?.json?.tenantTag === undefined,
+      String(ctxRecord.json?.json?.tenantTag),
+    );
+    const okChat = await uget(B_URL, `/agents/main/${ctxId}?view=history`);
+    check('identity', 'the owner may open their own session', okChat.status !== 401 && okChat.status !== 403, `status ${okChat.status}`);
+  }
+  const ctxContainerId = ctxRecord.json?.json?.containerId;
+  check('context', 'session record stores containerId', typeof ctxContainerId === 'string' && ctxContainerId.length === 64, String(ctxContainerId).slice(0, 24));
+  const ctxPointerKey = `container:${ctxContainerId}`;
+  const ctxPointer = await get(B_URL, `/admin/collections/kv/record?id=${ctxPointerKey}`);
+  check(
+    'context',
+    'container pointer maps back to the session id',
+    ctxPointer.status === 200 && ctxPointer.json?.value === ctxId,
+    String(ctxPointer.json?.value ?? ctxPointer.status).slice(0, 60),
+  );
+  const ctxBadShape = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName, sessionContext: 'not-an-object' });
+  check('context', 'rejects a non-object sessionContext (422)', ctxBadShape.status === 422, `status ${ctxBadShape.status}`);
+  const ctxTooBig = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName, sessionContext: { blob: 'x'.repeat(9000) } });
+  check('context', 'rejects an oversize sessionContext (422)', ctxTooBig.status === 422, `status ${ctxTooBig.status}`);
+  await del(B_URL, ctxId);
+  const ctxGoneRecord = await get(B_URL, `/admin/collections/kv/record?id=session:${ctxId}`);
+  check('context', 'session record removed by DELETE /sessions/:id (404)', ctxGoneRecord.status === 404, `status ${ctxGoneRecord.status}`);
+  const ctxGonePointer = await get(B_URL, `/admin/collections/kv/record?id=${ctxPointerKey}`);
+  check('context', 'container pointer removed by DELETE /sessions/:id (404)', ctxGonePointer.status === 404, `status ${ctxGonePointer.status}`);
+
+  // --- Identity gate: the token is the bearer, on every request ------------
+  // Both routes of the user surface verify it live against
+  // <org>.semantius.cloud, so an invented token opens nothing.
+  const badTokens = [
+    ['no <org>: prefix', 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2ln'],
+    ['org present, JWT the issuer rejects', `${tokenOrg}:eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2ln`],
+    ['unknown org', 'acceptance-no-such-org:eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2ln'],
+    ['not a token at all', `${tokenOrg}:hello`],
+  ];
+  for (const [label, token] of badTokens) {
+    const auth = { authorization: `Bearer ${token}` };
+    const created = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName }, auth);
+    check('identity', `session create rejects an invalid token — ${label} (401)`, created.status === 401, `status ${created.status}`);
+    const chatted = await uget(B_URL, `/agents/main/${ctxId}?view=history`, auth);
+    check('identity', `chat rejects an invalid token — ${label} (401)`, chatted.status === 401, `status ${chatted.status}`);
+  }
+  // A valid token is not a skeleton key: it opens sessions this user owns, and
+  // nothing else. (bId belongs to the same user here — one account is all the
+  // suite has — so the cross-user 403 is exercised by the unknown-id case.)
+  const noBearer = await fetch(`${B_URL}/agents/main/${bId}?view=history`);
+  check('identity', 'chat rejects a request with no bearer at all (401)', noBearer.status === 401, `status ${noBearer.status}`);
+  const adminOnChat = await uget(B_URL, `/agents/main/${bId}?view=history`, AUTH);
+  check('identity', 'chat rejects the admin API key (401)', adminOnChat.status === 401, `status ${adminOnChat.status}`);
+  const ghostRead = await uget(B_URL, `/agents/main/${uuid()}?view=history`);
+  check('identity', 'chat rejects an unknown conversation id (401)', ghostRead.status === 401, `status ${ghostRead.status}`);
+
+  // --- Sandbox credentials: the CLI acts AS the session user ---------------
+  // The container gets no API key at all: SEMANTIUS_ORG comes from the token's
+  // `<org>` half (per session — the image bakes none), and SEMANTIUS_JWT holds
+  // only the sentinel, swapped for the user's JWT at egress. Needs the
+  // semantius-admin definition, whose proxy_whitelist covers *.semantius.ai.
+  const semantiusBundle = readBundle('semantius-admin.agent.json');
+  if (semantiusBundle) {
+    const credOrg = tokenOrg;
+    await put(B_URL, `/agents/${semantiusBundle.agentName}`, semantiusBundle);
+    const credId = uuid();
+    const credIngest = await upost(B_URL, `/sessions/${credId}/agent`, {
+      agentName: semantiusBundle.agentName,
+    });
+    check('credentials', 'ingests a semantius session with a verified user', credIngest.status === 200, `status ${credIngest.status}`);
+    const envOut = (await post(B_URL, `/sessions/${credId}/skill-check`, { op: 'semantius-env' })).json?.stdout ?? '';
+    check(
+      'credentials',
+      'container holds the JWT sentinel + the token\'s org, and NO api key',
+      envOut.includes('SEMANTIUS_JWT=__sak__') &&
+        envOut.includes(`SEMANTIUS_ORG=${credOrg}`) &&
+        !envOut.includes('SEMANTIUS_API_KEY='),
+      // Report only the container-env half — the op also prints the vars the
+      // CLI's own help documents, which legitimately still names the API key.
+      envOut.split('--- cli honors ---')[0].split('\n').filter((l) => l.startsWith('SEMANTIUS_')).join(' ').slice(0, 120),
+    );
+    const whoami = (await post(B_URL, `/sessions/${credId}/skill-check`, { op: 'semantius-whoami' })).json?.stdout ?? '';
+    const expectedEmail = credIngest.json?.user?.email;
+    check(
+      'credentials',
+      'semantius CLI authenticates as the session user (sentinel swapped for their JWT)',
+      typeof expectedEmail === 'string' &&
+        whoami.includes(expectedEmail) &&
+        new RegExp(`^org\\s+${credOrg}$`, 'm').test(whoami),
+      whoami.replace(/\s+/g, ' ').slice(0, 160),
+    );
+    await del(B_URL, credId);
+  } else if (!semantiusBundle) {
+    console.log('NOTE  [credentials] skipped — dist-bundle/semantius-admin.agent.json missing (run pnpm bundle)');
+  }
 
   // --- Hostile bundles rejected at the deploy trust boundary (plan §13) ---
   // Validation moved with the bundle bytes: ingest only takes a name, so the
@@ -244,17 +462,17 @@ async function main() {
   ];
   for (const [label, bad] of hostiles) {
     const r = await put(B_URL, '/agents/hostile-probe', bad);
-    check('hostile', `B rejects hostile bundle at deploy: ${label}`, r.status === 422, `status ${r.status}`);
+    check('hostile', `rejects hostile bundle at deploy: ${label}`, r.status === 422, `status ${r.status}`);
   }
 
   // --- Name-based ingest negatives -----------------------------------------
-  const unknown = await post(B_URL, `/sessions/${uuid()}/agent`, { agentName: 'acceptance-never-deployed' });
-  check('ingest-404', 'B rejects an undeployed agent name (404)', unknown.status === 404, `status ${unknown.status}`);
-  const legacy = await post(B_URL, `/sessions/${uuid()}/agent`, { bundle });
-  check('ingest-422', 'B rejects the legacy inline-bundle body (422)', legacy.status === 422, `status ${legacy.status}`);
+  const unknown = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: 'acceptance-never-deployed' });
+  check('ingest-404', 'rejects an undeployed agent name (404)', unknown.status === 404, `status ${unknown.status}`);
+  const legacy = await upost(B_URL, `/sessions/${uuid()}/agent`, { bundle });
+  check('ingest-422', 'rejects the legacy inline-bundle body (422)', legacy.status === 422, `status ${legacy.status}`);
 
   // Cleanup best-effort
-  await Promise.all([del(A_URL, aId), del(B_URL, bId), del(B_URL, b2Id), del(B_URL, zId), del(B_URL, dId), del(B_URL, orphanId)]);
+  await Promise.all([del(B_URL, bId), del(B_URL, b2Id), del(B_URL, zId), del(B_URL, dId)]);
 
   console.log(`\n${failures === 0 ? 'ALL ACCEPTANCE CHECKS PASS' : `${failures} FAILURE(S)`}  (${results.length} checks)`);
   process.exit(failures === 0 ? 0 : 1);

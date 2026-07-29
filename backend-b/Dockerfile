@@ -30,13 +30,20 @@ RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/
       -o /usr/local/bin/yq \
  && chmod 0755 /usr/local/bin/yq
 
-# semantius runtime config. SEMANTIUS_API_KEY here is a PLACEHOLDER (sentinel),
-# NOT the real key: the container never holds the real secret. The Worker's
-# catch-all egress handler swaps this value — wherever it appears in an outbound
-# request header — for the real key. Safe to bake in. Keep this value in sync
-# with SEMANTIUS_KEY_SENTINEL in core/src/config.js.
-ENV SEMANTIUS_API_KEY=__sak__ \
-    SEMANTIUS_ORG=tests
+# semantius runtime config. The CLI authenticates as the SESSION'S USER, not
+# with a shared org key, so there is no SEMANTIUS_API_KEY here at all:
+#
+#   SEMANTIUS_JWT  a PLACEHOLDER (sentinel), NOT a real token — the container
+#                  never holds a credential. The Worker's catch-all egress
+#                  handler swaps this value, wherever it appears in an outbound
+#                  request header, for this session's user JWT. Safe to bake in.
+#                  Keep in sync with SEMANTIUS_JWT_SENTINEL in core/src/config.js.
+#   SEMANTIUS_ORG  deliberately NOT baked: it is per session (the `<org>` half of
+#                  the user's token, known only after ingest verifies it) and a
+#                  hardcoded org here would point every session at one tenant.
+#                  provisionSemantiusEnv (core/src/sandbox-env.js) sets it on the
+#                  container at provisioning and re-applies it on cold boot.
+ENV SEMANTIUS_JWT=__sak__
 
 # Interceptor-CA trust is handled OOTB by the in-container sandbox runtime
 # (verified by inspecting /container-server/sandbox in this image): at boot
