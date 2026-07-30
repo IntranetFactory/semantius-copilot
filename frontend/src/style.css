@@ -90,3 +90,13 @@ button { cursor: pointer; } /* kept global; harmless to ai-elements' own buttons
 .subhead { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; color: #718096; margin: 1rem 0 0.5rem; }
 .messages-read { max-height: 45vh; }
 .filelist { display: flex; flex-direction: column; gap: 0.1rem; margin-bottom: 0.75rem; border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.3rem; max-height: 30vh; overflow-y: auto; }
+
+/* Costs tab */
+.costs { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.costs th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: #718096; font-weight: 600; padding: 0.35rem 0.5rem; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+.costs td { padding: 0.35rem 0.5rem; border-bottom: 1px solid #f0f4f8; white-space: nowrap; }
+.costs tbody tr:hover { background: #f0f4f8; }
+.costs .numcol { text-align: right; font-variant-numeric: tabular-nums; }
+.costs .costs-id { font-family: ui-monospace, monospace; font-size: 0.75rem; white-space: normal; word-break: break-all; }
+.costs .costs-id .linkbtn { padding: 0; font: inherit; }
+.costs tfoot td { font-weight: 600; border-top: 1px solid #cbd5e0; border-bottom: none; }

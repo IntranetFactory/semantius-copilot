@@ -35,6 +35,11 @@
   // Workers AI binding — required when LLM_PROVIDER=cloudflare (no API key needed).
   "ai": { "binding": "AI" },
   "vars": {
+    // Account tag for the GraphQL Analytics query behind GET /admin/costs
+    // (src/costs.ts). Not a secret — the token is: CLOUDFLARE_API_TOKEN
+    // (.dev.vars locally, wrangler secret put when deployed), scoped to
+    // Account -> Account Analytics -> Read. No token = costs view says so.
+    "CLOUDFLARE_ACCOUNT_ID": "04c687e49e3fd4275f13703979c3f1e3",
     // LLM settings: provider cloudflare | openrouter | custom ("custom" also
     // requires LLM_BASE_URL). The API key is the LLM_API_KEY secret
     // (.dev.vars locally, wrangler secret put when deployed).

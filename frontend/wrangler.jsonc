@@ -2,9 +2,16 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "hoth-poc-frontend",
   "compatibility_date": "2026-06-01",
-  // Static SPA served straight from Workers assets — no Worker script needed.
+  // Two static pages served straight from Workers assets — no Worker script
+  // needed. `/` -> index.html (chat), `/admin` -> admin.html (admin console,
+  // via the default auto-trailing-slash html_handling).
+  //
+  // NOT "single-page-application": with chat at `/`, an SPA fallback would make
+  // every mistyped path (a typo'd /admin above all) silently render the chat
+  // page. "404-page" serves dist/404.html instead — copied verbatim from
+  // public/ by Vite.
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "404-page"
   }
 }

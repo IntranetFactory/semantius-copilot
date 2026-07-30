@@ -1,5 +1,5 @@
 /**
- * The chat page (`/chat`) — the USER-facing half of the split UI.
+ * The chat page (`/`) — the USER-facing half of the split UI.
  *
  * Authenticated by the user's own Semantius token (`<org>:<jwt>`, from
  * `pnpm mint-token`) and nothing else: no deployment API key is entered here,
@@ -16,7 +16,7 @@
  * Data browsing is not reachable from here at all: it lives on the admin
  * console behind the deployment key.
  *
- * The token can also arrive in the URL fragment (`/chat#jwt=<org>:<jwt>`,
+ * The token can also arrive in the URL fragment (`/#jwt=<org>:<jwt>`,
  * optionally with `#session=<id>`), which is how a link — or the admin
  * console's "Open chat" — hands one over. The fragment never reaches the
  * server; it is consumed into localStorage and stripped from the address bar.

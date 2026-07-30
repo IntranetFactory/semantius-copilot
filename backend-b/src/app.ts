@@ -86,13 +86,21 @@ import {
   AGENT_DEF_KEY_PREFIX,
   SKILL_NAME_RE,
   STREAM_PROTOCOL_HEADERS,
+  COST_BASIS,
+  CONTAINER_RATES,
+  utcDayWindow,
 } from '@hoth/core';
 import { channel } from './channels/github';
+import { fetchContainerCosts } from './costs';
 
 type Env = {
   Sandbox: DurableObjectNamespace;
   STORE: KVNamespace;
   API_TOKEN: string;
+  /** Cloudflare account tag — a var (not a secret); needed to query analytics. */
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  /** Analytics-read token for GET /admin/costs. Secret; absent = costs disabled. */
+  CLOUDFLARE_API_TOKEN?: string;
 };
 
 /** What `userTokenGuard` puts on the context once it has verified the bearer. */
@@ -142,6 +150,25 @@ app.get('/admin/collections/:cid/record', async (c) => {
   const record = await readCollectionRecord(c.req.param('cid'), id, adminDeps(c));
   if (!record) return c.json({ error: 'not found' }, 404);
   return c.json(record);
+});
+
+// Today's Cloudflare CONTAINER spend, per session (src/costs.ts). Not a
+// "collection": it is a live read-through to Cloudflare's analytics, not one of
+// our backing stores, so it gets its own route rather than pretending to be
+// browsable state. UTC day — the day Cloudflare bills on.
+//
+// Container cost ONLY. Worker and Durable Object usage carries no session-shaped
+// dimension in Cloudflare's datasets, so attributing it per session would be a
+// guess; we report what is measured (see core/src/cost.js).
+app.get('/admin/costs', async (c) => {
+  const window = utcDayWindow();
+  let costs;
+  try {
+    costs = await fetchContainerCosts(c.env, window);
+  } catch (err) {
+    return c.json({ error: String(err instanceof Error ? err.message : err), ...window }, 502);
+  }
+  return c.json({ ...window, currency: 'USD', rates: CONTAINER_RATES, basis: COST_BASIS, ...costs });
 });
 
 // Admin read of the SAME conversations the chat surface serves, mounted under

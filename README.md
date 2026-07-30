@@ -19,12 +19,23 @@ See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the original design and accepta
 
 | Deployable | URL |
 | ---------- | --- |
-| Frontend (chat UI) | https://hoth-poc-frontend.ma532.workers.dev |
+| Frontend — chat (users) | https://hoth-poc-frontend.ma532.workers.dev/ |
+| Frontend — admin console | https://hoth-poc-frontend.ma532.workers.dev/admin |
 | Backend — dynamic bundle (multi-agent) | https://hoth-poc-backend-b.ma532.workers.dev |
 
 Both run on Cloudflare Workers (account `Ma@adenin.com`). The backend owns a container
-app (Containers) and a private KV namespace; the frontend is a static SPA served from
+app (Containers) and a private KV namespace; the frontend is two static pages served from
 Workers assets with the backend URL baked in at build time.
+
+**Two pages, two builds, one Worker.** `/` is the user chat page (`index.html` →
+`src/chat-main.tsx` → `ChatApp.tsx`, authenticated by the user's own Semantius token);
+`/admin` is the operator console (`admin.html` → `src/admin-main.tsx` → `App.tsx`,
+authenticated by the deployment API key). Separate Vite entries so the chat bundle never
+carries the admin code. Neither path is declared anywhere: Workers assets serves `/admin`
+from `admin.html` via its default `auto-trailing-slash` html_handling, and the one place
+the paths are written down in code is `CHAT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`.
+`not_found_handling` is `404-page` (`public/404.html`), **not** `single-page-application`:
+with chat at `/`, an SPA fallback would make a mistyped `/admin` silently render chat.
 
 ## Layout
 
@@ -38,20 +49,24 @@ core/        Host-agnostic Flue-core seams (no Cloudflare imports):
              agent-bundle format + validation, tar reconstruction (2-RPC),
              provisionAgentSkills, egress/secret broker interface, API-key guard,
              Semantius user identity (identity.js — `<org>:<jwt>` → userinfo),
-             deterministic skill-check. `@hoth/core/node` adds the bundler library
-             (fs walk, JSONC parse via jsonc-parser).
+             deterministic skill-check, container-cost query + pricing (cost.js).
+             `@hoth/core/node` adds the bundler library (fs walk, JSONC parse via
+             jsonc-parser).
 backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue agent;
              the named agent definition a session references (`{ agentName }` at ingest,
              resolved from KV `agentdef:<name>`) decides instructions, model, skills.
              First-turn identity rides the creating send's `initialData` (see plan §6).
-frontend/    React + Vite — one chat with a New-session button and an agent dropdown
-             (fed by the bundler output), plus the Data browser.
+frontend/    React + Vite, two pages — `/` chat (New-session button, agent dropdown fed
+             by the bundler output) and `/admin` (Data browser + Costs tab).
 scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agents/
              folder and PUT it to the backend as a named KV definition) ·
              node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C2–C5) ·
              admin.test.mjs · chat-probe.mjs (one real LLM turn against the deployed
              backend — the observability verification driver) · mint-token.mjs
              (`pnpm mint-token` — a Semantius user token for the chat gate) ·
+             session-costs.mjs (`pnpm sessions` — LLM cost per session, from
+             Braintrust) · cf-costs.mjs (`pnpm costs` — Cloudflare container cost
+             per session, same query as the admin Costs tab) ·
              lib/semantius.mjs (the .env-driven token exchange those share).
 ```
 
@@ -208,6 +223,9 @@ pnpm deploy:frontend   # vite build (URL from frontend/.env.production) + wrangl
 First deploy of the backend creates its Cloudflare Container application and prompts to
 confirm. It needs **Workers AI** and **Containers** enabled on the account. The frontend
 build reads the backend URL from [`frontend/.env.production`](./frontend/.env.production).
+
+The frontend deploy publishes both pages: `/` (chat) and `/admin` (admin console), plus
+`404.html` for everything else.
 
 ## Authentication
 
@@ -485,7 +503,7 @@ verified token's `semantius_org`; both drain the same way.)
 
 ## Data browser
 
-The frontend **Data** tab navigates all Cloudflare-stored data as a generic
+The admin console's (`/admin`) **Data browser** tab navigates all Cloudflare-stored data as a generic
 collection → record → detail tree, backed by the read-only `/admin/collections` routes
 (behind the API-key guard; host-agnostic logic in `core/src/admin.js`, tests
 in `scripts/admin.test.mjs`, `pnpm test`).
@@ -511,6 +529,59 @@ OpenRouter reports only the total — so components may not sum exactly to the t
 THE session record carries the mirrored `session_state` (and `payload`/`session_data`),
 so the sessions collection shows all of it without opening the conversation.
 
+## Container costs (the Costs tab)
+
+The admin console's **Costs** tab shows today's Cloudflare **container** spend broken down
+by session id: `GET /admin/costs` (behind the API-key guard) → `backend-b/src/costs.ts` →
+Cloudflare's GraphQL Analytics API. The query and the pricing live in `core/src/cost.js`,
+which `scripts/cf-costs.mjs` (`pnpm costs`) imports too, so the CLI and the UI cannot
+disagree about the math. Unit tests in `scripts/admin.test.mjs` (`pnpm test`).
+
+**The join is a container label, and it has to be.** Each session owns exactly one sandbox
+(`getSandbox(ns, sessionId)` — the sandbox id *is* the session id), but Cloudflare's
+`containersUsageAdaptiveGroups` dataset exposes no dimension carrying a name we choose.
+Its dimensions are `instanceId` (platform-assigned, **not** derivable from the Durable
+Object id), `applicationId`, `placementId`, `location`, `region`, `label(name: "…")` and
+the time buckets; `sum` has `cpuTimeSec`, `allocatedMemory`, `allocatedDisk`, `txBytes`.
+There is **no `containerName` dimension** — example queries that use one are wrong. So
+`HothSandbox` (`backend-b/src/cloudflare.ts`) stamps `session=<sessionId>` on every
+container it starts, by merging `labels` into the start options of both `start()` and
+`startAndWaitForPorts()` — the two public paths into the SDK's
+`startContainerIfNotRunning`, which resolves `options?.labels ?? this.labels`. It can't be
+a plain `this.labels` assignment: the session id is only known once the DO has loaded
+`sandboxName` from storage, which happens after field initialisation.
+
+Only containers started **after that shipped** carry the label; anything else lands in the
+view's `(unlabeled)` row rather than being dropped, so the total still adds up.
+
+**Setup.** `CLOUDFLARE_ACCOUNT_ID` is a var in `backend-b/wrangler.jsonc` (not a secret).
+`CLOUDFLARE_API_TOKEN` is a secret — create one at dash.cloudflare.com/profile/api-tokens
+with **Account → Account Analytics → Read**, put it in `backend-b/.dev.vars` locally and
+`wrangler secret put CLOUDFLARE_API_TOKEN --config backend-b/wrangler.jsonc` for the
+deployed Worker. Without it the route answers `configured: false` **with the reason** —
+never a silent $0.
+
+**What the numbers mean.** Rates (list price, Workers Paid, per
+[containers pricing](https://developers.cloudflare.com/containers/pricing/)): CPU
+`$0.000020`/vCPU-s (active only), memory `$0.0000025`/GiB-s, disk `$0.00000007`/GB-s,
+egress `$0.025`/GB. `allocatedMemory`/`allocatedDisk` come back as **byte-seconds**.
+The monthly included allowance (375 vCPU-min, 25 GiB-h, 200 GB-h, 1 TB egress) is **not**
+deducted, so an early-in-month total overstates the invoice; egress is priced at the
+NA/EU rate, which is the cheapest, so that one line can understate. Analytics lags a few
+minutes behind live traffic.
+
+**Worker and Durable Object cost is deliberately absent.** `workersInvocationsAdaptive`
+dimensions are `scriptName`/`scriptTag`/`scriptVersion`/`environmentName`/`status`/
+`usageModel`/`coloCode`/`dispatchNamespaceName`/`isDispatcher` — nothing session-shaped —
+so a per-session Worker figure could only be an estimate, and this view reports what is
+measured. LLM cost per session is a separate thing entirely and already tracked
+(`session_state`, and `pnpm sessions` over Braintrust).
+
+**If the label ever stops working**, `node scripts/cf-costs.mjs --introspect` dumps the
+dataset's real dimensions and sum fields, and `--raw` dumps the unfolded response. The
+fallback would be to group by `instanceId` and resolve instance → session out of band
+(`wrangler containers instances`), which is why the label approach is preferred.
+
 ## Per-session data channels (session_context, payload, session_data, session_state)
 
 Four per-session data channels, split by who may see and who may write them. All four
@@ -523,8 +594,8 @@ agent-facing ones live in the conversation's Durable Object:
 (24 h TTL, removed by `DELETE /sessions/:id`) and **never delivered to the agent, the
 model, or the sandbox** — its two consumers are the identity gate at ingest and the egress
 handler, both reading `semantius_jwt` (see "User identity" below and "Session-context JWT
-injection" under Egress). The frontend's Chat tab has a token textarea (persisted in
-localStorage like the API key); its value is sent as `sessionContext` with **New session** —
+injection" under Egress). The chat page (`/`) has a token textarea (persisted in
+localStorage); its value is sent as `sessionContext` with **New session** —
 ingest is create-only (it mints a fresh id per call and takes none from the caller), so the
 token cannot be swapped on a live session.
 
@@ -752,25 +823,17 @@ endpoint from Node (same serializer + headers) returned 200 on 2026-07-26.
 ```bash
 API_TOKEN=$(cat .api-token) node scripts/acceptance.mjs        # default deployed URL
 API_TOKEN=... B_URL=... node scripts/acceptance.mjs
-pnpm report                    # read the last run of every suite
-pnpm report acceptance         # one suite; --failures for failures only
+
+# Reading a run: keep the output, then the exit code is the verdict and the
+# file has the detail. Don't judge a run by the tail of a pipe.
+API_TOKEN=$(cat .api-token) node scripts/acceptance.mjs > /tmp/acc.log 2>&1; echo $?
+grep -n '^FAIL' /tmp/acc.log
 ```
 
-**How to read a run.** Every suite (`pnpm test`, `pnpm acceptance`) writes a structured
-record to `.reports/<suite>.ndjson` — gitignored, one JSON object per line, appended as
-each check completes: a `run` header, one `check` per assertion with its detail stored
-whole, and a closing `summary`. stdout is only the live view and ends with a one-line
-verdict; **`pnpm report` is the reader** (`scripts/report.mjs`, the only thing that knows
-the format). Nothing greps stdout or guesses how many lines to tail.
-
-Two properties of that shape are load-bearing, both learned the hard way:
-
-- **Appended per check, not buffered at the end** — a run that dies mid-suite still leaves
-  every check that ran on disk.
-- **Completion is a positive fact.** A record without its `summary` line is reported as
-  `INCOMPLETE  no summary record — the run died after N check(s), last: …` and exits 1. A
-  crashed run therefore cannot be mistaken for a clean one, which is exactly what a
-  scrolled-past failure and a `tail` did once.
+Both suites print one `PASS`/`FAIL` line per check, a `N FAILED (M checks)` summary, and
+**exit non-zero on any failure** — that exit code is the authoritative result. Keep the
+output in a file and `grep '^FAIL'` it (anchored and case-sensitive: an unanchored,
+case-insensitive match also hits "egress **fails** closed" in a passing check's name).
 
 Drives the **deterministic core** (the bounded `/sessions/:id/skill-check` route) so the
 checks are isolated from LLM nondeterminism. Covers: auth (401 without/with wrong key),
@@ -790,6 +853,11 @@ non-object/oversize bodies, record + pointer removed on DELETE),
 hostile-bundle-at-deploy (422), and name-based-ingest negatives (undeployed name 404,
 legacy inline-bundle body 422). (C1 — "backend A is OOTB/static" — retired with backend A.)
 
+The **costs** checks assert `GET /admin/costs` is admin-only and answers in shape — a UTC
+day window priced in USD, and either `configured: true` with rows + totals or a stated
+`reason`. Deliberately not asserted: the numbers. Cloudflare's analytics lags live traffic
+by minutes, so a fresh account-day can legitimately be empty.
+
 The **identity** checks cover both directions of the chat gate. The negatives need no
 Semantius account: four invalid tokens rejected at ingest (no `<org>:` prefix, a JWT the
 issuer refuses, an unknown org, junk), plus 401 on send, history read, and an unknown
@@ -805,7 +873,7 @@ swapped for their JWT at egress. Same credential requirement as the identity pos
 
 ## Verified results
 
-All 51 acceptance checks pass against the deployed Workers. (The original A/B thesis —
+All 69 acceptance checks pass against the deployed Workers. (The original A/B thesis —
 image-baked and dynamically-delivered skills produce byte-identical sandboxes and
 identical `activate_skill → read → bash` behavior — was proven while backend A still
 existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are

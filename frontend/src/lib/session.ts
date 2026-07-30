@@ -1,6 +1,6 @@
 /**
- * Shared between the two pages: the admin console (`/`, index.html) and the
- * chat page (`/chat`, chat.html). They are separate builds on purpose — the
+ * Shared between the two pages: the chat page (`/`, index.html) and the admin
+ * console (`/admin`, admin.html). They are separate builds on purpose — the
  * chat page must not carry the data browser, and its user never holds the
  * deployment API key — so anything both need lives here.
  */
@@ -77,8 +77,13 @@ export const API_KEY_STORAGE = 'hoth-api-key';
 /** The user's Semantius token (`<org>:<jwt>`) — CHAT page only. */
 export const TOKEN_STORAGE = 'hoth-semantius-jwt';
 
-/** Where the chat page lives, for links out of the admin console. */
-export const CHAT_PAGE = '/chat';
+/**
+ * Where each page lives. THE single source of truth for the two paths — both
+ * are implicit in Workers assets (filename + html_handling), so nothing else
+ * may hardcode them.
+ */
+export const CHAT_PAGE = '/';
+export const ADMIN_PAGE = '/admin';
 
 /** Deep link to the chat page, optionally opening one session. */
 export function chatPageUrl(sessionId?: string): string {

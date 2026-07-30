@@ -62,6 +62,17 @@ export {
   SEMANTIUS_TOKEN_HINT,
 } from './identity.js';
 export {
+  CF_GRAPHQL_URL,
+  CONTAINER_RATES,
+  CONTAINER_INCLUDED_MONTHLY,
+  COST_BASIS,
+  containerCostQuery,
+  priceContainerUsage,
+  sumContainerCosts,
+  foldContainerCostResponse,
+  utcDayWindow,
+} from './cost.js';
+export {
   injectAndForward,
   brokerEgress,
   egressSecretForHost,

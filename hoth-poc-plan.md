@@ -314,15 +314,26 @@ sessions. Request isolation is the POC's proven property; tenant authz is the la
 
 ## 10. Frontend (React + Vite)
 
-`@flue/react` + `@flue/sdk`. **Two `FlueClient`s** (base URL fixed at construction) selected via
-`useFlueAgent({ client })`; the conversation mount differs per backend (`/agents/hoth` on A,
-`/agents/main` on B). State: `sessionId`, backend, and — when B is selected — the chosen agent
-(a second dropdown; hidden for A, which is fixed to hoth-trip-planner). The agent list is the bundler
-output glob-imported from `frontend/src/generated/agents/*.json`: re-running `pnpm bundle` after adding
-an `agents/<name>/` folder adds it to the dropdown with no code change. **New session** →
-`POST …/sessions/agent` with the selected agent NAME, take the `sessionId` the backend minted from
-the response (the page generates no id of its own), then open chat. Render `messages[].parts`. POC caveat: browser-as-bundle-origin inverts the production trust
-model (server-side tenant store); fine for the POC, not the prod seam (§12).
+`@flue/react` + `@flue/sdk`. **Two pages, one Worker, split by credential** (backend A is gone;
+everything is the `/agents/main` mount on backend B):
+
+- **`/` — chat (`index.html` → `ChatApp.tsx`).** Authenticated by the user's own Semantius token
+  (`<org>:<jwt>`, also acceptable in the URL fragment `#jwt=…&session=…`). A conversation-scoped
+  `FlueClient` per session (`useConversationClient`), plus an agent dropdown whose list is the
+  bundler output glob-imported from `frontend/src/generated/agents/*.json` — re-running
+  `pnpm bundle` after adding an `agents/<name>/` folder adds it with no code change.
+  **New session** → `POST /sessions/agent` with the selected agent NAME; the backend mints the
+  `sessionId` (the page generates no id of its own), then open chat. Render `messages[].parts`.
+- **`/admin` — operator console (`admin.html` → `App.tsx`).** Authenticated by the deployment API
+  key. Data browser (`/admin/collections*`, plus the read-only `/admin/agents/main/*` conversation
+  mount) and a Costs tab (`/admin/costs` — today's Cloudflare container spend per session). The
+  only link between the pages is one-way, admin → chat.
+
+Separate Vite entries so the chat bundle never ships the admin code. Neither path is declared in
+code beyond `CHAT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`; Workers assets resolves them
+from the filenames, with `not_found_handling: "404-page"` so a mistyped path does not fall back to
+chat. POC caveat: browser-as-bundle-origin inverts the production trust model (server-side tenant
+store); fine for the POC, not the prod seam (§12).
 
 ## 11. Build order
 
@@ -343,7 +354,7 @@ model (server-side tenant store); fine for the POC, not the prod seam (§12).
 4. **Shared core** — `provisionSkill(bundle)` (validate + write + version stamp) + the egress/secret
    broker interface (CF impl).
 5. **Backend B** — ingest route + DO store; initializer reconstruct; discovery.
-6. **Frontend** — two clients, chat, new-session, A/B dropdown, bundle POST.
+6. **Frontend** — two pages (`/` chat, `/admin` console), new-session, agent dropdown.
 7. **Node smoke test** — core runs on `--target node` with virtual/local sandbox, no CF.
 8. **All C1–C5 acceptance tests (§13)** — incl. the C4 byte-equal direct-exec oracle and the C3
    triple-hash single-source check; deploy both + host frontend; repeat against deployed URLs.

@@ -249,7 +249,7 @@ export async function listCollectionRecords(collectionId, deps) {
         group: s.backend ? `backend ${s.backend}` : undefined,
         meta: s,
       })),
-      note: sessions.length === 0 ? 'No sessions indexed yet — start one in the Chat tab.' : undefined,
+      note: sessions.length === 0 ? 'No sessions indexed yet — start one on the chat page (/).' : undefined,
     };
   }
   return null; // unknown collection

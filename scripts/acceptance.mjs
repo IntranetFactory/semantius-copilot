@@ -18,7 +18,6 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sessionTenantPrefix } from '../core/src/index.js';
-import { startRun } from './lib/report.mjs';
 import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,13 +43,12 @@ const { proxyWhitelist: _dropped, ...noEgressBase } = bundle;
 const noEgress = { ...noEgressBase, agentName: 'acceptance-no-egress', version: `${bundle.version.slice(0, 12)}noeg` };
 const bundleFileCount = Object.values(bundle.skills).reduce((n, files) => n + Object.keys(files).length, 0);
 
-// Results go to a structured run record (scripts/lib/report.mjs); stdout is
-// just the live view. Read the outcome with `pnpm report acceptance` — details
-// are stored whole there, so nothing here truncates, caps, or repeats itself
-// in the hope that a `tail` catches it.
-const run = startRun('acceptance', { target: B_URL });
-function check(id, name, ok, detail = '') {
-  run.check({ id, name, ok, detail });
+let failures = 0;
+let total = 0;
+function check(id, name, ok, extra = '') {
+  total += 1;
+  if (!ok) failures += 1;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  [${id}] ${name}${extra ? ` — ${extra}` : ''}`);
 }
 
 function uuid() { return crypto.randomUUID(); }
@@ -169,6 +167,30 @@ async function main() {
   check('auth', 'a user token cannot browse data (401)', userTokenOnAdmin.status === 401, `status ${userTokenOnAdmin.status}`);
   const userTokenOnDeploy = await fetch(`${B_URL}/agents/acceptance-noauth`, { method: 'PUT', headers: { 'content-type': 'application/json', ...USER_AUTH }, body: JSON.stringify(bundle) });
   check('auth', 'a user token cannot deploy an agent (401)', userTokenOnDeploy.status === 401, `status ${userTokenOnDeploy.status}`);
+
+  // --- Container costs (GET /admin/costs) ----------------------------------
+  // Spend is operator data, so it sits behind the same admin gate. The response
+  // is asserted for SHAPE, not for numbers: analytics lags minutes behind live
+  // traffic, so a fresh account-day can legitimately be empty — but a missing
+  // token must say so rather than render as $0.
+  const costsNoKey = await uget(B_URL, '/admin/costs');
+  check('costs', 'a user token cannot read costs (401)', costsNoKey.status === 401, `status ${costsNoKey.status}`);
+  const costs = await get(B_URL, '/admin/costs');
+  check('costs', 'costs route answers the admin key (200)', costs.status === 200, `status ${costs.status} ${JSON.stringify(costs.json).slice(0, 200)}`);
+  check(
+    'costs',
+    'costs are reported for the UTC day, priced in USD',
+    costs.json?.currency === 'USD' && typeof costs.json?.start === 'string' && costs.json.start.endsWith('T00:00:00Z'),
+    `${costs.json?.start} .. ${costs.json?.end}`,
+  );
+  check(
+    'costs',
+    'costs are either configured with rows+totals, or say why not',
+    costs.json?.configured === true
+      ? Array.isArray(costs.json.rows) && typeof costs.json.totals?.cost?.total === 'number'
+      : typeof costs.json?.reason === 'string' && costs.json.reason.length > 0,
+    costs.json?.configured ? `${costs.json.rows?.length} sessions, $${costs.json.totals?.cost?.total}` : costs.json?.reason,
+  );
 
   // --- Named-definition deploys (PUT /agents/:name is the trust boundary) --
   const dep = await put(B_URL, `/agents/${bundle.agentName}`, bundle);
@@ -526,7 +548,9 @@ async function main() {
   // Cleanup best-effort
   await Promise.all([del(B_URL, bId), del(B_URL, b2Id), del(B_URL, zId), del(B_URL, dId)]);
 
-  process.exit(run.finish());
+  console.log(`
+${failures === 0 ? 'ALL ACCEPTANCE CHECKS PASS' : `${failures} FAILED`}  (${total} checks)`);
+  process.exit(failures === 0 ? 0 : 1);
 }
 
 function sorted(obj) { return Object.fromEntries(Object.entries(obj).sort(([a], [b]) => a.localeCompare(b))); }
@@ -544,11 +568,4 @@ function echoHeaders(stdout) {
 }
 function snippet(s) { return String(s).replace(/\s+/g, ' ').slice(0, 100); }
 
-// An abort (network, a throw mid-suite) is recorded as such and the run record
-// gets NO summary line — which is what makes `pnpm report` call it INCOMPLETE
-// instead of reporting the checks that happened to run as the whole story.
-main().catch((err) => {
-  console.error(err);
-  run.aborted(err);
-  process.exit(1);
-});
+main().catch((err) => { console.error(err); process.exit(1); });

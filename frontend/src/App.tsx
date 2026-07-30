@@ -1,11 +1,12 @@
 /**
- * Hoth POC admin console (`/`, plan §10): a read-only Data browser over
- * everything the backend persists in Cloudflare.
+ * Hoth POC admin console (`/admin`, plan §10): a read-only Data browser over
+ * everything the backend persists in Cloudflare, plus today's Cloudflare
+ * container spend per session (the Costs tab).
  *
  * ADMIN ONLY. This page authenticates with the shared deployment API key
  * (`Authorization: Bearer <API_TOKEN>`), which can deploy agent definitions and
  * read every stored record — so it is deliberately NOT the page users chat on.
- * Chatting lives at /chat (src/ChatApp.tsx), authenticated by the user's own
+ * Chatting lives at / (src/ChatApp.tsx), authenticated by the user's own
  * Semantius token and unable to reach any admin route. The only link between
  * them is one-way: a session record here offers "Open in chat ›".
  *
@@ -44,6 +45,7 @@ export function App() {
   // Authorization: Bearer <key>. It is NOT a chat credential -- the chat page
   // authenticates users with their own Semantius token instead.
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(API_KEY_STORAGE) ?? '');
+  const [tab, setTab] = useState<'data' | 'costs'>('data');
 
   function updateApiKey(value: string) {
     setApiKey(value);
@@ -55,7 +57,20 @@ export function App() {
       <header>
         <h1>Hoth Trip Planner &middot; admin</h1>
         <nav className="tabs">
-          <span className="tab active">Data browser</span>
+          <button
+            type="button"
+            className={`tab${tab === 'data' ? ' active' : ''}`}
+            onClick={() => setTab('data')}
+          >
+            Data browser
+          </button>
+          <button
+            type="button"
+            className={`tab${tab === 'costs' ? ' active' : ''}`}
+            onClick={() => setTab('costs')}
+          >
+            Costs
+          </button>
           <a className="tab" href={chatPageUrl()}>
             Chat &rsaquo;
           </a>
@@ -71,8 +86,167 @@ export function App() {
         </div>
         {!apiKey ? <p className="status">Enter your API key to browse data.</p> : null}
       </header>
-      <DataBrowser key={apiKey} apiKey={apiKey} />
+      {tab === 'data' ? (
+        <DataBrowser key={apiKey} apiKey={apiKey} />
+      ) : (
+        <CostsView key={apiKey} apiKey={apiKey} />
+      )}
     </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Costs — today's Cloudflare container spend, per session
+//
+// Container cost only, and deliberately so: Cloudflare's Worker/Durable-Object
+// datasets carry no session-shaped dimension, so a per-session Worker figure
+// could only be an estimate. The backend (GET /admin/costs) reports what is
+// measured — see core/src/cost.js.
+// ---------------------------------------------------------------------------
+
+type CostSums = {
+  cpuSeconds: number;
+  memoryGiBSeconds: number;
+  diskGBSeconds: number;
+  egressBytes: number;
+  cost: { cpu: number; memory: number; disk: number; egress: number; total: number };
+};
+type CostRow = CostSums & { sessionId: string; agentName?: string; version?: string; createdAt?: string };
+type Costs = {
+  date: string;
+  start: string;
+  end: string;
+  currency: string;
+  basis: string;
+  configured: boolean;
+  reason?: string;
+  rows?: CostRow[];
+  unlabeled?: CostSums | null;
+  totals?: CostSums;
+  truncated?: boolean;
+};
+
+/** Four decimals, not two: a POC session costs well under a cent. */
+const usd = (n: number) => `$${n.toFixed(4)}`;
+const num = (n: number, digits = 1) => n.toLocaleString(undefined, { maximumFractionDigits: digits });
+
+function megabytes(n: number): string {
+  return `${(n / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })} MB`;
+}
+
+function CostsView({ apiKey }: { apiKey: string }) {
+  const [costs, setCosts] = useState<Costs>();
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(() => {
+    if (!apiKey) return;
+    setLoading(true);
+    setError('');
+    adminGet<Costs>(BACKEND.baseUrl, apiKey, '/admin/costs')
+      .then((data) => setCosts(data))
+      .catch((err) => setError(String(err instanceof Error ? err.message : err)))
+      .finally(() => setLoading(false));
+  }, [apiKey]);
+
+  useEffect(() => load(), [load]);
+
+  if (!apiKey) return null;
+
+  const rows = costs?.rows ?? [];
+
+  return (
+    <section className="browser">
+      <div className="detail-head">
+        <span className="detail-key">
+          Cloudflare containers &middot; {costs?.date ?? 'today'} (UTC{costs ? `, to ${costs.end.slice(11, 16)}` : ''})
+        </span>
+        <div className="detail-head-actions">
+          <button type="button" className="linkbtn" onClick={load} disabled={loading}>
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
+      {error ? <p className="status status-error">{error}</p> : null}
+      {costs && !costs.configured ? <p className="status status-error">{costs.reason}</p> : null}
+      {costs?.truncated ? (
+        <p className="status status-error">Result hit the group limit — totals are partial.</p>
+      ) : null}
+
+      {costs?.configured ? (
+        <div className="keylist">
+          <table className="costs">
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Agent</th>
+                <th>Started</th>
+                <th className="numcol">vCPU s</th>
+                <th className="numcol">GiB·s</th>
+                <th className="numcol">GB·s disk</th>
+                <th className="numcol">Egress</th>
+                <th className="numcol">Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.sessionId}>
+                  <td className="costs-id">
+                    <a className="linkbtn" href={chatPageUrl(row.sessionId)}>
+                      {row.sessionId}
+                    </a>
+                  </td>
+                  <td>{row.agentName ?? '—'}</td>
+                  <td>{row.createdAt ? formatWhen(row.createdAt) : '—'}</td>
+                  <td className="numcol">{num(row.cpuSeconds)}</td>
+                  <td className="numcol">{num(row.memoryGiBSeconds)}</td>
+                  <td className="numcol">{num(row.diskGBSeconds)}</td>
+                  <td className="numcol">{megabytes(row.egressBytes)}</td>
+                  <td className="numcol">{usd(row.cost.total)}</td>
+                </tr>
+              ))}
+              {/* Containers started before the session label shipped (or by
+                  anything that isn't a session) still cost money — showing them
+                  as their own row is what keeps the total honest. */}
+              {costs.unlabeled ? (
+                <tr>
+                  <td className="costs-id">(unlabeled)</td>
+                  <td>—</td>
+                  <td>—</td>
+                  <td className="numcol">{num(costs.unlabeled.cpuSeconds)}</td>
+                  <td className="numcol">{num(costs.unlabeled.memoryGiBSeconds)}</td>
+                  <td className="numcol">{num(costs.unlabeled.diskGBSeconds)}</td>
+                  <td className="numcol">{megabytes(costs.unlabeled.egressBytes)}</td>
+                  <td className="numcol">{usd(costs.unlabeled.cost.total)}</td>
+                </tr>
+              ) : null}
+              {rows.length === 0 && !costs.unlabeled ? (
+                <tr>
+                  <td colSpan={8} className="status">
+                    No container usage recorded today. (Analytics lags a few minutes.)
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+            {costs.totals ? (
+              <tfoot>
+                <tr>
+                  <td colSpan={3}>Total</td>
+                  <td className="numcol">{num(costs.totals.cpuSeconds)}</td>
+                  <td className="numcol">{num(costs.totals.memoryGiBSeconds)}</td>
+                  <td className="numcol">{num(costs.totals.diskGBSeconds)}</td>
+                  <td className="numcol">{megabytes(costs.totals.egressBytes)}</td>
+                  <td className="numcol">{usd(costs.totals.cost.total)}</td>
+                </tr>
+              </tfoot>
+            ) : null}
+          </table>
+        </div>
+      ) : null}
+
+      {costs?.basis ? <p className="status">{costs.basis}</p> : null}
+    </section>
   );
 }
 

@@ -19,6 +19,6 @@
     "mint-token": "node scripts/mint-token.mjs",
     "acceptance": "node scripts/acceptance.mjs",
     "sessions": "node scripts/session-costs.mjs",
-    "report": "node scripts/report.mjs"
+    "costs": "node scripts/cf-costs.mjs"
   }
 }

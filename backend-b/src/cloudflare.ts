@@ -55,6 +55,21 @@ type Env = {
   STORE: KVNamespace;
 };
 
+/** Container start options we care about — @cloudflare/containers' ContainerStartConfigOptions. */
+type StartOptions = { labels?: Record<string, string>; [key: string]: unknown };
+type StartAndWaitArgs = { ports?: number | number[]; startOptions?: StartOptions; [key: string]: unknown };
+
+/**
+ * The label key every container instance is tagged with, and the ONLY join
+ * between Cloudflare's billing analytics and our sessions. Cloudflare's
+ * containersUsageAdaptiveGroups dataset has no dimension that carries a name we
+ * choose — its `instanceId` is assigned by the platform and is not derivable
+ * from the Durable Object id — but it CAN group by `label(name: "...")`. So we
+ * stamp the session id on the instance at start and group by it. See
+ * core/src/cost.js and GET /admin/costs.
+ */
+export const SESSION_LABEL = 'session';
+
 export class HothSandbox extends Sandbox<Env> {
   enableInternet = false;
   // Intercept HTTPS egress too (SDK default is false). semantius calls
@@ -62,6 +77,55 @@ export class HothSandbox extends Sandbox<Env> {
   // would never see its request. The container trusts the interceptor CA via
   // NODE_EXTRA_CA_CERTS baked in the Dockerfile.
   interceptHttps = true;
+
+  /**
+   * `sandboxName` IS the session id: every caller reaches us through
+   * `getSandbox(namespace, sessionId)`, which persists the name in DO storage
+   * and reloads it inside blockConcurrencyWhile before any request runs — so it
+   * is populated by the time a container can start. It is `private` in the
+   * SDK's types (a plain field at runtime), hence the cast.
+   *
+   * Returns undefined rather than an empty label when it is somehow unset: an
+   * unlabeled instance shows up in the costs view's "unlabeled" bucket, which is
+   * honest, whereas an empty label would look like a real session.
+   */
+  private sessionLabels(existing?: Record<string, string>): Record<string, string> | undefined {
+    const session = (this as unknown as { sandboxName: string | null }).sandboxName;
+    if (!session) return existing;
+    return { ...existing, [SESSION_LABEL]: session };
+  }
+
+  // Both public start paths funnel into the SDK's startContainerIfNotRunning,
+  // which resolves `options?.labels ?? this.labels`. `this.labels` can't carry
+  // the session id (it would have to be set before blockConcurrencyWhile has
+  // loaded the name), so the label goes in per call instead.
+  override async start(startOptions?: StartOptions, waitOptions?: unknown): Promise<void> {
+    return super.start(
+      { ...startOptions, labels: this.sessionLabels(startOptions?.labels) } as never,
+      waitOptions as never,
+    );
+  }
+
+  override async startAndWaitForPorts(
+    portsOrArgs?: number | number[] | StartAndWaitArgs,
+    cancellationOptions?: unknown,
+    startOptions?: StartOptions,
+  ): Promise<void> {
+    // Two overloads: an options object (what Sandbox.containerFetch uses) or
+    // positional (ports, cancellation, startOptions).
+    if (portsOrArgs && typeof portsOrArgs === 'object' && !Array.isArray(portsOrArgs)) {
+      const args = portsOrArgs as StartAndWaitArgs;
+      return super.startAndWaitForPorts({
+        ...args,
+        startOptions: { ...args.startOptions, labels: this.sessionLabels(args.startOptions?.labels) },
+      } as never);
+    }
+    return super.startAndWaitForPorts(
+      portsOrArgs as never,
+      cancellationOptions as never,
+      { ...startOptions, labels: this.sessionLabels(startOptions?.labels) } as never,
+    );
+  }
 }
 
 HothSandbox.outboundByHost = {

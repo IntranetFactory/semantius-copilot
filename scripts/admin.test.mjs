@@ -33,7 +33,13 @@ import {
   sessionTenantPrefix,
   SESSION_ID_MAX,
 } from '../core/src/config.js';
-import { startRun } from './lib/report.mjs';
+import {
+  CONTAINER_RATES,
+  containerCostQuery,
+  foldContainerCostResponse,
+  priceContainerUsage,
+  utcDayWindow,
+} from '../core/src/cost.js';
 import {
   egressSecretForHost,
   ensureEgressPolicy,
@@ -42,11 +48,12 @@ import {
   resolveEgressPolicy,
 } from '../core/src/egress.js';
 
-// Results go to a structured run record (scripts/lib/report.mjs); stdout is
-// just the live view. Read the outcome with `pnpm report unit`.
-const run = startRun('unit');
-function check(name, ok, detail = '') {
-  run.check({ name, ok, detail });
+let failures = 0;
+let total = 0;
+function check(name, ok, extra = '') {
+  total += 1;
+  if (!ok) failures += 1;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ` — ${extra}` : ''}`);
 }
 
 /**
@@ -299,4 +306,69 @@ await (async function run() {
   check('sessionIdSegment lowercases and slugs', /^[a-z0-9][a-z0-9-]*$/.test(sessionIdSegment('User.Three', 12)));
 })();
 
-process.exit(run.finish());
+// --- Cloudflare container cost (core/src/cost.js) ---------------------------
+// Pure math over the shape containersUsageAdaptiveGroups returns — no network.
+// The units are the whole point of these checks: allocatedMemory/allocatedDisk
+// are BYTE-seconds, priced per GiB-second and GB-second respectively, and
+// getting that conversion wrong is a silent factor-of-a-billion error.
+await (async () => {
+  console.log('\n== container cost ==');
+
+  const oneHourOf = {
+    cpuTimeSec: 3600,
+    allocatedMemory: 1024 ** 3 * 3600, // 1 GiB for an hour
+    allocatedDisk: 1e9 * 3600, // 1 GB for an hour
+    txBytes: 1e9, // 1 GB egress
+  };
+  const priced = priceContainerUsage(oneHourOf);
+  check('cpuTimeSec passes through as vCPU-seconds', priced.cpuSeconds === 3600);
+  check('allocatedMemory byte-seconds -> GiB-seconds', priced.memoryGiBSeconds === 3600, String(priced.memoryGiBSeconds));
+  check('allocatedDisk byte-seconds -> GB-seconds', priced.diskGBSeconds === 3600, String(priced.diskGBSeconds));
+  // Outputs are rounded to 1e-8 (sub-cent sessions), so compare with a tolerance
+  // finer than that rather than demanding float equality with the raw product.
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  check('cpu priced at the published rate', near(priced.cost.cpu, 3600 * CONTAINER_RATES.cpuSecond), String(priced.cost.cpu));
+  check('memory priced at the published rate', near(priced.cost.memory, 3600 * CONTAINER_RATES.memoryGiBSecond), String(priced.cost.memory));
+  check('egress priced per GB', near(priced.cost.egress, CONTAINER_RATES.egressGB), String(priced.cost.egress));
+  check(
+    'total is the sum of the four lines',
+    Math.abs(priced.cost.total - (priced.cost.cpu + priced.cost.memory + priced.cost.disk + priced.cost.egress)) < 1e-9,
+  );
+  check('absent sums price as zero, not NaN', priceContainerUsage({}).cost.total === 0);
+  check('null sums price as zero, not NaN', priceContainerUsage(null).cost.total === 0);
+
+  const response = {
+    data: {
+      viewer: {
+        accounts: [
+          {
+            containersUsageAdaptiveGroups: [
+              { dimensions: { session: 'tests-user3-aaa' }, sum: { cpuTimeSec: 10, allocatedMemory: 0, allocatedDisk: 0, txBytes: 0 } },
+              { dimensions: { session: 'tests-user3-bbb' }, sum: { cpuTimeSec: 100, allocatedMemory: 0, allocatedDisk: 0, txBytes: 0 } },
+              { dimensions: { session: '' }, sum: { cpuTimeSec: 5, allocatedMemory: 0, allocatedDisk: 0, txBytes: 0 } },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  const folded = foldContainerCostResponse(response, 1000);
+  check('one row per labelled session', folded.rows.length === 2);
+  check('rows are sorted by cost, dearest first', folded.rows[0].sessionId === 'tests-user3-bbb');
+  check('an unlabelled group is bucketed, not dropped', folded.unlabeled?.cpuSeconds === 5);
+  check('totals include the unlabelled bucket', folded.totals.cpuSeconds === 115, String(folded.totals.cpuSeconds));
+  check('truncation is reported, not hidden', foldContainerCostResponse(response, 3).truncated === true);
+  check('an empty/erroring response folds to zeroes', foldContainerCostResponse({}, 1000).totals.cost.total === 0);
+
+  const window = utcDayWindow(new Date('2026-07-30T13:45:12.000Z'));
+  check('the day window starts at UTC midnight', window.start === '2026-07-30T00:00:00Z', window.start);
+  check('the day window ends at "now", not end-of-day', window.end === '2026-07-30T13:45:12Z', window.end);
+  check('the window is labelled with its UTC date', window.date === '2026-07-30');
+
+  const query = containerCostQuery({ accountTag: 'acct', start: window.start, end: window.end });
+  check('the query groups by the session LABEL (no containerName dimension exists)', query.query.includes('label(name: $label)'));
+  check('the query defaults to the `session` label', query.variables.label === 'session');
+})();
+
+console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);
+process.exit(failures === 0 ? 0 : 1);
