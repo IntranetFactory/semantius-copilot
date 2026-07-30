@@ -9,7 +9,7 @@
  *                should ever hold this key.
  *   user chat    `Authorization: Bearer <org>:<jwt>` — the caller's own
  *                Semantius token, verified per request against their org's
- *                userinfo endpoint. POST /sessions/:id/agent and /agents/main/*,
+ *                userinfo endpoint. POST /sessions/agent and /agents/main/*,
  *                and nothing else: a chat client can create a session and use
  *                sessions it owns, but cannot read stored data or deploy
  *                anything.
@@ -23,13 +23,17 @@
  *  key name is authoritative; bundle.agentName is informative (a `--as` alias
  *  deploy may deliberately diverge).
  *
- * POST /sessions/:id/agent (body: { agentName, sessionContext? }):
+ * POST /sessions/agent (body: { agentName, sessionContext? }) -> { sessionId }:
  *  (0) takes the caller's verified identity from the user guard and pins it to
  *      the session as `session_context.user` / `semantius_org` /
  *      `semantius_user` — `user` is what the chat gate below matches every
  *      later request against, so a session can only ever be opened by the user
  *      who created it, and the org/sub pair is the tenant + principal the
  *      sandbox acts as. NOTHING tenant-shaped is taken from the body,
+ *  (0b) MINTS the session id from that identity — `<org>-<sub>-<32 hex>`, so
+ *      the tenant is visible in `session:<id>` / `agent:<id>` without opening a
+ *      record (mintSessionId, core/src/config.js). The route takes no id: a
+ *      client-supplied one would make the prefix a claim rather than a fact,
  *  (a) resolves the named definition from KV (404 when not deployed),
  *  (b) snapshots it keyed by session id (read back by the agent initializer),
  *      so in-flight sessions are pinned even when the definition is redeployed,
@@ -44,7 +48,8 @@
  *
  * The route STORES the snapshot — reconstruction also lives in the
  * initializer, which self-heals every cold container. A snapshot is immutable
- * per id: a reused id is rejected (plan §6/§13 C5).
+ * per id (plan §6/§13 C5), which minted ids give by construction: every create
+ * is a fresh id, so nothing can be overwritten.
  */
 import './braintrust';
 import './otel';
@@ -60,6 +65,7 @@ import {
   ECHO_HOST,
   SkillCheckError,
   isValidSessionId,
+  mintSessionId,
   mergeSessionRecord,
   readSession,
   removeSessionIndex,
@@ -191,15 +197,7 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
 // takes the user bearer — not the admin key. The token also supplies the org
 // and the JWT the sandbox will act with, so nothing credential-shaped needs to
 // travel in the body any more.
-app.post('/sessions/:id/agent', userTokenGuard(), async (c) => {
-  const id = c.req.param('id');
-  if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
-
-  // Session-id uniqueness guard: a bundle is immutable per id (plan §6).
-  if (await c.env.STORE.get(`agent:${id}`)) {
-    return c.json({ error: 'session id already has an agent bundle; a changed agent is a new session id' }, 409);
-  }
-
+app.post('/sessions/agent', userTokenGuard(), async (c) => {
   let agentName: string;
   let sessionContext: Record<string, unknown> | undefined;
   try {
@@ -249,6 +247,21 @@ app.post('/sessions/:id/agent', userTokenGuard(), async (c) => {
   } = sessionContext ?? {};
   sessionContext = { ...clientContext, user, semantius_jwt: jwt, semantius_org: org, semantius_user: user.sub };
 
+  // The id is MINTED HERE, from the identity just verified — `<org>-<sub>-<32
+  // hex>` (core/src/config.js). The client no longer supplies one: it used to
+  // generate the whole id in the browser, which made the tenant prefix
+  // unfalsifiable only if the server checked it, and made "server-minted,
+  // globally unique, never reused" (plan §6) a promise nobody enforced.
+  const id = mintSessionId(org, user.sub);
+
+  // Collision assert, not a client-reachable path: the tail is 122 random bits,
+  // so a hit means the generator is broken. Kept because a bundle is immutable
+  // per id (plan §6/§13 C5) — silently overwriting one would hand two sessions
+  // the same container.
+  if (await c.env.STORE.get(`agent:${id}`)) {
+    return c.json({ error: 'minted session id collided with a live session' }, 409);
+  }
+
   // Resolve the named definition. Re-validate on read (defense in depth, same
   // as the skill-check route) and snapshot the exact stored bytes per session.
   const raw = await c.env.STORE.get(`${AGENT_DEF_KEY_PREFIX}${agentName}`);
@@ -273,7 +286,10 @@ app.post('/sessions/:id/agent', userTokenGuard(), async (c) => {
   // The session user's Semantius JWT is deliberately NOT in this map: it is
   // also the token the backend authenticates the user with, so it lives with
   // the identity in session_context (see the identity comment above).
-  const egressSecrets = { [ECHO_HOST]: `hoth-tourism-key-${id.slice(0, 8)}-${crypto.randomUUID()}` };
+  // Tagged with the id's random TAIL, not its head: the head is now the tenant
+  // prefix, which every session of one user shares — a useless discriminator in
+  // an echo dump.
+  const egressSecrets = { [ECHO_HOST]: `hoth-tourism-key-${id.slice(-8)}-${crypto.randomUUID()}` };
   await c.env.STORE.put(`agent:${id}`, raw, { expirationTtl: BUNDLE_TTL_SECONDS });
   // THE session record — the single mutable per-session document: browse
   // meta, the egress fields (egress_secrets/whitelist, read by the outbound

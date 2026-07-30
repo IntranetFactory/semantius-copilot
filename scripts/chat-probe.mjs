@@ -22,7 +22,6 @@
  * chat route rejects sessions without a verified Semantius user — so this
  * needs the same `.env` credentials as `pnpm mint-token`.
  */
-import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,13 +58,17 @@ async function postJson(url, body) {
   return text ? JSON.parse(text) : undefined;
 }
 
-const sessionId = randomUUID();
 const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf8'));
 console.log(`minted semantius token for org ${semantiusToken.slice(0, semantiusToken.indexOf(':'))}`);
+let sessionId;
 try {
   // No credential in the body any more: the bearer IS the user's token, and the
-  // backend pins the identity it verifies onto the session as its owner.
-  const ingest = await postJson(`${base}/sessions/${sessionId}/agent`, { agentName: bundle.agentName });
+  // backend pins the identity it verifies onto the session as its owner — and
+  // mints the session id from it (`<org>-<sub>-<random>`), so the id is the
+  // response's, never this script's.
+  const ingest = await postJson(`${base}/sessions/agent`, { agentName: bundle.agentName });
+  sessionId = ingest?.sessionId;
+  if (!sessionId) throw new Error(`ingest returned no sessionId: ${JSON.stringify(ingest)}`);
   console.log(`session user: ${JSON.stringify(ingest?.user ?? null)}`);
 } catch (err) {
   if (String(err).includes('404')) {

@@ -152,7 +152,10 @@ the reconstruction site (a cold container at prompt time would then have no skil
 `/workspace/.agents/skills/<skill>` (one dir per skill in the bundle, e.g. `planner`).
 
 **Identity (in scope — isolation depends on it).** `id` must be **server-minted, globally unique, and
-never reused** (UUID, or `hash(tenant+session)` per §9). The Sandbox's
+never reused**. **As built:** the ingest route mints `<org>-<sub>-<32 hex>` from the identity the user
+guard verified — tenant-prefixed so `session:<id>` / `agent:<id>` are tenant-scoped by KV prefix, and
+server-side so the prefix is a fact rather than a client's claim (`mintSessionId`, `core/src/config.js`;
+README "Session ids"). The Sandbox's
 `containerId = idFromName(sanitizeSandboxId(id))` is a deterministic function of `id`, so **id
 uniqueness is what makes both container isolation and per-tenant secret keying safe** — a reused id
 silently reuses another session's container and bearer. **A bundle is immutable per `id`**: a changed
@@ -176,7 +179,8 @@ which agent a session runs is decided by the **agent bundle** POSTed at session 
 Base Dockerfile is **skill-free** — only the CF sandbox base + `node`; `/workspace/.agents/skills` is
 **empty at boot**. This is a hard requirement, not an aside: if any skill file were baked in, B would be
 discovering a baked copy instead of testing dynamic injection. Verified by the §13 clean-base test (a B
-container **before** injection finds no skill). Ingest `POST …/sessions/:id/agent` (a) **validates** the
+container **before** injection finds no skill). Ingest `POST …/sessions/agent` (which also **mints the
+session id**, see §6 Identity) (a) **validates** the
 agent bundle (§8), (b) stores it as `agent:<id>` (KV, read back by the initializer via an `env`
 binding), (c) writes `KV[containerId] = bearer`. The `useAgentStart` callback reads the stored bundle,
 persists the agent meta (instructions, model, modelBaseUrl, sandbox binding — `usePersistentState`),
@@ -315,9 +319,9 @@ sessions. Request isolation is the POC's proven property; tenant authz is the la
 `/agents/main` on B). State: `sessionId`, backend, and — when B is selected — the chosen agent
 (a second dropdown; hidden for A, which is fixed to hoth-trip-planner). The agent list is the bundler
 output glob-imported from `frontend/src/generated/agents/*.json`: re-running `pnpm bundle` after adding
-an `agents/<name>/` folder adds it to the dropdown with no code change. **New session** → mint id; for
-B, `POST …/sessions/:id/agent` with the selected one-JSON-string agent bundle, await 2xx, then open
-chat. Render `messages[].parts`. POC caveat: browser-as-bundle-origin inverts the production trust
+an `agents/<name>/` folder adds it to the dropdown with no code change. **New session** →
+`POST …/sessions/agent` with the selected agent NAME, take the `sessionId` the backend minted from
+the response (the page generates no id of its own), then open chat. Render `messages[].parts`. POC caveat: browser-as-bundle-origin inverts the production trust
 model (server-side tenant store); fine for the POC, not the prod seam (§12).
 
 ## 11. Build order

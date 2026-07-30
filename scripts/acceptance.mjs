@@ -14,9 +14,10 @@
  * OOTB/static" — retired with backend A itself.)
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sessionTenantPrefix } from '../core/src/index.js';
 import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +49,54 @@ function check(id, name, ok, extra = '') {
   results.push({ id, name, ok, extra });
   console.log(`${ok ? 'PASS' : 'FAIL'}  [${id}] ${name}${extra ? ` — ${extra}` : ''}`);
   if (!ok) failures++;
+}
+
+/**
+ * The closing summary, designed to survive being read with `tail`.
+ *
+ * Per-check lines scroll past in the middle of ~60 results, so a failure at
+ * line 12 is one nobody sees. Repeating the failures at the end fixes that for
+ * a handful — but an unbounded repeat has the same disease at scale (30
+ * failures with long detail strings push the count off a short tail again).
+ * So the tail is BOUNDED and ordered worst-case-first-readable:
+ *
+ *   at most TAIL_FAILURES failure lines (details truncated), then
+ *   "…and N more", then
+ *   the count and the report path on the VERY LAST line.
+ *
+ * Whatever the run size, the final line is self-sufficient: how many broke and
+ * where to read every one of them. The report file holds all results, full
+ * detail, machine-readable — the escape hatch when the cap bites.
+ */
+const TAIL_FAILURES = 15;
+const REPORT_PATH = join(here, '..', '.acceptance-report.json');
+
+function writeSummary() {
+  let reportNote = '';
+  try {
+    writeFileSync(
+      REPORT_PATH,
+      `${JSON.stringify({ url: B_URL, ranAt: new Date().toISOString(), failures, total: results.length, results }, null, 2)}\n`,
+    );
+    reportNote = `  ·  full report: ${REPORT_PATH}`;
+  } catch (err) {
+    reportNote = `  ·  (report not written: ${err instanceof Error ? err.message : String(err)})`;
+  }
+
+  if (failures === 0) {
+    console.log(`\nALL ACCEPTANCE CHECKS PASS  (${results.length} checks)${reportNote}`);
+    return;
+  }
+  const failedChecks = results.filter((r) => !r.ok);
+  console.log('');
+  for (const r of failedChecks.slice(0, TAIL_FAILURES)) {
+    const extra = r.extra ? ` — ${String(r.extra).replace(/\s+/g, ' ').slice(0, 90)}` : '';
+    console.log(`FAIL  [${r.id}] ${r.name}${extra}`);
+  }
+  if (failedChecks.length > TAIL_FAILURES) {
+    console.log(`…and ${failedChecks.length - TAIL_FAILURES} more failure(s) — see the report`);
+  }
+  console.log(`\n${failures} FAILURE(S)  (${results.length} checks)${reportNote}`);
 }
 
 function uuid() { return crypto.randomUUID(); }
@@ -97,6 +146,16 @@ async function upost(base, path, body, auth = USER_AUTH) {
   return { status: res.status, json };
 }
 
+/**
+ * Create a session on the USER surface. The route takes NO id — the backend
+ * mints `<org>-<sub>-<32 hex>` from the identity it verified — so every caller
+ * here reads the id back off the response.
+ */
+async function createSession(base, body, auth = USER_AUTH) {
+  const res = await upost(base, '/sessions/agent', body, auth);
+  return { ...res, id: res.json?.sessionId };
+}
+
 /** GET on the USER surface. */
 async function uget(base, path, auth = USER_AUTH) {
   const res = await fetch(`${base}${path}`, { headers: { ...auth } });
@@ -143,14 +202,14 @@ async function main() {
   check('health', 'backend healthy', hb.ok === true, `delivery=${hb.delivery}`);
 
   // --- Auth: two surfaces, and neither credential works on the other -------
-  const noKey = await fetch(`${B_URL}/sessions/${uuid()}/agent`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const noKey = await fetch(`${B_URL}/sessions/agent`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   check('auth', 'session create rejects a request with no bearer (401)', noKey.status === 401, `status ${noKey.status}`);
-  const badKey = await fetch(`${B_URL}/sessions/${uuid()}/agent`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' }, body: '{}' });
+  const badKey = await fetch(`${B_URL}/sessions/agent`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' }, body: '{}' });
   check('auth', 'session create rejects a junk bearer (401)', badKey.status === 401, `status ${badKey.status}`);
   // The split itself: the deployment key must NOT open the user surface, and a
   // user token must NOT open the admin surface. Either direction failing would
   // mean the two are still one gate.
-  const adminKeyOnChat = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName }, AUTH);
+  const adminKeyOnChat = await createSession(B_URL, { agentName: bundle.agentName }, AUTH);
   check('auth', 'the admin API key cannot create a session (401)', adminKeyOnChat.status === 401, `status ${adminKeyOnChat.status}`);
   const userTokenOnAdmin = await uget(B_URL, '/admin/collections');
   check('auth', 'a user token cannot browse data (401)', userTokenOnAdmin.status === 401, `status ${userTokenOnAdmin.status}`);
@@ -170,8 +229,8 @@ async function main() {
   check('deploy', 'deploy route rejects a missing API key (401)', depNoKey.status === 401, `status ${depNoKey.status}`);
 
   // --- Name-based session ingest -------------------------------------------
-  const bId = uuid();
-  const bIngest = await upost(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName });
+  const bIngest = await createSession(B_URL, { agentName: bundle.agentName });
+  const bId = bIngest.id;
   check(
     'ingest',
     'name-based ingest OK (pinned to the deployed version)',
@@ -182,6 +241,32 @@ async function main() {
     JSON.stringify(bIngest.json).slice(0, 160),
   );
 
+  // --- Session ids are SERVER-MINTED and tenant-prefixed -------------------
+  // The route takes no id at all, so the tenant in the key space is a fact
+  // about the verified token rather than a claim the client typed. The shape
+  // also has to stay inside the sandbox SDK's 63-char sanitizeSandboxId limit
+  // and its DNS-label rules — a violation surfaces as a broken container, not
+  // as a validation error, so it is asserted here.
+  const bSub = bIngest.json.user?.sub;
+  check(
+    'session-id',
+    'ingest mints the session id (route takes none)',
+    typeof bId === 'string' && bId.length > 0 && bId.length <= 63,
+    `${bId} (${String(bId).length} chars)`,
+  );
+  check(
+    'session-id',
+    'minted id carries the tenant prefix <org>-<sub>-',
+    typeof bId === 'string' && bId.startsWith(`${sessionTenantPrefix(tokenOrg, bSub)}`),
+    `${bId} vs prefix ${sessionTenantPrefix(tokenOrg, bSub)}`,
+  );
+  check(
+    'session-id',
+    'minted id is sandbox-safe (lowercase DNS label, no leading/trailing hyphen)',
+    /^[a-z0-9][a-z0-9-]{6,61}[a-z0-9]$/.test(String(bId)),
+    String(bId),
+  );
+
   // --- Clean-base positive control: the live sandbox now has the file set --
   // (also the reconstruction proof — the ingest response deliberately carries
   // no provisioning internals, the deterministic file count here is the oracle)
@@ -190,8 +275,8 @@ async function main() {
   check('clean-base', 'live sandbox has expected file count after injection', bFileCount === bundleFileCount, `count=${bFileCount}`);
 
   // --- Zero-skill agent: valid bundle, nothing to reconstruct -------------
-  const zId = uuid();
-  const zIngest = await upost(B_URL, `/sessions/${zId}/agent`, { agentName: zeroSkillBundle.agentName });
+  const zIngest = await createSession(B_URL, { agentName: zeroSkillBundle.agentName });
+  const zId = zIngest.id;
   check('zero-skill', 'ingests a zero-skill agent', zIngest.status === 200 && zIngest.json.agentName === zeroSkillBundle.agentName, JSON.stringify(zIngest.json).slice(0, 140));
   const zCount = await post(B_URL, `/sessions/${zId}/skill-check`, { op: 'count-skill-files' });
   check('zero-skill', 'zero-skill session sandbox holds no skill files', Number((zCount.json.stdout ?? '').trim()) === 0, `count=${(zCount.json.stdout ?? '').trim()}`);
@@ -199,8 +284,8 @@ async function main() {
   // --- Per-agent egress: an agent WITHOUT proxy_whitelist gets deny-all -----
   // The opening-times call to the echo host must be rejected by the outbound
   // handler (fail closed).
-  const dId = uuid();
-  const dIngest = await upost(B_URL, `/sessions/${dId}/agent`, { agentName: noEgress.agentName });
+  const dIngest = await createSession(B_URL, { agentName: noEgress.agentName });
+  const dId = dIngest.id;
   check('egress', 'ingests an agent without proxy_whitelist', dIngest.status === 200, `status ${dIngest.status}`);
   const dRun = await post(B_URL, `/sessions/${dId}/skill-check`, FIXED);
   const dOut = dRun.json.stdout ?? '';
@@ -262,8 +347,7 @@ async function main() {
   // B's container); the org is identity, so two sessions of one user must agree
   // on it (a differing org would mean a session invented its tenant instead of
   // taking it from the token).
-  const b2Id = uuid();
-  await upost(B_URL, `/sessions/${b2Id}/agent`, { agentName: bundle.agentName });
+  const b2Id = (await createSession(B_URL, { agentName: bundle.agentName })).id;
   const [b1e, b2e] = await Promise.all([
     post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true }),
     post(B_URL, `/sessions/${b2Id}/skill-check`, { ...FIXED, debugEcho: true }),
@@ -277,17 +361,32 @@ async function main() {
     `${h1?.['x-semantius-org'] ?? 'none'} / ${h2?.['x-semantius-org'] ?? 'none'}`,
   );
 
-  // --- C5: uniqueness guard — a reused id is rejected ---------------------
-  const reuse = await upost(B_URL, `/sessions/${bId}/agent`, { agentName: bundle.agentName });
-  check('C5', 'rejects a reused session id (immutable-per-id)', reuse.status === 409, `status ${reuse.status}`);
+  // --- C5: immutable-per-id, now BY CONSTRUCTION ---------------------------
+  // The old check posted a session id twice and expected 409. That path is gone
+  // with client-supplied ids: the route mints one per create, so the property to
+  // prove is that two creates by the SAME user never collide — a repeated id
+  // would silently rebind one session's container and egress secrets to another.
+  check(
+    'C5',
+    'repeated creates by one user mint distinct session ids',
+    typeof bId === 'string' && typeof b2Id === 'string' && bId !== b2Id,
+    `${bId} / ${b2Id}`,
+  );
+  check(
+    'C5',
+    'both ids share the tenant prefix, differ only in the random tail',
+    String(b2Id).startsWith(sessionTenantPrefix(tokenOrg, bSub)) &&
+      String(bId).slice(sessionTenantPrefix(tokenOrg, bSub).length) !==
+        String(b2Id).slice(sessionTenantPrefix(tokenOrg, bSub).length),
+    sessionTenantPrefix(tokenOrg, bSub),
+  );
 
   // --- C5: fail-closed egress — a session whose egress policy is gone -----
   // Ingest pre-warms the container (skill files land on its disk), DELETE then
   // removes the egress policy (pointer + record) + bundle. The warm container
   // still holds the files, so the skill RUNS — but its egress must be
   // rejected (no policy).
-  const orphanId = uuid();
-  await upost(B_URL, `/sessions/${orphanId}/agent`, { agentName: bundle.agentName });
+  const orphanId = (await createSession(B_URL, { agentName: bundle.agentName })).id;
   await del(B_URL, orphanId); // removes egress policy + bundle snapshot
   const orphanRun = await post(B_URL, `/sessions/${orphanId}/skill-check`, { ...FIXED, debugEcho: true });
   const orphanOut = orphanRun.json.stdout ?? '';
@@ -300,19 +399,20 @@ async function main() {
   // derivable in the Worker), so the pointer is located by scanning the
   // container group for the value === session id. Admin API shape: parsed
   // value under .json, raw string under .value.
-  const ctxId = uuid();
   // No credential travels in the body any more: the bearer IS the user's token.
   // Whatever opaque context the client sends is kept, but the identity and the
   // JWT come only from the verified bearer.
-  const ctxIngest = await upost(B_URL, `/sessions/${ctxId}/agent`, {
+  const ctxProbe = `client-supplied-${uuid().slice(0, 8)}`;
+  const ctxIngest = await createSession(B_URL, {
     agentName: bundle.agentName,
     sessionContext: {
-      probe: `client-supplied-${ctxId.slice(0, 8)}`,
+      probe: ctxProbe,
       // Reserved identity keys a caller must never be able to set.
       semantius_org: 'attacker-org',
       semantius_user: 'attacker-sub',
     },
   });
+  const ctxId = ctxIngest.id;
   check('context', 'ingest accepts sessionContext (200)', ctxIngest.status === 200, `status ${ctxIngest.status}`);
   const ctxRecord = await get(B_URL, `/admin/collections/kv/record?id=session:${ctxId}`);
   const ctxStored = ctxRecord.json?.json?.session_context ?? {};
@@ -320,7 +420,7 @@ async function main() {
     'context',
     'session record carries the client context, egress_secrets, and whitelist in one document',
     ctxRecord.status === 200 &&
-      ctxStored.probe === `client-supplied-${ctxId.slice(0, 8)}` &&
+      ctxStored.probe === ctxProbe &&
       typeof ctxRecord.json?.json?.egress_secrets?.['postman-echo.com'] === 'string' &&
       Array.isArray(ctxRecord.json?.json?.whitelist),
     JSON.stringify(ctxRecord.json?.json ?? ctxRecord.json).slice(0, 140),
@@ -374,9 +474,9 @@ async function main() {
     ctxPointer.status === 200 && ctxPointer.json?.value === ctxId,
     String(ctxPointer.json?.value ?? ctxPointer.status).slice(0, 60),
   );
-  const ctxBadShape = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName, sessionContext: 'not-an-object' });
+  const ctxBadShape = await createSession(B_URL, { agentName: bundle.agentName, sessionContext: 'not-an-object' });
   check('context', 'rejects a non-object sessionContext (422)', ctxBadShape.status === 422, `status ${ctxBadShape.status}`);
-  const ctxTooBig = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName, sessionContext: { blob: 'x'.repeat(9000) } });
+  const ctxTooBig = await createSession(B_URL, { agentName: bundle.agentName, sessionContext: { blob: 'x'.repeat(9000) } });
   check('context', 'rejects an oversize sessionContext (422)', ctxTooBig.status === 422, `status ${ctxTooBig.status}`);
   await del(B_URL, ctxId);
   const ctxGoneRecord = await get(B_URL, `/admin/collections/kv/record?id=session:${ctxId}`);
@@ -395,7 +495,7 @@ async function main() {
   ];
   for (const [label, token] of badTokens) {
     const auth = { authorization: `Bearer ${token}` };
-    const created = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: bundle.agentName }, auth);
+    const created = await createSession(B_URL, { agentName: bundle.agentName }, auth);
     check('identity', `session create rejects an invalid token — ${label} (401)`, created.status === 401, `status ${created.status}`);
     const chatted = await uget(B_URL, `/agents/main/${ctxId}?view=history`, auth);
     check('identity', `chat rejects an invalid token — ${label} (401)`, chatted.status === 401, `status ${chatted.status}`);
@@ -419,10 +519,8 @@ async function main() {
   if (semantiusBundle) {
     const credOrg = tokenOrg;
     await put(B_URL, `/agents/${semantiusBundle.agentName}`, semantiusBundle);
-    const credId = uuid();
-    const credIngest = await upost(B_URL, `/sessions/${credId}/agent`, {
-      agentName: semantiusBundle.agentName,
-    });
+    const credIngest = await createSession(B_URL, { agentName: semantiusBundle.agentName });
+    const credId = credIngest.id;
     check('credentials', 'ingests a semantius session with a verified user', credIngest.status === 200, `status ${credIngest.status}`);
     const envOut = (await post(B_URL, `/sessions/${credId}/skill-check`, { op: 'semantius-env' })).json?.stdout ?? '';
     check(
@@ -466,15 +564,15 @@ async function main() {
   }
 
   // --- Name-based ingest negatives -----------------------------------------
-  const unknown = await upost(B_URL, `/sessions/${uuid()}/agent`, { agentName: 'acceptance-never-deployed' });
+  const unknown = await createSession(B_URL, { agentName: 'acceptance-never-deployed' });
   check('ingest-404', 'rejects an undeployed agent name (404)', unknown.status === 404, `status ${unknown.status}`);
-  const legacy = await upost(B_URL, `/sessions/${uuid()}/agent`, { bundle });
+  const legacy = await createSession(B_URL, { bundle });
   check('ingest-422', 'rejects the legacy inline-bundle body (422)', legacy.status === 422, `status ${legacy.status}`);
 
   // Cleanup best-effort
   await Promise.all([del(B_URL, bId), del(B_URL, b2Id), del(B_URL, zId), del(B_URL, dId)]);
 
-  console.log(`\n${failures === 0 ? 'ALL ACCEPTANCE CHECKS PASS' : `${failures} FAILURE(S)`}  (${results.length} checks)`);
+  writeSummary();
   process.exit(failures === 0 ? 0 : 1);
 }
 
@@ -493,4 +591,13 @@ function echoHeaders(stdout) {
 }
 function snippet(s) { return String(s).replace(/\s+/g, ' ').slice(0, 100); }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+// An abort (network, a throw mid-suite) must NOT tail like a clean finish: it
+// is recorded as a failing check so the closing summary says so, and the
+// partial results still reach the report file.
+main().catch((err) => {
+  console.error(err);
+  results.push({ id: 'suite', name: 'run ABORTED before completion', ok: false, extra: String(err).slice(0, 200) });
+  failures++;
+  writeSummary();
+  process.exit(1);
+});

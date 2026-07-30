@@ -6,8 +6,9 @@
  * loaded here, or accepted by the routes this page calls. A token buys exactly
  * two things, both enforced server-side:
  *
- *   New session   POST /sessions/:id/agent with the token as bearer. The
- *                 backend pins the verified user onto the session as its owner.
+ *   New session   POST /sessions/agent with the token as bearer. The backend
+ *                 mints the session id from the identity it verified and pins
+ *                 that user onto the session as its owner.
  *   Open session  paste a session id. The backend admits it only when that
  *                 session's owner IS the token's user — someone else's id is a
  *                 403, so ids are not a capability.
@@ -71,7 +72,6 @@ export function ChatApp() {
   const client = useConversationClient(trimmedToken, sessionId, AGENT_SEEDS[agentName]);
 
   async function newSession() {
-    const id = crypto.randomUUID();
     setPhase('preparing');
     setSessionId(undefined);
     setDetail('provisioning session…');
@@ -80,13 +80,20 @@ export function ChatApp() {
       // `pnpm deploy:agent <name>` — the route 404s otherwise. The token is the
       // bearer, so nothing credential- or tenant-shaped travels in the body:
       // the org and the user come from the token the backend verifies.
-      const response = await fetch(`${BACKEND.baseUrl}/sessions/${id}/agent`, {
+      //
+      // The SESSION ID comes back from the server. This page does not generate
+      // one: the id carries the tenant (`<org>-<sub>-<random>`), and an id a
+      // browser picked would let a client stamp any tenant it liked on its own
+      // KV keys.
+      const response = await fetch(`${BACKEND.baseUrl}/sessions/agent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${trimmedToken}` },
         body: JSON.stringify({ agentName }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`${response.status}: ${payload?.error ?? JSON.stringify(payload)}`);
+      const id = payload?.sessionId;
+      if (typeof id !== 'string' || !id) throw new Error(`session create returned no sessionId: ${JSON.stringify(payload)}`);
       setSessionId(id);
       setSessionInput(id); // surface the new id so it can be copied / re-opened
       setPhase('ready');

@@ -6,8 +6,9 @@
  *
  * Covers: KV listing (cursor pagination + grouping + sort), value reads
  * (JSON vs opaque vs missing), the session index round-trip, the generic
- * collection resolvers (kv / sessions), and the `egress_secrets` rules
- * (host-glob lookup, mint-if-absent, fail-closed when a host has no entry).
+ * collection resolvers (kv / sessions), the `egress_secrets` rules
+ * (host-glob lookup, mint-if-absent, fail-closed when a host has no entry),
+ * and the tenant-prefixed session-id minting the whole key space keys off.
  * The beta `runs` collection is gone — Flue v2 removed the workflow-run
  * registry.
  */
@@ -25,6 +26,13 @@ import {
   readCollectionRecord,
 } from '../core/src/admin.js';
 import {
+  isValidSessionId,
+  mintSessionId,
+  sessionIdSegment,
+  sessionTenantPrefix,
+  SESSION_ID_MAX,
+} from '../core/src/config.js';
+import {
   egressSecretForHost,
   ensureEgressPolicy,
   injectAndForward,
@@ -33,9 +41,17 @@ import {
 } from '../core/src/egress.js';
 
 let failures = 0;
+let total = 0;
+/** Failed checks, repeated at the end so `tail` alone shows WHAT broke. */
+const failed = [];
 function check(name, ok, extra = '') {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ` — ${extra}` : ''}`);
-  if (!ok) failures++;
+  const line = `${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ` — ${extra}` : ''}`;
+  total++;
+  console.log(line);
+  if (!ok) {
+    failures++;
+    failed.push(line);
+  }
 }
 
 /**
@@ -244,7 +260,55 @@ await (async function run() {
     (await readSession(skv2, 'sess-n'))?.egress_secrets === undefined &&
       (await readSession(skv2, 'sess-n'))?.whitelist?.[0] === 'postman-echo.com',
   );
+
+  // --- Tenant-prefixed session ids ---------------------------------------
+  // The id is what the tenant scoping of the whole key space rests on, and the
+  // failure modes are silent: an over-long id breaks the container at the far
+  // end of provisioning, and two identities collapsing onto one prefix makes a
+  // prefix listing quietly wrong. Both are asserted here, offline.
+  const uuidStub = () => '1ea1a17e-8e68-456a-b587-986db90a4fc9';
+  check(
+    'mintSessionId is <org>-<sub>-<32 hex>',
+    mintSessionId('tests', 'user3', uuidStub) === 'tests-user3-1ea1a17e8e68456ab587986db90a4fc9',
+    mintSessionId('tests', 'user3', uuidStub),
+  );
+  check('sessionTenantPrefix matches what mintSessionId emits', mintSessionId('tests', 'user3', uuidStub).startsWith(sessionTenantPrefix('tests', 'user3')));
+  check('minted id passes the session-id shape gate', isValidSessionId(mintSessionId('tests', 'user3', uuidStub)));
+  check(
+    'minted id fits the sandbox SDK 63-char ceiling for worst-case identities',
+    mintSessionId('a'.repeat(63), 'b'.repeat(200), uuidStub).length <= SESSION_ID_MAX,
+    `${mintSessionId('a'.repeat(63), 'b'.repeat(200), uuidStub).length} chars`,
+  );
+  check(
+    'long identities stay distinct after truncation (hash disambiguator)',
+    sessionTenantPrefix('acme-corporation-europe', 'x') !== sessionTenantPrefix('acme-corporation-asia', 'x'),
+    `${sessionTenantPrefix('acme-corporation-europe', 'x')} vs ${sessionTenantPrefix('acme-corporation-asia', 'x')}`,
+  );
+  check(
+    'uuid-shaped subs stay distinct',
+    sessionTenantPrefix('tests', '2f1c9a44-0001-4000-8000-000000000000') !==
+      sessionTenantPrefix('tests', '2f1c9a44-0002-4000-8000-000000000000'),
+  );
+  check(
+    'a sub of pure punctuation still yields a usable segment',
+    isValidSessionId(mintSessionId('tests', '@@@', uuidStub)),
+    mintSessionId('tests', '@@@', uuidStub),
+  );
+  check('sessionIdSegment leaves an already-short label alone', sessionIdSegment('user3', 12) === 'user3');
+  check('sessionIdSegment lowercases and slugs', /^[a-z0-9][a-z0-9-]*$/.test(sessionIdSegment('User.Three', 12)));
 })();
 
-console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}`);
+// Failures are repeated AFTER the per-check lines, BOUNDED, with the count on
+// the very last line: this output is habitually read with `tail`, so anything
+// that scrolled past must still be visible at the end — and an unbounded
+// repeat would just push the count off a short tail instead. No report file
+// here (unlike acceptance.mjs): this suite is offline and instant, so the full
+// list is one re-run away.
+const TAIL_FAILURES = 15;
+if (failures > 0) {
+  console.log('');
+  for (const line of failed.slice(0, TAIL_FAILURES)) console.log(line);
+  if (failed.length > TAIL_FAILURES) console.log(`…and ${failed.length - TAIL_FAILURES} more — re-run to see all`);
+}
+console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);
 process.exit(failures === 0 ? 0 : 1);

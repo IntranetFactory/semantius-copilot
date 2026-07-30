@@ -85,7 +85,9 @@ builds `agents/<name>/` fresh with the same loader and `PUT`s it to the backend'
 authenticated `/agents/:name` route, which validates the bundle (the trust boundary —
 hostile bundles are rejected 422 here) and stores it as KV `agentdef:<name>` — **no TTL,
 overwritten on every deploy**. Sessions then ingest with
-`POST /sessions/:id/agent {"agentName":"<name>"}`; the route snapshots the definition to
+`POST /sessions/agent {"agentName":"<name>"}` → `{ "sessionId": "<org>-<sub>-<32 hex>", … }`;
+the route **mints the session id** (see "Session ids" below — the caller supplies none)
+and snapshots the definition to
 `agent:<sessionId>` (24 h TTL), so redeploying a definition never mutates in-flight
 sessions, and an undeployed name is a 404. The body also accepts an optional
 `sessionContext` object (see "Per-session data channels" below). The KV key name is authoritative — `--as`
@@ -399,7 +401,7 @@ Three pieces make that work:
    stays first — a credential is never attached to a denied request.
 
 The token arrives as the request's own `Authorization: Bearer <org>:<jwt>` on
-`POST /sessions/:id/agent` (and on every chat request), which the user guard verifies (see
+`POST /sessions/agent` (and on every chat request), which the user guard verifies (see
 "User identity"). Ingest stores it split into its halves — the **bare** `semantius_jwt`
 beside `semantius_org` and `semantius_user` — in the `session_context` field of THE
 session record (24 h TTL, deleted with the session; the self-heal preserves it but can
@@ -425,6 +427,46 @@ by the `curl-check` skill-check op in acceptance). Plan §7's early "port 443 ha
 measurement predates `interceptHttps` — with interception off, no CA exists and TLS
 against the proxy cannot validate. ALL sandbox egress is HTTPS now — `opening-times.js`
 calls the echo host over 443 and the injected credential rides inside TLS.
+
+### Session ids — server-minted and tenant-prefixed
+
+A chat session id is `<org>-<sub>-<32 hex>` — e.g.
+`tests-user3-1ea1a17e8e68456ab587986db90a4fc9` — minted by the ingest route from the
+identity the user guard just verified (`mintSessionId`, `core/src/config.js`). The route
+takes **no id from the caller**: the browser used to generate one with
+`crypto.randomUUID()`, which made "server-minted, globally unique, never reused"
+(plan §6) a promise nobody enforced and would have let a client stamp any tenant it liked
+on its own KV keys.
+
+Why the tenant rides the id: it is the only place that puts it in every key derived from
+the session (`session:<id>`, `agent:<id>`). Before this, the tenant lived only *inside*
+the record (`session_context.semantius_org`), so "every session of org X" meant reading
+every value, and a cross-tenant mistake was invisible in a key listing. It goes INSIDE
+the id rather than in front of the group prefix (`session:tests-user3-…`, never
+`tests:user3:session:…`) because `kvGroupOf` splits on the first colon and every KV
+prefix listing is left-anchored — the other order would create one browser group per org
+and break `session:`/`agentdef:` listing.
+
+Shape constraints, all enforced by `mintSessionId` and asserted in `pnpm test`:
+
+- **Hyphens, not colons.** `:` would survive the SDK's `sanitizeSandboxId` (0.12.3
+  validates, it does not rewrite), but the id is also spliced into `sandbox-<id>` and
+  into container preview hostnames, which are DNS labels.
+- **≤63 characters**, because `sanitizeSandboxId` rejects longer ids — a violation would
+  surface as a broken container at the end of provisioning, not as a validation error.
+  Hence the segment caps (org ≤16, sub ≤12) and the dash-stripped UUID tail: 62 worst case.
+- **Injective segments.** An identity value that does not survive slugging (too long,
+  uppercase, punctuation — a UUID-shaped `sub`) is truncated *and* suffixed with a short
+  FNV-1a hash of the original, so two identities can never collapse onto one prefix and
+  quietly break tenant scoping.
+
+Not every conversation id has this shape: **channel conversations** are keyed by their
+channel's own instance id (`github:v1:owner:<o>:repo:<r>:issue:<n>`, minted by
+`@flue/github`) and have no Semantius user at all. `isValidSessionId` stays the shape
+gate on the routes that still take an id (`/sessions/:id/skill-check`,
+`DELETE /sessions/:id` — both admin-key surfaces). Ownership is enforced by the chat gate
+against `session_context.user`, never by the id's prefix: the prefix is for operators
+reading the key space, not an access-control decision.
 
 **Session substrate expires 24 h after last activity (fail-closed by design):** the
 bundle snapshot (`agent:<id>`), THE session record (`session:<id>`), and the container
@@ -483,7 +525,8 @@ model, or the sandbox** — its two consumers are the identity gate at ingest an
 handler, both reading `semantius_jwt` (see "User identity" below and "Session-context JWT
 injection" under Egress). The frontend's Chat tab has a token textarea (persisted in
 localStorage like the API key); its value is sent as `sessionContext` with **New session** —
-ingest is create-only (reused id → 409), so the token cannot be swapped on a live session.
+ingest is create-only (it mints a fresh id per call and takes none from the caller), so the
+token cannot be swapped on a live session.
 
 **`payload` — model-visible, client-provided at creation.** Optional `payload` field
 on the creation seed (the `initialData` of the instance-creating send — Flue records
@@ -719,7 +762,9 @@ concurrent sessions, each carrying the verified token's org as `x-semantius-org`
 (single source of truth — reconstructed sandbox files == bundle bytes, sha256 per file),
 C4 (`opening-times.js` runs deterministically, and the injected `egress_secrets` credential
 reaches the echo upstream while the container sends none), C5
-(uniqueness guard + fail-closed egress after teardown), plus clean-base, zero-skill-agent,
+(repeated creates by one user mint distinct ids — immutability per id is by construction
+now that the route mints them — plus fail-closed egress after teardown), session-id shape
+(server-minted, tenant-prefixed, sandbox-safe), plus clean-base, zero-skill-agent,
 per-agent-egress deny-all, session_context / session record (THE `session:<id>` record
 carries JWT context + egress_secrets + whitelist + containerId in one document, the
 `container:<containerId>` pointer maps back to the session id, 422 on

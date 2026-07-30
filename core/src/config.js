@@ -104,11 +104,100 @@ export const STREAM_PROTOCOL_HEADERS = [
   'Producer-Received-Seq',
 ];
 
-/** Session ids are server-minted lowercase UUIDs (plan §6/§9.6). This shape is
- * a fixed point of the sandbox SDK's sanitizeSandboxId, which keeps
- * `containerId = idFromName(id)` derivable in the Worker. */
+/** Session ids are server-minted (plan §6/§9.6). This shape is a fixed point of
+ * the sandbox SDK's sanitizeSandboxId, which keeps `containerId =
+ * idFromName(id)` derivable in the Worker. */
 export const SESSION_ID_RE = /^[a-z0-9][a-z0-9-]{6,61}[a-z0-9]$/;
 
 export function isValidSessionId(id) {
   return typeof id === 'string' && SESSION_ID_RE.test(id) && !id.startsWith('-') && !id.endsWith('-');
+}
+
+/**
+ * TENANT-PREFIXED SESSION IDS — `<org>-<sub>-<32 hex>`, e.g.
+ * `tests-user3-1ea1a17e8e68456ab587986db90a4fc9`.
+ *
+ * Why the prefix: the tenant used to live only INSIDE the session record
+ * (`session_context.semantius_org`), so "every session of org X" meant reading
+ * every value, and a cross-tenant mistake was invisible in a key listing. In
+ * the id it rides every key derived from the id (`session:<id>`, `agent:<id>`),
+ * so KV prefix listing is tenant-scoped and the data browser shows ownership
+ * without opening a record.
+ *
+ * Why hyphens, not colons: `:` would survive the SDK's sanitizeSandboxId (it
+ * validates, it does not rewrite), but the id is also spliced into
+ * `sandbox-<id>` and into container preview hostnames, which are DNS labels.
+ * Hyphens keep every downstream use legal. It also keeps `kvGroupOf` (split on
+ * the FIRST colon, admin.js) grouping by `session`/`agent` — the reason the
+ * tenant goes INSIDE the id rather than in front of the group prefix.
+ *
+ * Why the caps: sanitizeSandboxId rejects ids over 63 characters, so both label
+ * segments are bounded and the random tail is a v4 UUID with its dashes
+ * stripped — 16 + 1 + 12 + 1 + 32 = 62 in the worst case.
+ *
+ * Why server-minted: a prefix the caller chooses proves nothing. The org/sub
+ * pair comes from the verified bearer (the ingest route's `semantiusUser`),
+ * never from the client — which until this change generated the whole id in the
+ * browser and could therefore have claimed any tenant it liked.
+ *
+ * NOT every conversation id has this shape: channel conversations are keyed by
+ * their channel's instance id (`github:v1:owner:…`) and have no Semantius user
+ * at all. `isValidSessionId` stays the shape gate for routes that take an id.
+ */
+export const SESSION_ID_MAX = 63;
+export const SESSION_ORG_SEGMENT_MAX = 16;
+export const SESSION_SUB_SEGMENT_MAX = 12;
+
+/** FNV-1a (32-bit), 6 hex chars. A stable, dependency-free disambiguator for
+ * identity values that do not survive slugging — NOT a security primitive. */
+function shortHash(value) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0').slice(0, 6);
+}
+
+/**
+ * One id segment from an identity value: the value itself when it is already a
+ * short lowercase label (`tests`, `user3` — the common case), otherwise a
+ * truncated slug plus a hash of the ORIGINAL. The hash is what keeps the
+ * segment injective: without it a truncated long org, or two subs differing
+ * only past the cut, would share a prefix and silently break tenant scoping.
+ *
+ * @param {unknown} value
+ * @param {number} max segment length ceiling
+ */
+export function sessionIdSegment(value, max) {
+  const raw = String(value ?? '');
+  const slug = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (slug && slug === raw.toLowerCase() && slug.length <= max) return slug;
+  const head = slug.slice(0, Math.max(1, max - 7)).replace(/-+$/, '') || 'x';
+  return `${head}-${shortHash(raw)}`;
+}
+
+/** The prefix every session id of this (org, sub) starts with — the unit of
+ * tenant-scoped KV listing (`session:<prefix>`). */
+export function sessionTenantPrefix(org, sub) {
+  return `${sessionIdSegment(org, SESSION_ORG_SEGMENT_MAX)}-${sessionIdSegment(sub, SESSION_SUB_SEGMENT_MAX)}-`;
+}
+
+/**
+ * Mint a session id for a VERIFIED (org, sub). Callers must pass the identity
+ * the token guard resolved, never anything from a request body.
+ *
+ * @param {string} org
+ * @param {string} sub
+ * @param {() => string} [uuid] injectable for tests
+ */
+export function mintSessionId(org, sub, uuid = () => crypto.randomUUID()) {
+  const id = `${sessionTenantPrefix(org, sub)}${uuid().replace(/-/g, '')}`;
+  // Unreachable given the segment caps; an assert rather than a code path,
+  // because an over-long id would be rejected by the sandbox SDK at the far end
+  // of provisioning instead of here.
+  if (id.length > SESSION_ID_MAX || !isValidSessionId(id)) {
+    throw new Error(`minted an unusable session id (${id.length} chars)`);
+  }
+  return id;
 }

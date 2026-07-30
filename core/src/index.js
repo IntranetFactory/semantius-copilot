@@ -45,6 +45,12 @@ export {
   configureLlm,
   SESSION_ID_RE,
   isValidSessionId,
+  mintSessionId,
+  sessionTenantPrefix,
+  sessionIdSegment,
+  SESSION_ID_MAX,
+  SESSION_ORG_SEGMENT_MAX,
+  SESSION_SUB_SEGMENT_MAX,
   STREAM_PROTOCOL_HEADERS,
 } from './config.js';
 export {
