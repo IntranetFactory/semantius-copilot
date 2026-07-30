@@ -752,7 +752,25 @@ endpoint from Node (same serializer + headers) returned 200 on 2026-07-26.
 ```bash
 API_TOKEN=$(cat .api-token) node scripts/acceptance.mjs        # default deployed URL
 API_TOKEN=... B_URL=... node scripts/acceptance.mjs
+pnpm report                    # read the last run of every suite
+pnpm report acceptance         # one suite; --failures for failures only
 ```
+
+**How to read a run.** Every suite (`pnpm test`, `pnpm acceptance`) writes a structured
+record to `.reports/<suite>.ndjson` — gitignored, one JSON object per line, appended as
+each check completes: a `run` header, one `check` per assertion with its detail stored
+whole, and a closing `summary`. stdout is only the live view and ends with a one-line
+verdict; **`pnpm report` is the reader** (`scripts/report.mjs`, the only thing that knows
+the format). Nothing greps stdout or guesses how many lines to tail.
+
+Two properties of that shape are load-bearing, both learned the hard way:
+
+- **Appended per check, not buffered at the end** — a run that dies mid-suite still leaves
+  every check that ran on disk.
+- **Completion is a positive fact.** A record without its `summary` line is reported as
+  `INCOMPLETE  no summary record — the run died after N check(s), last: …` and exits 1. A
+  crashed run therefore cannot be mistaken for a clean one, which is exactly what a
+  scrolled-past failure and a `tail` did once.
 
 Drives the **deterministic core** (the bounded `/sessions/:id/skill-check` route) so the
 checks are isolated from LLM nondeterminism. Covers: auth (401 without/with wrong key),

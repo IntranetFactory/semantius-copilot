@@ -46,6 +46,7 @@ export {
   SESSION_ID_RE,
   isValidSessionId,
   mintSessionId,
+  sessionIdTail,
   sessionTenantPrefix,
   sessionIdSegment,
   SESSION_ID_MAX,

@@ -18,6 +18,7 @@
     "deploy": "pnpm bundle && pnpm deploy:b && node scripts/deploy-agent.mjs --all && pnpm deploy:frontend",
     "mint-token": "node scripts/mint-token.mjs",
     "acceptance": "node scripts/acceptance.mjs",
-    "sessions": "node scripts/session-costs.mjs"
+    "sessions": "node scripts/session-costs.mjs",
+    "report": "node scripts/report.mjs"
   }
 }

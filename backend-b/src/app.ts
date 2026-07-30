@@ -66,6 +66,7 @@ import {
   SkillCheckError,
   isValidSessionId,
   mintSessionId,
+  sessionIdTail,
   mergeSessionRecord,
   readSession,
   removeSessionIndex,
@@ -286,10 +287,12 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   // The session user's Semantius JWT is deliberately NOT in this map: it is
   // also the token the backend authenticates the user with, so it lives with
   // the identity in session_context (see the identity comment above).
-  // Tagged with the id's random TAIL, not its head: the head is now the tenant
-  // prefix, which every session of one user shares — a useless discriminator in
-  // an echo dump.
-  const egressSecrets = { [ECHO_HOST]: `hoth-tourism-key-${id.slice(-8)}-${crypto.randomUUID()}` };
+  // Tagged with the HEAD OF THE RANDOM TAIL (`sessionIdTail`), not a slice of
+  // the whole id: the id's head is now the tenant prefix, identical for every
+  // session of one user, and the id's end is a suffix nobody can match against
+  // a full session id. This is the git-style short form, so a tag seen in an
+  // echo dump prefix-matches the session it belongs to.
+  const egressSecrets = { [ECHO_HOST]: `hoth-tourism-key-${sessionIdTail(id).slice(0, 8)}-${crypto.randomUUID()}` };
   await c.env.STORE.put(`agent:${id}`, raw, { expirationTtl: BUNDLE_TTL_SECONDS });
   // THE session record — the single mutable per-session document: browse
   // meta, the egress fields (egress_secrets/whitelist, read by the outbound

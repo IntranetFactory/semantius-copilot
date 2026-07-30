@@ -201,3 +201,19 @@ export function mintSessionId(org, sub, uuid = () => crypto.randomUUID()) {
   }
   return id;
 }
+
+/**
+ * The random tail of a minted id — everything after the tenant prefix. The tail
+ * is the only hyphen-free part of the id, so it is always the last `-` segment
+ * however many hyphens the org/sub slugs contributed.
+ *
+ * Use this (not a slice of the whole id) wherever a session needs a SHORT
+ * label: the id's head is now the tenant prefix, identical for every session of
+ * one user, and a label taken off the id's end reads as a suffix nobody can
+ * match against a full id. `sessionIdTail(id).slice(0, 8)` is the git-style
+ * short form.
+ */
+export function sessionIdTail(id) {
+  const parts = String(id ?? '').split('-');
+  return parts[parts.length - 1] ?? '';
+}

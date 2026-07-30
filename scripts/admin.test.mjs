@@ -29,9 +29,11 @@ import {
   isValidSessionId,
   mintSessionId,
   sessionIdSegment,
+  sessionIdTail,
   sessionTenantPrefix,
   SESSION_ID_MAX,
 } from '../core/src/config.js';
+import { startRun } from './lib/report.mjs';
 import {
   egressSecretForHost,
   ensureEgressPolicy,
@@ -40,18 +42,11 @@ import {
   resolveEgressPolicy,
 } from '../core/src/egress.js';
 
-let failures = 0;
-let total = 0;
-/** Failed checks, repeated at the end so `tail` alone shows WHAT broke. */
-const failed = [];
-function check(name, ok, extra = '') {
-  const line = `${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ` — ${extra}` : ''}`;
-  total++;
-  console.log(line);
-  if (!ok) {
-    failures++;
-    failed.push(line);
-  }
+// Results go to a structured run record (scripts/lib/report.mjs); stdout is
+// just the live view. Read the outcome with `pnpm report unit`.
+const run = startRun('unit');
+function check(name, ok, detail = '') {
+  run.check({ name, ok, detail });
 }
 
 /**
@@ -294,21 +289,14 @@ await (async function run() {
     isValidSessionId(mintSessionId('tests', '@@@', uuidStub)),
     mintSessionId('tests', '@@@', uuidStub),
   );
+  check(
+    'sessionIdTail is the random half, whatever the prefix contributed',
+    sessionIdTail('tests-user3-1ea1a17e8e68456ab587986db90a4fc9') === '1ea1a17e8e68456ab587986db90a4fc9' &&
+      sessionIdTail(mintSessionId('acme-corporation-europe', '@@@', uuidStub)) === '1ea1a17e8e68456ab587986db90a4fc9',
+    sessionIdTail(mintSessionId('acme-corporation-europe', '@@@', uuidStub)),
+  );
   check('sessionIdSegment leaves an already-short label alone', sessionIdSegment('user3', 12) === 'user3');
   check('sessionIdSegment lowercases and slugs', /^[a-z0-9][a-z0-9-]*$/.test(sessionIdSegment('User.Three', 12)));
 })();
 
-// Failures are repeated AFTER the per-check lines, BOUNDED, with the count on
-// the very last line: this output is habitually read with `tail`, so anything
-// that scrolled past must still be visible at the end — and an unbounded
-// repeat would just push the count off a short tail instead. No report file
-// here (unlike acceptance.mjs): this suite is offline and instant, so the full
-// list is one re-run away.
-const TAIL_FAILURES = 15;
-if (failures > 0) {
-  console.log('');
-  for (const line of failed.slice(0, TAIL_FAILURES)) console.log(line);
-  if (failed.length > TAIL_FAILURES) console.log(`…and ${failed.length - TAIL_FAILURES} more — re-run to see all`);
-}
-console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);
-process.exit(failures === 0 ? 0 : 1);
+process.exit(run.finish());

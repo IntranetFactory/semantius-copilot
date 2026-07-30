@@ -14,10 +14,11 @@
  * OOTB/static" — retired with backend A itself.)
  */
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sessionTenantPrefix } from '../core/src/index.js';
+import { startRun } from './lib/report.mjs';
 import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,60 +44,13 @@ const { proxyWhitelist: _dropped, ...noEgressBase } = bundle;
 const noEgress = { ...noEgressBase, agentName: 'acceptance-no-egress', version: `${bundle.version.slice(0, 12)}noeg` };
 const bundleFileCount = Object.values(bundle.skills).reduce((n, files) => n + Object.keys(files).length, 0);
 
-let failures = 0;
-const results = [];
-function check(id, name, ok, extra = '') {
-  results.push({ id, name, ok, extra });
-  console.log(`${ok ? 'PASS' : 'FAIL'}  [${id}] ${name}${extra ? ` — ${extra}` : ''}`);
-  if (!ok) failures++;
-}
-
-/**
- * The closing summary, designed to survive being read with `tail`.
- *
- * Per-check lines scroll past in the middle of ~60 results, so a failure at
- * line 12 is one nobody sees. Repeating the failures at the end fixes that for
- * a handful — but an unbounded repeat has the same disease at scale (30
- * failures with long detail strings push the count off a short tail again).
- * So the tail is BOUNDED and ordered worst-case-first-readable:
- *
- *   at most TAIL_FAILURES failure lines (details truncated), then
- *   "…and N more", then
- *   the count and the report path on the VERY LAST line.
- *
- * Whatever the run size, the final line is self-sufficient: how many broke and
- * where to read every one of them. The report file holds all results, full
- * detail, machine-readable — the escape hatch when the cap bites.
- */
-const TAIL_FAILURES = 15;
-const REPORT_PATH = join(here, '..', '.acceptance-report.json');
-
-function writeSummary() {
-  let reportNote = '';
-  try {
-    writeFileSync(
-      REPORT_PATH,
-      `${JSON.stringify({ url: B_URL, ranAt: new Date().toISOString(), failures, total: results.length, results }, null, 2)}\n`,
-    );
-    reportNote = `  ·  full report: ${REPORT_PATH}`;
-  } catch (err) {
-    reportNote = `  ·  (report not written: ${err instanceof Error ? err.message : String(err)})`;
-  }
-
-  if (failures === 0) {
-    console.log(`\nALL ACCEPTANCE CHECKS PASS  (${results.length} checks)${reportNote}`);
-    return;
-  }
-  const failedChecks = results.filter((r) => !r.ok);
-  console.log('');
-  for (const r of failedChecks.slice(0, TAIL_FAILURES)) {
-    const extra = r.extra ? ` — ${String(r.extra).replace(/\s+/g, ' ').slice(0, 90)}` : '';
-    console.log(`FAIL  [${r.id}] ${r.name}${extra}`);
-  }
-  if (failedChecks.length > TAIL_FAILURES) {
-    console.log(`…and ${failedChecks.length - TAIL_FAILURES} more failure(s) — see the report`);
-  }
-  console.log(`\n${failures} FAILURE(S)  (${results.length} checks)${reportNote}`);
+// Results go to a structured run record (scripts/lib/report.mjs); stdout is
+// just the live view. Read the outcome with `pnpm report acceptance` — details
+// are stored whole there, so nothing here truncates, caps, or repeats itself
+// in the hope that a `tail` catches it.
+const run = startRun('acceptance', { target: B_URL });
+function check(id, name, ok, detail = '') {
+  run.check({ id, name, ok, detail });
 }
 
 function uuid() { return crypto.randomUUID(); }
@@ -572,8 +526,7 @@ async function main() {
   // Cleanup best-effort
   await Promise.all([del(B_URL, bId), del(B_URL, b2Id), del(B_URL, zId), del(B_URL, dId)]);
 
-  writeSummary();
-  process.exit(failures === 0 ? 0 : 1);
+  process.exit(run.finish());
 }
 
 function sorted(obj) { return Object.fromEntries(Object.entries(obj).sort(([a], [b]) => a.localeCompare(b))); }
@@ -591,13 +544,11 @@ function echoHeaders(stdout) {
 }
 function snippet(s) { return String(s).replace(/\s+/g, ' ').slice(0, 100); }
 
-// An abort (network, a throw mid-suite) must NOT tail like a clean finish: it
-// is recorded as a failing check so the closing summary says so, and the
-// partial results still reach the report file.
+// An abort (network, a throw mid-suite) is recorded as such and the run record
+// gets NO summary line — which is what makes `pnpm report` call it INCOMPLETE
+// instead of reporting the checks that happened to run as the whole story.
 main().catch((err) => {
   console.error(err);
-  results.push({ id: 'suite', name: 'run ABORTED before completion', ok: false, extra: String(err).slice(0, 200) });
-  failures++;
-  writeSummary();
+  run.aborted(err);
   process.exit(1);
 });
