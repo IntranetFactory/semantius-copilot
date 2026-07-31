@@ -26,6 +26,16 @@
 export const CF_GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 
 /**
+ * The label key every container instance is tagged with, and the ONLY join
+ * between Cloudflare's billing analytics and our sessions. Lives here rather
+ * than next to the HothSandbox that stamps it, because both the stamper
+ * (backend-b/src/cloudflare.ts) and the reader (backend-b/src/costs.ts) need it
+ * and the sandbox module imports the reader — a constant in either would make
+ * that graph circular.
+ */
+export const SESSION_LABEL = 'session';
+
+/**
  * Container list prices, Workers Paid plan, as published 2026-07-30 at
  * https://developers.cloudflare.com/containers/pricing/ . Egress is the
  * North-America/Europe rate; other regions are dearer ($0.04–$0.05/GB), and the
@@ -70,7 +80,7 @@ export const COST_BASIS =
  * @param {{ accountTag: string, start: string, end: string, label?: string, limit?: number }} params
  * @returns {{ query: string, variables: Record<string, unknown> }}
  */
-export function containerCostQuery({ accountTag, start, end, label = 'session', limit = 1000 }) {
+export function containerCostQuery({ accountTag, start, end, label = SESSION_LABEL, limit = 1000 }) {
   return {
     query: `query HothContainerCostBySession($accountTag: String!, $start: Time!, $end: Time!, $label: String!, $limit: Int!) {
   viewer {

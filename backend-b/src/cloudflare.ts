@@ -31,6 +31,12 @@
  *     with no JWT (channel conversation, expired 24 h TTL) has NO credential
  *     to lend, so a sentinel-bearing request fails closed with 503.
  *
+ * HothSandbox also carries two non-egress responsibilities, both about cost
+ * attribution: it stamps the session id as a container LABEL at start (the only
+ * join Cloudflare's billing analytics offers), and 15 minutes after the
+ * container stops it mirrors that session's spend onto the session record as
+ * `session_sandbox`. See recordSandboxCost below.
+ *
  * Why the JWT is NOT an `egress_secrets` entry: it is the one credential with
  * two jobs — the backend verifies it to authenticate the user (auth.js /
  * identity.js) and egress also forwards it — so it belongs with the identity in
@@ -43,32 +49,75 @@ import {
   ECHO_HOST,
   injectAndForward,
   isWhitelistedHost,
+  mergeExistingSessionRecord,
+  readSession,
   resolveEgressPolicy,
   SEMANTIUS_HOSTS,
   SEMANTIUS_JWT_SENTINEL,
+  SESSION_LABEL,
   brokerEgress,
 } from '@hoth/core';
 
+import { queryContainerCosts, type CostEnv } from './costs';
+
 export { ContainerProxy };
 
-type Env = {
-  STORE: KVNamespace;
-};
+/**
+ * The Cloudflare analytics credentials are here for the post-stop cost snapshot
+ * below — the DO reads them straight off its own env, same values the admin
+ * route uses.
+ */
+type Env = CostEnv;
 
 /** Container start options we care about — @cloudflare/containers' ContainerStartConfigOptions. */
 type StartOptions = { labels?: Record<string, string>; [key: string]: unknown };
 type StartAndWaitArgs = { ports?: number | number[]; startOptions?: StartOptions; [key: string]: unknown };
 
 /**
- * The label key every container instance is tagged with, and the ONLY join
- * between Cloudflare's billing analytics and our sessions. Cloudflare's
- * containersUsageAdaptiveGroups dataset has no dimension that carries a name we
- * choose — its `instanceId` is assigned by the platform and is not derivable
- * from the Durable Object id — but it CAN group by `label(name: "...")`. So we
- * stamp the session id on the instance at start and group by it. See
- * core/src/cost.js and GET /admin/costs.
+ * How long after the container STOPS we take its cost snapshot. Cloudflare's
+ * analytics lags ingestion by minutes, and the part still missing at stop time
+ * is precisely the container's final CPU — so reading immediately would
+ * systematically undercount.
  */
-export const SESSION_LABEL = 'session';
+const SNAPSHOT_DELAY_MS = 15 * 60 * 1000;
+
+/**
+ * How often the snapshot task wakes to ask "has it stopped yet, and has it been
+ * quiet long enough?".
+ *
+ * WHY A POLL RATHER THAN SCHEDULING FROM onStop — the obvious design, and it
+ * does not work on @cloudflare/containers 0.3.7. Its `alarm()` snapshots the
+ * schedule table BEFORE delivering stop events, then acts on that stale read:
+ *
+ *     const resultForMinTime = this.sql`SELECT * FROM container_schedules;`;
+ *     if (!this.container.running) {
+ *       await this.syncPendingStoppedEvents();      // <- onStop runs HERE
+ *       if (resultForMinTime.length == 0) {         // <- still the stale 0
+ *         await this.ctx.storage.deleteAlarm();     // <- kills the new schedule
+ *
+ * so a `schedule()` call inside `onStop` lands in SQLite and is then orphaned:
+ * the row exists, the alarm that would run it does not. Arming from `onStart`
+ * instead sidesteps it entirely — that runs on the start path, and a schedule
+ * re-armed from INSIDE a scheduled callback is created before `resultForMinTime`
+ * is read, so it survives.
+ */
+const SNAPSHOT_POLL_SECONDS = 5 * 60;
+
+/**
+ * How many times to come back when the settle wait is over but Cloudflare still
+ * has no usage for this session. Ingestion lag is not a fixed number — 45 s in
+ * one measurement, well over 15 min in another — so giving up after a single
+ * look is how a snapshot silently goes missing. At SNAPSHOT_POLL_SECONDS apart
+ * this keeps trying for ~30 min after the settle window, then stops rather than
+ * polling a dead session forever.
+ */
+const SNAPSHOT_MAX_TRIES = 6;
+
+/** DO storage keys for the snapshot task's own state. */
+const STOPPED_AT_KEY = 'hoth:stoppedAt';
+const SNAPSHOT_ARMED_KEY = 'hoth:snapshotArmed';
+const SNAPSHOT_TRIES_KEY = 'hoth:snapshotTries';
+const LAST_RUN_KEY = 'hoth:snapshotLastRun';
 
 export class HothSandbox extends Sandbox<Env> {
   enableInternet = false;
@@ -125,6 +174,215 @@ export class HothSandbox extends Sandbox<Env> {
       cancellationOptions as never,
       { ...startOptions, labels: this.sessionLabels(startOptions?.labels) } as never,
     );
+  }
+
+  /**
+   * Container started — arm the cost-snapshot task if it isn't already, and
+   * forget any earlier stop (a restarted container is not a stopped one).
+   *
+   * Arming HERE, not in onStop: see SNAPSHOT_POLL_SECONDS. Sandbox overrides
+   * onStart itself, so super must run.
+   */
+  override async onStart(): Promise<void> {
+    await super.onStart();
+    try {
+      await this.ctx.storage.delete(STOPPED_AT_KEY);
+      await this.ctx.storage.delete(SNAPSHOT_TRIES_KEY);
+      if (!(await this.ctx.storage.get(SNAPSHOT_ARMED_KEY))) {
+        await this.ctx.storage.put(SNAPSHOT_ARMED_KEY, true);
+        await this.schedule(SNAPSHOT_POLL_SECONDS, 'recordSandboxCost');
+      }
+    } catch {
+      // Best-effort: cost bookkeeping must never break container startup.
+    }
+  }
+
+  /**
+   * Container stopped — just record WHEN, so the snapshot task can wait out the
+   * analytics lag. Deliberately does no scheduling (see SNAPSHOT_POLL_SECONDS).
+   *
+   * The base class declares `onStop(params: StopParams)` while the SDK's own
+   * override takes none, so we declare the parameter and call super without it.
+   * Skipping `super.onStop()` would skip the SDK's session/tunnel/mount
+   * teardown.
+   */
+  override async onStop(_params?: unknown): Promise<void> {
+    await super.onStop();
+    await this.ctx.storage.put(STOPPED_AT_KEY, Date.now()).catch(() => {});
+  }
+
+  /**
+   * Mirror this session's Cloudflare container spend onto THE session record as
+   * `session_sandbox`, so it outlives the Costs tab's today-only window.
+   *
+   * PUBLIC AND STRING-ADDRESSED: `schedule()` resolves the callback by method
+   * name at alarm time, so renaming this silently breaks the snapshot.
+   *
+   * NEVER RESURRECTS A DELETED SESSION — hence mergeEXISTINGSessionRecord, and
+   * the early read below. `DELETE /sessions/:id` removes the KV record but does
+   * NOT stop the container (it keeps running until sleepAfter, 10 min), so this
+   * callback routinely fires for sessions that were deliberately deleted, and
+   * the ordinary mergeSessionRecord creates when absent. (The acceptance suite
+   * deletes every session it creates, so this is the common path, not an edge
+   * case.)
+   *
+   * Idempotent: the window is the session's whole life, so a container that
+   * starts and stops repeatedly just recomputes a more complete total each time.
+   */
+  async recordSandboxCost(): Promise<void> {
+    let phase = 'start';
+    try {
+      // Still running: nothing final to record yet, come back later. Re-arming
+      // from inside the callback is safe — unlike from onStop, this happens
+      // before alarm() re-reads the schedule table.
+      if (this.ctx.container?.running === true) {
+        phase = 'running';
+        await this.schedule(SNAPSHOT_POLL_SECONDS, 'recordSandboxCost');
+        return;
+      }
+
+      // Stopped, but onStop may not have landed (or predates this code) — treat
+      // "first time we noticed" as the stop time so the wait always converges.
+      let stoppedAt = await this.ctx.storage.get<number>(STOPPED_AT_KEY);
+      if (typeof stoppedAt !== 'number') {
+        stoppedAt = Date.now();
+        await this.ctx.storage.put(STOPPED_AT_KEY, stoppedAt);
+      }
+      const settledFor = Date.now() - stoppedAt;
+      if (settledFor < SNAPSHOT_DELAY_MS) {
+        phase = `settling ${Math.round(settledFor / 1000)}s`;
+        await this.schedule(Math.ceil((SNAPSHOT_DELAY_MS - settledFor) / 1000), 'recordSandboxCost');
+        return;
+      }
+
+      const outcome = await this.writeSnapshot();
+      phase = outcome.phase;
+
+      // "Cloudflare has nothing for this session yet" is the one outcome worth
+      // coming back for — ingestion lag is variable, and a single look is how a
+      // snapshot silently goes missing. Everything else (written, record gone,
+      // no credentials) is final.
+      if (outcome.retry) {
+        const tries = ((await this.ctx.storage.get<number>(SNAPSHOT_TRIES_KEY)) ?? 0) + 1;
+        if (tries < SNAPSHOT_MAX_TRIES) {
+          await this.ctx.storage.put(SNAPSHOT_TRIES_KEY, tries);
+          await this.schedule(SNAPSHOT_POLL_SECONDS, 'recordSandboxCost');
+          phase = `${outcome.phase} — retry ${tries}/${SNAPSHOT_MAX_TRIES}`;
+          return;
+        }
+        phase = `${outcome.phase} — gave up after ${tries}`;
+      }
+      await this.ctx.storage.delete(SNAPSHOT_ARMED_KEY);
+      await this.ctx.storage.delete(SNAPSHOT_TRIES_KEY);
+    } catch (err) {
+      // Best-effort mirror, exactly like the session_state write in
+      // agents/main.ts. Throwing here would make the DO alarm retry.
+      phase = `error: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      // The breadcrumb is the whole reason this is debuggable: the task runs on
+      // a 15-minute fuse in a Durable Object nobody is watching, so a swallowed
+      // error with no trace is indistinguishable from "never fired".
+      await this.ctx.storage
+        .put(LAST_RUN_KEY, { at: new Date().toISOString(), phase })
+        .catch(() => {});
+    }
+  }
+
+  /**
+   * Query and write the snapshot. Split out so `snapshotNow()` can exercise
+   * exactly this path without waiting out the settle delay.
+   *
+   * @returns a one-line phase description for the breadcrumb, and whether the
+   *   caller should come back (only ever true for "not ingested yet").
+   */
+  private async writeSnapshot(): Promise<{ phase: string; retry: boolean }> {
+    const session = (this as unknown as { sandboxName: string | null }).sandboxName;
+    if (!session) return { phase: 'no sandboxName', retry: false };
+    if (!this.env.CLOUDFLARE_API_TOKEN || !this.env.CLOUDFLARE_ACCOUNT_ID) {
+      return { phase: 'no cloudflare credentials', retry: false };
+    }
+
+    const record = await readSession(this.env.STORE, session);
+    if (!record) return { phase: 'session record gone — not resurrecting', retry: false };
+
+    const now = new Date();
+    // Sessions carry a 24 h TTL, so their life spans at most two UTC days;
+    // the fallback covers a record written before createdAt existed.
+    const createdAt = typeof record.createdAt === 'string' ? record.createdAt : undefined;
+    const start = createdAt ?? new Date(now.getTime() - 25 * 3600_000).toISOString();
+    const end = now.toISOString().replace(/\.\d+Z$/, 'Z');
+
+    const folded = await queryContainerCosts(this.env, { start, end });
+    const row = folded?.rows.find((r) => r.sessionId === session);
+    if (!row) {
+      return { phase: `no usage ingested yet (${folded?.rows.length ?? 0} sessions in window)`, retry: true };
+    }
+
+    await mergeExistingSessionRecord(this.env.STORE, session, {
+      // snake_case to sit alongside session_state, which uses the same style.
+      session_sandbox: {
+        cpu_seconds: row.cpuSeconds,
+        memory_gib_seconds: row.memoryGiBSeconds,
+        disk_gb_seconds: row.diskGBSeconds,
+        egress_bytes: row.egressBytes,
+        cost_total: row.cost.total,
+        measured_at: end,
+        window_start: start,
+        window_end: end,
+      },
+    });
+    return { phase: `written $${row.cost.total}`, retry: false };
+  }
+
+  /**
+   * Operator view of the snapshot task — RPC, behind GET
+   * /admin/sessions/:id/sandbox. Answers the only questions that matter when
+   * the node is missing: did the task ever run, what did it decide, and is it
+   * still armed?
+   */
+  async snapshotStatus(): Promise<Record<string, unknown>> {
+    return {
+      sandboxName: (this as unknown as { sandboxName: string | null }).sandboxName,
+      containerRunning: this.ctx.container?.running ?? null,
+      armed: (await this.ctx.storage.get(SNAPSHOT_ARMED_KEY)) ?? false,
+      tries: (await this.ctx.storage.get<number>(SNAPSHOT_TRIES_KEY)) ?? 0,
+      stoppedAt: (await this.ctx.storage.get<number>(STOPPED_AT_KEY)) ?? null,
+      lastRun: (await this.ctx.storage.get(LAST_RUN_KEY)) ?? null,
+      pollSeconds: SNAPSHOT_POLL_SECONDS,
+      settleMs: SNAPSHOT_DELAY_MS,
+    };
+  }
+
+  /**
+   * Take the snapshot NOW, skipping the settle delay — RPC, behind POST
+   * /admin/sessions/:id/sandbox. For operators who want the figure before the
+   * fuse burns down, and the only way to test the query/write path without a
+   * 25-minute round trip.
+   */
+  /**
+   * Arm the scheduled task with an explicit fuse — RPC, behind POST
+   * /admin/sessions/:id/sandbox?in=<seconds>.
+   *
+   * Exists because the production fuse is minutes long inside a DO with no
+   * console: this is how you check that `schedule()` really does invoke
+   * `recordSandboxCost` on this SDK version, in a minute rather than half an
+   * hour. It writes the same breadcrumb the real path does.
+   */
+  async armSnapshot(seconds: number): Promise<Record<string, unknown>> {
+    await this.ctx.storage.put(SNAPSHOT_ARMED_KEY, true);
+    const scheduled = await this.schedule(seconds, 'recordSandboxCost');
+    return { armedIn: seconds, taskId: (scheduled as { taskId?: string })?.taskId ?? null };
+  }
+
+  async snapshotNow(): Promise<Record<string, unknown>> {
+    const outcome = await this.writeSnapshot().catch((err: unknown) => ({
+      phase: `error: ${err instanceof Error ? err.message : String(err)}`,
+      retry: false,
+    }));
+    await this.ctx.storage
+      .put(LAST_RUN_KEY, { at: new Date().toISOString(), phase: outcome.phase, forced: true })
+      .catch(() => {});
+    return { phase: outcome.phase };
   }
 }
 

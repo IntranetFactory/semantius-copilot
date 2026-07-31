@@ -6,6 +6,11 @@
  * disagree. Use it to cross-check the UI, and to debug the query without a
  * deploy.
  *
+ * CONTAINER cost only. The admin tab additionally shows each session's LLM spend
+ * (`session_state.cost_total`) beside it; that comes from THE session record in
+ * KV, which this script has no binding for — so the LLM column is endpoint-only,
+ * by design rather than by omission. `pnpm sessions` is the CLI for LLM cost.
+ *
  * The join is the `session` label HothSandbox stamps on every container it
  * starts (backend-b/src/cloudflare.ts). Cloudflare's dataset has no dimension
  * that carries a name we choose — the `containerName` in some example queries

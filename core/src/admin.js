@@ -9,7 +9,9 @@
  *
  * READ ONLY by design: the data browser never mutates state. Values can be
  * large (skill bundles), so listing returns keys only — values are fetched
- * one entry at a time.
+ * one entry at a time. The one exception is the SESSION records: they are small
+ * JSON and the browser reads all of them to date and order the key list
+ * (sessionDateIndex), the same cost `listSessions` already accepts.
  *
  * @typedef {Object} KvLike
  * @property {(options?: { cursor?: string, prefix?: string }) => Promise<{ keys: Array<{ name: string, expiration?: number, metadata?: unknown }>, list_complete: boolean, cursor?: string }>} list
@@ -26,6 +28,15 @@ export const KV_GROUPS = {
 
 export const SESSION_KEY_PREFIX = 'session:';
 export const SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * The two other session-scoped prefixes, spelled out here rather than imported:
+ * `egress.js` already imports THIS module, so importing its CONTAINER_KEY_PREFIX
+ * back would make the core module graph circular. Both are documented above in
+ * KV_GROUPS; they exist here only so the browser can date those keys.
+ */
+const AGENT_SNAPSHOT_KEY_PREFIX = 'agent:';
+const CONTAINER_POINTER_KEY_PREFIX = 'container:';
 
 /**
  * Named agent definitions (`agentdef:<name>`) are the deployable artifacts
@@ -207,6 +218,30 @@ export async function mergeSessionRecord(kv, id, patch) {
   return merged;
 }
 
+/**
+ * Merge ONLY if the record still exists — never create, never re-arm the TTL of
+ * something that is gone.
+ *
+ * For writers that run AFTER a session may have been torn down, where
+ * mergeSessionRecord's create-when-absent would resurrect it. The live case is
+ * the sandbox's post-stop cost snapshot: `DELETE /sessions/:id` removes the
+ * record but does NOT stop the container, which keeps running until its
+ * inactivity timeout, so that write routinely lands on a deliberately deleted
+ * session. Same for a record whose 24 h TTL simply lapsed.
+ *
+ * @param {{ get(k: string): Promise<string | null>, put(k: string, v: string, o?: object): Promise<void> }} kv
+ * @param {string} id
+ * @param {Record<string, unknown>} patch
+ * @returns {Promise<Record<string, unknown> | null>} the merged record, or null if there was none
+ */
+export async function mergeExistingSessionRecord(kv, id, patch) {
+  const existing = await readSession(kv, id);
+  if (!existing) return null;
+  const merged = { id, ...existing, ...patch };
+  await putSessionIndex(kv, id, merged);
+  return merged;
+}
+
 // ---------------------------------------------------------------------------
 // Generic collection model — powers the frontend's entities -> records ->
 // record tree. Every backing store (KV, the session index) is presented as a
@@ -219,6 +254,33 @@ export async function mergeSessionRecord(kv, id, patch) {
 // @property {KvLike} kv
 // ---------------------------------------------------------------------------
 
+/**
+ * KV key -> the `createdAt` of the session it belongs to, so the raw KV browser
+ * can show a date and sort newest-first like the sessions collection does.
+ *
+ * Three of the four prefixes are session-scoped and all three resolve from the
+ * session records we already read: `session:<id>` and `agent:<id>` share the
+ * session id, and `container:<containerId>` is covered because THE session
+ * record stores its own `containerId` (idFromName is one-way, so the reverse
+ * map has to come from the record, not from the key). `agentdef:<name>` is a
+ * deployed definition, not session-scoped, and gets no date.
+ *
+ * @param {Array<{ id: unknown, createdAt?: unknown, containerId?: unknown }>} sessions
+ * @returns {Map<string, string>}
+ */
+function sessionDateIndex(sessions) {
+  const dateOf = new Map();
+  for (const s of sessions) {
+    if (typeof s.createdAt !== 'string' || !s.createdAt) continue;
+    dateOf.set(SESSION_KEY_PREFIX + s.id, s.createdAt);
+    dateOf.set(AGENT_SNAPSHOT_KEY_PREFIX + s.id, s.createdAt);
+    if (typeof s.containerId === 'string' && s.containerId) {
+      dateOf.set(CONTAINER_POINTER_KEY_PREFIX + s.containerId, s.createdAt);
+    }
+  }
+  return dateOf;
+}
+
 /** The collections a backend exposes, given its KV namespace name. */
 export function adminCollections(kvName) {
   return [
@@ -229,14 +291,34 @@ export function adminCollections(kvName) {
 
 /**
  * List the records of one collection.
- * @returns {Promise<{ records: Array<{ id: string, label: string, group?: string, meta?: unknown }>, note?: string }>}
+ * @returns {Promise<{ records: Array<{ id: string, label: string, sublabel?: string, group?: string, meta?: unknown }>, note?: string }>}
  */
 export async function listCollectionRecords(collectionId, deps) {
   if (collectionId === 'kv') {
-    const keys = await listKvEntries(deps.kv);
-    return {
-      records: keys.map((k) => ({ id: k.name, label: k.name, group: k.group, meta: { expiration: k.expiration } })),
-    };
+    const [keys, sessions] = await Promise.all([listKvEntries(deps.kv), listSessions(deps.kv)]);
+    const dateOf = sessionDateIndex(sessions);
+    const records = keys.map((k) => {
+      const createdAt = dateOf.get(k.name);
+      return {
+        id: k.name,
+        label: k.name,
+        // Same contract as the sessions collection: an ISO string the frontend
+        // localises. Absent for keys that aren't session-scoped.
+        ...(createdAt ? { sublabel: createdAt } : {}),
+        group: k.group,
+        meta: { expiration: k.expiration },
+      };
+    });
+    // The frontend groups by prefix but does NOT reorder within a group, so the
+    // ordering is entirely ours: newest session first, undated keys last (then
+    // by name) so `agentdef:` — the one non-session-scoped prefix — stays stable.
+    records.sort((a, b) => {
+      if (a.sublabel && b.sublabel && a.sublabel !== b.sublabel) return b.sublabel.localeCompare(a.sublabel);
+      if (a.sublabel && !b.sublabel) return -1;
+      if (!a.sublabel && b.sublabel) return 1;
+      return a.id.localeCompare(b.id);
+    });
+    return { records };
   }
   if (collectionId === 'sessions') {
     const sessions = await listSessions(deps.kv);

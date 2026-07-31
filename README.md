@@ -508,6 +508,14 @@ collection → record → detail tree, backed by the read-only `/admin/collectio
 (behind the API-key guard; host-agnostic logic in `core/src/admin.js`, tests
 in `scripts/admin.test.mjs`, `pnpm test`).
 
+The raw **KV** collection is dated and ordered newest-first, not alphabetical. Three of the
+four prefixes are session-scoped and all three resolve from the session records the browser
+already reads: `session:<id>` and `agent:<id>` share the session id, and
+`container:<containerId>` joins on the record's own `containerId` (`idFromName` is one-way,
+so the key itself cannot be reversed). `agentdef:<name>` is a deployed definition, not
+session-scoped — it gets no date and sorts last. The frontend does not reorder within a
+group, so this ordering is entirely `listCollectionRecords`'.
+
 Non-obvious constraint: Cloudflare cannot list Durable Object instances, so conversations
 are enumerable only via the `session:<id>` KV records (THE session record, written at
 ingest and merged into thereafter) — sessions whose record expired or predates the index
@@ -570,6 +578,69 @@ deducted, so an early-in-month total overstates the invoice; egress is priced at
 NA/EU rate, which is the cheapest, so that one line can understate. Analytics lags a few
 minutes behind live traffic.
 
+**Two money columns, two different windows, never summed.** `Container $ (today)` is the
+UTC-day figure above; `LLM $ (session)` is `session_state.cost_total` off THE session record
+— the session's running LIFETIME total. They sit side by side because adding a day figure to
+a lifetime figure produces a number that means nothing. LLM cost comes from the same KV read
+that supplies Agent and Started, so it shows `—` once the session record is gone.
+`pnpm costs` does not show it (no KV binding from Node); `pnpm sessions` is the LLM-cost CLI.
+
+**`session_sandbox` — the durable snapshot.** The Costs tab is a live read-through to today's
+analytics, so a session's container spend disappears from it once the day rolls over. To keep
+it, `HothSandbox` runs a small scheduled task that merges a `session_sandbox` node onto
+`session:<id>`:
+
+```json
+"session_sandbox": { "cpu_seconds": 5.5, "memory_gib_seconds": 92.5, "disk_gb_seconds": 740,
+                     "egress_bytes": 0, "cost_total": 0.0004,
+                     "measured_at": "…", "window_start": "…", "window_end": "…" }
+```
+
+The task, and why it is shaped the way it is — every step here is a bug that was hit:
+
+- **`onStart()` arms it** (a 5-minute poll, guarded by a DO-storage flag) and clears any
+  stale stop time. **NOT `onStop()`.** Scheduling from `onStop` cannot work on
+  `@cloudflare/containers@0.3.7`: its `alarm()` reads the schedule table *before* delivering
+  stop events, then acts on that stale read — `const resultForMinTime = sql\`SELECT * FROM
+  container_schedules\`` … `await this.syncPendingStoppedEvents()` (which is where `onStop`
+  runs and inserts a row) … `if (resultForMinTime.length == 0) await
+  this.ctx.storage.deleteAlarm()`. The row lands in SQLite and is orphaned: schedule present,
+  alarm deleted, DO dormant, callback never runs. Re-arming from *inside* a scheduled
+  callback is fine — that happens before the stale read.
+- **`onStop()` only records `stoppedAt`.** No scheduling.
+- **The callback waits 15 minutes after the stop** before reading. Cloudflare's analytics lags
+  ingestion and the part still missing at stop time is exactly the container's final CPU, so
+  an immediate read systematically undercounts. If `onStop` never landed, the first poll that
+  sees a stopped container writes `stoppedAt` itself, so the wait always converges.
+- **It retries up to 6 times when Cloudflare has nothing for the session yet**, 5 minutes
+  apart. Ingestion lag is not a fixed number — 45 s in one measurement, over 15 min in another
+  — and giving up after a single look is how a snapshot silently goes missing. That was the
+  actual cause of the first two failed end-to-end runs.
+
+Because the whole thing runs on a minutes-long fuse inside a Durable Object with no console,
+it is observable and forceable (both behind the admin key):
+
+```bash
+GET  /admin/sessions/<id>/sandbox           # armed? tries? stoppedAt? last run + its outcome
+POST /admin/sessions/<id>/sandbox           # snapshot NOW, skipping the settle wait
+POST /admin/sessions/<id>/sandbox?in=30     # arm the SCHEDULED path with a short fuse
+```
+
+`?in=` exists because the production timings make a single test cycle ~30 minutes; it
+exercises `schedule()` → `alarm()` → callback in under a minute. The `lastRun` breadcrumb
+records every run's outcome — a swallowed error with no trace is indistinguishable from
+"never fired", which is precisely the hole the first debugging round fell into.
+
+Why it uses `mergeExistingSessionRecord` and never plain `mergeSessionRecord`: **`DELETE
+/sessions/:id` does not stop the container.** It is three KV deletes; the container runs on
+until `sleepAfter` (10 min) expires. So this callback routinely fires for sessions that were
+deliberately deleted, and a create-when-absent merge would resurrect them *and* re-arm their
+24 h TTL. No record, no write. The acceptance suite deletes every session it creates, so this
+is the common path, not an edge case.
+
+Idempotent by construction: the window is the session's whole life, so a container that
+starts and stops repeatedly just recomputes a more complete total and overwrites the node.
+
 **Worker and Durable Object cost is deliberately absent.** `workersInvocationsAdaptive`
 dimensions are `scriptName`/`scriptTag`/`scriptVersion`/`environmentName`/`status`/
 `usageModel`/`coloCode`/`dispatchNamespaceName`/`isDispatcher` — nothing session-shaped —
@@ -630,6 +701,16 @@ in `usePersistentState('sessionState')` (the DO record stream); each response al
 and the Raw JSON view) and (b) fire-and-forget merges state/data/payload into THE
 session record (`mergeSessionRecord` — best-effort, healed at the next response; also
 refreshes the record's 24 h TTL, keeping active GitHub conversations browsable).
+
+**`session_sandbox` — infra-written, written once per container stop.** Not a channel like
+the four above: nothing in the agent, the model or the sandbox reads it. It is the durable
+mirror of this session's Cloudflare CONTAINER spend (`cpu_seconds`, `memory_gib_seconds`,
+`disk_gb_seconds`, `egress_bytes`, `cost_total`, plus the window it was measured over),
+written by `HothSandbox.recordSandboxCost()` — a scheduled task armed at container start that
+fires 15 minutes after the container stops — so the figure survives the Costs tab's
+today-only window. Written with
+`mergeExistingSessionRecord`, so it can never resurrect a deleted session — see "Container
+costs" for why that matters.
 
 ## GitHub channel (backend B)
 
@@ -855,8 +936,11 @@ legacy inline-bundle body 422). (C1 — "backend A is OOTB/static" — retired w
 
 The **costs** checks assert `GET /admin/costs` is admin-only and answers in shape — a UTC
 day window priced in USD, and either `configured: true` with rows + totals or a stated
-`reason`. Deliberately not asserted: the numbers. Cloudflare's analytics lags live traffic
-by minutes, so a fresh account-day can legitimately be empty.
+`reason` — plus the enrichment join (a row carrying `llmCost` must carry `agentName`, since
+both come from the same session-record read) and that `llmTotal` is the rows' own sum rather
+than anything folded into the container total. Deliberately not asserted: the numbers.
+Cloudflare's analytics lags live traffic by minutes, so a fresh account-day can legitimately
+be empty.
 
 The **identity** checks cover both directions of the chat gate. The negatives need no
 Semantius account: four invalid tokens rejected at ingest (no `<org>:` prefix, a JWT the

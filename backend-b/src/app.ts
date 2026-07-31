@@ -171,6 +171,44 @@ app.get('/admin/costs', async (c) => {
   return c.json({ ...window, currency: 'USD', rates: CONTAINER_RATES, basis: COST_BASIS, ...costs });
 });
 
+// The per-session container-cost SNAPSHOT (`session_sandbox`), which HothSandbox
+// writes ~15 min after its container stops. That task runs on a fuse inside a
+// Durable Object nobody is watching, so it needs a window:
+//   GET  — did it run, what did it decide, is it still armed?
+//   POST — take the snapshot now, skipping the settle delay.
+// Both are plain RPC onto the sandbox DO; neither starts a container.
+// A diagnostic route that hides the failure is worthless — these report the DO's
+// own error text rather than letting Hono turn it into a bare 500.
+const sandboxRpc = async (fn: () => Promise<unknown>) => {
+  try {
+    return { ok: true as const, result: await fn() };
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: String(err instanceof Error ? err.message : err),
+      stack: err instanceof Error ? err.stack?.split('\n').slice(0, 4).join('\n') : undefined,
+    };
+  }
+};
+
+app.get('/admin/sessions/:id/sandbox', async (c) => {
+  const id = c.req.param('id');
+  if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
+  return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, id).snapshotStatus()));
+});
+app.post('/admin/sessions/:id/sandbox', async (c) => {
+  const id = c.req.param('id');
+  if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
+  // ?in=<seconds> arms the SCHEDULED path with a short fuse instead of running
+  // inline — the only way to exercise schedule() -> alarm() -> callback without
+  // waiting out the production timings.
+  const armIn = Number(c.req.query('in'));
+  if (Number.isFinite(armIn) && armIn > 0) {
+    return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, id).armSnapshot(Math.min(armIn, 3600))));
+  }
+  return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, id).snapshotNow()));
+});
+
 // Admin read of the SAME conversations the chat surface serves, mounted under
 // /admin/* so it inherits the API-key guard above. The data browser exists to
 // show everything the backend persists, and a conversation is persisted state

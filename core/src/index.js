@@ -31,6 +31,7 @@ export {
   readSession,
   removeSessionIndex,
   mergeSessionRecord,
+  mergeExistingSessionRecord,
   SESSION_KEY_PREFIX,
   AGENT_DEF_KEY_PREFIX,
   adminCollections,
@@ -63,6 +64,7 @@ export {
 } from './identity.js';
 export {
   CF_GRAPHQL_URL,
+  SESSION_LABEL,
   CONTAINER_RATES,
   CONTAINER_INCLUDED_MONTHLY,
   COST_BASIS,

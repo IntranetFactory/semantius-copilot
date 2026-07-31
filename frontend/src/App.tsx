@@ -96,12 +96,18 @@ export function App() {
 }
 
 // ---------------------------------------------------------------------------
-// Costs — today's Cloudflare container spend, per session
+// Costs — today's Cloudflare container spend, per session, plus the session's
+// LLM spend beside it.
 //
-// Container cost only, and deliberately so: Cloudflare's Worker/Durable-Object
-// datasets carry no session-shaped dimension, so a per-session Worker figure
-// could only be an estimate. The backend (GET /admin/costs) reports what is
-// measured — see core/src/cost.js.
+// CONTAINER cost only on the Cloudflare side, and deliberately so: Cloudflare's
+// Worker/Durable-Object datasets carry no session-shaped dimension, so a
+// per-session Worker figure could only be an estimate. The backend
+// (GET /admin/costs) reports what is measured — see core/src/cost.js.
+//
+// The LLM column is `session_state.cost_total` off THE session record — the
+// session's LIFETIME total, against a container figure that is today-only. Two
+// windows, two columns, no combined column: adding them would produce a number
+// that means nothing.
 // ---------------------------------------------------------------------------
 
 type CostSums = {
@@ -111,7 +117,14 @@ type CostSums = {
   egressBytes: number;
   cost: { cpu: number; memory: number; disk: number; egress: number; total: number };
 };
-type CostRow = CostSums & { sessionId: string; agentName?: string; version?: string; createdAt?: string };
+type CostRow = CostSums & {
+  sessionId: string;
+  agentName?: string;
+  version?: string;
+  createdAt?: string;
+  /** Session LIFETIME LLM spend (session_state.cost_total) — a different window to the rest. */
+  llmCost?: number;
+};
 type Costs = {
   date: string;
   start: string;
@@ -123,6 +136,7 @@ type Costs = {
   rows?: CostRow[];
   unlabeled?: CostSums | null;
   totals?: CostSums;
+  llmTotal?: number;
   truncated?: boolean;
 };
 
@@ -186,7 +200,9 @@ function CostsView({ apiKey }: { apiKey: string }) {
                 <th className="numcol">GiB·s</th>
                 <th className="numcol">GB·s disk</th>
                 <th className="numcol">Egress</th>
-                <th className="numcol">Cost</th>
+                {/* Two money columns, two different windows — never summed. */}
+                <th className="numcol">Container $ (today)</th>
+                <th className="numcol">LLM $ (session)</th>
               </tr>
             </thead>
             <tbody>
@@ -204,6 +220,7 @@ function CostsView({ apiKey }: { apiKey: string }) {
                   <td className="numcol">{num(row.diskGBSeconds)}</td>
                   <td className="numcol">{megabytes(row.egressBytes)}</td>
                   <td className="numcol">{usd(row.cost.total)}</td>
+                  <td className="numcol">{row.llmCost === undefined ? '—' : usd(row.llmCost)}</td>
                 </tr>
               ))}
               {/* Containers started before the session label shipped (or by
@@ -219,11 +236,12 @@ function CostsView({ apiKey }: { apiKey: string }) {
                   <td className="numcol">{num(costs.unlabeled.diskGBSeconds)}</td>
                   <td className="numcol">{megabytes(costs.unlabeled.egressBytes)}</td>
                   <td className="numcol">{usd(costs.unlabeled.cost.total)}</td>
+                  <td className="numcol">—</td>
                 </tr>
               ) : null}
               {rows.length === 0 && !costs.unlabeled ? (
                 <tr>
-                  <td colSpan={8} className="status">
+                  <td colSpan={9} className="status">
                     No container usage recorded today. (Analytics lags a few minutes.)
                   </td>
                 </tr>
@@ -238,6 +256,7 @@ function CostsView({ apiKey }: { apiKey: string }) {
                   <td className="numcol">{num(costs.totals.diskGBSeconds)}</td>
                   <td className="numcol">{megabytes(costs.totals.egressBytes)}</td>
                   <td className="numcol">{usd(costs.totals.cost.total)}</td>
+                  <td className="numcol">{costs.llmTotal === undefined ? '—' : usd(costs.llmTotal)}</td>
                 </tr>
               </tfoot>
             ) : null}
@@ -245,7 +264,13 @@ function CostsView({ apiKey }: { apiKey: string }) {
         </div>
       ) : null}
 
-      {costs?.basis ? <p className="status">{costs.basis}</p> : null}
+      {costs?.basis ? (
+        <p className="status">
+          {costs.basis} The two money columns cover DIFFERENT periods — container cost is today&rsquo;s UTC
+          day, LLM cost is the session&rsquo;s running lifetime total (<code>session_state.cost_total</code>)
+          — so they are shown side by side and never added together.
+        </p>
+      ) : null}
     </section>
   );
 }

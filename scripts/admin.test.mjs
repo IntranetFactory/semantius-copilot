@@ -21,6 +21,7 @@ import {
   readSession,
   removeSessionIndex,
   mergeSessionRecord,
+  mergeExistingSessionRecord,
   adminCollections,
   listCollectionRecords,
   readCollectionRecord,
@@ -176,6 +177,23 @@ await (async function run() {
   const mergedNew = await mergeSessionRecord(mkv, 'merge-new', { session_state: { total_tokens: 7 } });
   check('mergeSessionRecord creates a record when none exists', mergedNew?.id === 'merge-new' && mergedNew?.session_state?.total_tokens === 7);
 
+  // The never-resurrect variant, for writers that land after teardown — the
+  // sandbox's post-stop cost snapshot fires ~15 min after the container stops,
+  // long after DELETE /sessions/:id may have removed the record (that DELETE
+  // does not stop the container).
+  const gone = await mergeExistingSessionRecord(mkv, 'never-existed', { session_sandbox: { cost_total: 1 } });
+  check('mergeExistingSessionRecord does not create an absent record', gone === null);
+  check('mergeExistingSessionRecord writes nothing for an absent record', !mkv._map.has('session:never-existed'));
+  const healed = await mergeExistingSessionRecord(mkv, 'merge-1', { session_sandbox: { cost_total: 0.0004 } });
+  check('mergeExistingSessionRecord merges into a live record', healed?.session_sandbox?.cost_total === 0.0004);
+  check('mergeExistingSessionRecord preserves the rest of the record', healed?.session_state?.llm_calls_count === 2);
+  await removeSessionIndex(mkv, 'merge-1');
+  check(
+    'a deleted session stays deleted after a late snapshot write',
+    (await mergeExistingSessionRecord(mkv, 'merge-1', { session_sandbox: { cost_total: 9 } })) === null &&
+      (await readSession(mkv, 'merge-1')) === null,
+  );
+
   // --- collections descriptor --------------------------------------------
   const cols = adminCollections('STORE');
   check('adminCollections exposes kv/sessions', cols.map((c) => c.id).join(',') === 'kv,sessions');
@@ -194,6 +212,42 @@ await (async function run() {
   check('listCollectionRecords(sessions) omits sublabel when undated', datedRecords.records.at(-1)?.sublabel === undefined);
   check('listCollectionRecords(unknown) returns null', (await listCollectionRecords('nope', deps)) === null);
   check('listCollectionRecords(runs) is gone in v2', (await listCollectionRecords('runs', deps)) === null);
+
+  // --- kv browser: dates + newest-first across ALL groups ------------------
+  // Three of the four prefixes are session-scoped and all three resolve from
+  // THE session record: session:/agent: share the id, container: joins on the
+  // record's own containerId (idFromName is one-way, so the key can't be
+  // reversed). agentdef: is a deployed definition, not session-scoped.
+  const dkv = fakeKv({
+    'agentdef:trip': JSON.stringify({ agentName: 'trip' }),
+    'agent:old': bundleJson,
+    'agent:new': bundleJson,
+    'container:cOLD': 'old',
+    'container:cNEW': 'new',
+    'session:old': JSON.stringify({ id: 'old', createdAt: '2026-07-01T00:00:00.000Z', containerId: 'cOLD' }),
+    'session:new': JSON.stringify({ id: 'new', createdAt: '2026-07-19T00:00:00.000Z', containerId: 'cNEW' }),
+  });
+  const dated = await listCollectionRecords('kv', { kv: dkv });
+  const dateFor = (name) => dated.records.find((r) => r.id === name)?.sublabel;
+  check('kv browser dates session: keys', dateFor('session:new') === '2026-07-19T00:00:00.000Z');
+  check('kv browser dates agent: keys from the same session', dateFor('agent:new') === '2026-07-19T00:00:00.000Z');
+  check(
+    'kv browser dates container: keys via the record containerId',
+    dateFor('container:cNEW') === '2026-07-19T00:00:00.000Z',
+    String(dateFor('container:cNEW')),
+  );
+  check('kv browser leaves agentdef: undated', dateFor('agentdef:trip') === undefined);
+  const order = dated.records.map((r) => r.id);
+  check(
+    'kv browser sorts newest session first, undated last',
+    order.join(',') === 'agent:new,container:cNEW,session:new,agent:old,container:cOLD,session:old,agentdef:trip',
+    order.join(','),
+  );
+  check('kv browser keeps groups on every record', dated.records.every((r) => typeof r.group === 'string'));
+  check(
+    'kv browser omits sublabel entirely when there is no date',
+    !('sublabel' in dated.records.find((r) => r.id === 'agentdef:trip')),
+  );
 
   // --- generic record detail ---------------------------------------------
   const kvDetail = await readCollectionRecord('kv', 'agent:9f8a', deps);

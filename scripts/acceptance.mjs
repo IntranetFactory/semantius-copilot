@@ -175,6 +175,10 @@ async function main() {
   // token must say so rather than render as $0.
   const costsNoKey = await uget(B_URL, '/admin/costs');
   check('costs', 'a user token cannot read costs (401)', costsNoKey.status === 401, `status ${costsNoKey.status}`);
+  // The snapshot-task window is operator-only too: it can force a Cloudflare
+  // query and a KV write, so it must never sit on the user surface.
+  const snapNoKey = await uget(B_URL, '/admin/sessions/tests-user3-0000/sandbox');
+  check('costs', 'a user token cannot inspect the sandbox snapshot task (401)', snapNoKey.status === 401, `status ${snapNoKey.status}`);
   const costs = await get(B_URL, '/admin/costs');
   check('costs', 'costs route answers the admin key (200)', costs.status === 200, `status ${costs.status} ${JSON.stringify(costs.json).slice(0, 200)}`);
   check(
@@ -191,6 +195,27 @@ async function main() {
       : typeof costs.json?.reason === 'string' && costs.json.reason.length > 0,
     costs.json?.configured ? `${costs.json.rows?.length} sessions, $${costs.json.totals?.cost?.total}` : costs.json?.reason,
   );
+  // LLM spend rides in from THE session record (session_state.cost_total), so a
+  // row only carries it while that record is alive. Assert the join, not a
+  // count: every row that HAS an llmCost must have an agentName too, because
+  // both come from the same read — one without the other means the enrichment
+  // pass is broken.
+  if (costs.json?.configured === true) {
+    const withLlm = (costs.json.rows ?? []).filter((r) => typeof r.llmCost === 'number');
+    check(
+      'costs',
+      'LLM cost is joined from the same session record as the agent name',
+      withLlm.every((r) => typeof r.agentName === 'string'),
+      `${withLlm.length}/${costs.json.rows?.length} rows carry llmCost`,
+    );
+    const llmSum = Math.round(withLlm.reduce((n, r) => n + r.llmCost, 0) * 1e8) / 1e8;
+    check(
+      'costs',
+      'the LLM total is its own figure, summed from the rows and never folded into the container total',
+      typeof costs.json.llmTotal === 'number' && Math.abs(costs.json.llmTotal - llmSum) < 1e-8,
+      `llm $${costs.json.llmTotal} (rows sum $${llmSum}) vs container $${costs.json.totals?.cost?.total}`,
+    );
+  }
 
   // --- Named-definition deploys (PUT /agents/:name is the trust boundary) --
   const dep = await put(B_URL, `/agents/${bundle.agentName}`, bundle);
