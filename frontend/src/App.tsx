@@ -6,9 +6,10 @@
  * ADMIN ONLY. This page authenticates with the shared deployment API key
  * (`Authorization: Bearer <API_TOKEN>`), which can deploy agent definitions and
  * read every stored record — so it is deliberately NOT the page users chat on.
- * Chatting lives at / (src/ChatApp.tsx), authenticated by the user's own
- * Semantius token and unable to reach any admin route. The only link between
- * them is one-way: a session record here offers "Open in chat ›".
+ * Chatting lives at /chat (src/ChatApp.tsx), authenticated by the user's own
+ * Semantius token, and at /copilot (src/CopilotApp.tsx), authenticated by their
+ * better-auth session cookie; neither can reach any admin route. The only link
+ * between them is one-way: a session record here offers "Open in chat ›".
  *
  * Conversations ARE browsable here — everything the backend persists is, and a
  * conversation is persisted state. They are read through the backend's
@@ -627,7 +628,7 @@ function SessionDetail({
  * and never needs the owner's Semantius token.
  */
 function ConversationView({ apiKey, sessionId }: { apiKey: string; sessionId: string }) {
-  const client = useConversationClient(apiKey, sessionId, undefined, adminConversationUrl);
+  const client = useConversationClient({ bearer: apiKey }, sessionId, undefined, adminConversationUrl);
   // Read-only catch-up: 'long-poll' reaches the stored state without holding the
   // SSE stream open (no live generation to follow when browsing).
   const agent = useFlueAgent({ client, live: 'long-poll' });

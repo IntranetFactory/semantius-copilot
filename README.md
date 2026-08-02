@@ -19,23 +19,32 @@ See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the original design and accepta
 
 | Deployable | URL |
 | ---------- | --- |
-| Frontend — chat (users) | https://hoth-poc-frontend.ma532.workers.dev/ |
+| Frontend — chat (users, Semantius token) | https://hoth-poc-frontend.ma532.workers.dev/chat |
+| Frontend — copilot (users, better-auth cookie) | https://hoth-poc-frontend.ma532.workers.dev/copilot |
 | Frontend — admin console | https://hoth-poc-frontend.ma532.workers.dev/admin |
 | Backend — dynamic bundle (multi-agent) | https://hoth-poc-backend-b.ma532.workers.dev |
 
 Both run on Cloudflare Workers (account `Ma@adenin.com`). The backend owns a container
-app (Containers) and a private KV namespace; the frontend is two static pages served from
+app (Containers) and a private KV namespace; the frontend is three static pages served from
 Workers assets with the backend URL baked in at build time.
 
-**Two pages, two builds, one Worker.** `/` is the user chat page (`index.html` →
+**Three pages, three builds, one Worker.** `/chat` is the user chat page (`chat.html` →
 `src/chat-main.tsx` → `ChatApp.tsx`, authenticated by the user's own Semantius token);
-`/admin` is the operator console (`admin.html` → `src/admin-main.tsx` → `App.tsx`,
-authenticated by the deployment API key). Separate Vite entries so the chat bundle never
-carries the admin code. Neither path is declared anywhere: Workers assets serves `/admin`
-from `admin.html` via its default `auto-trailing-slash` html_handling, and the one place
-the paths are written down in code is `CHAT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`.
-`not_found_handling` is `404-page` (`public/404.html`), **not** `single-page-application`:
-with chat at `/`, an SPA fallback would make a mistyped `/admin` silently render chat.
+`/copilot` is the same workbench authenticated by a better-auth session cookie instead
+(`copilot.html` → `src/copilot-main.tsx` → `CopilotApp.tsx`); `/admin` is the operator
+console (`admin.html` → `src/admin-main.tsx` → `App.tsx`, authenticated by the deployment
+API key). Separate Vite entries so the user bundles never carry the admin code. The two
+user pages share `ChatWorkbench.tsx` and differ only in the credential they collect, so
+they cannot drift apart.
+
+No path is declared anywhere: Workers assets serves each `<name>.html` at `/<name>` via its
+default `auto-trailing-slash` html_handling, and the one place the paths are written down in
+code is `CHAT_PAGE`/`COPILOT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`. There is
+deliberately **no `index.html`**, so `/` matches no asset; `not_found_handling` is
+`404-page` (`public/404.html`), **not** `single-page-application`, so `/` and every typo
+answer a real 404 instead of silently rendering a page that looks like it worked. That 404
+page names **no path**, not even in an HTML comment — it is what an unauthenticated prober
+sees, and `/admin`'s existence is not something to advertise.
 
 ## Layout
 
@@ -48,7 +57,8 @@ agents/      SOURCE OF TRUTH for every agent. One folder per agent:
 core/        Host-agnostic Flue-core seams (no Cloudflare imports):
              agent-bundle format + validation, tar reconstruction (2-RPC),
              provisionAgentSkills, egress/secret broker interface, API-key guard,
-             Semantius user identity (identity.js — `<org>:<jwt>` → userinfo),
+             Semantius user identity (identity.js — `<org>:<jwt>` → userinfo, and
+             better-auth session cookie → /session + /session/token),
              deterministic skill-check, container-cost query + pricing (cost.js).
              `@hoth/core/node` adds the bundler library (fs walk, JSONC parse via
              jsonc-parser).
@@ -56,8 +66,10 @@ backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue
              the named agent definition a session references (`{ agentName }` at ingest,
              resolved from KV `agentdef:<name>`) decides instructions, model, skills.
              First-turn identity rides the creating send's `initialData` (see plan §6).
-frontend/    React + Vite, two pages — `/` chat (New-session button, agent dropdown fed
-             by the bundler output) and `/admin` (Data browser + Costs tab).
+frontend/    React + Vite, three pages — `/chat` and `/copilot` (the shared
+             ChatWorkbench: New-session button, agent dropdown fed by the bundler
+             output; token vs. session-cookie auth) and `/admin` (Data browser +
+             Costs tab). `/` is a real 404.
 scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agents/
              folder and PUT it to the backend as a named KV definition) ·
              node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C2–C5) ·
@@ -203,6 +215,9 @@ pnpm bundle            # scan agents/ -> one agent bundle per folder; round-trip
 pnpm smoke             # Node smoke test — core agent-bundle flow with zero Cloudflare present
 
 pnpm dev:frontend      # http://localhost:5173  (talks to localhost:3584 in dev)
+                       # Vite serves the FILENAMES: /chat.html, /copilot.html, /admin.html.
+                       # The extension-less /chat, /copilot, /admin paths are Workers assets
+                       # html_handling, so they exist only on a deployed build.
 ```
 
 ## Deploy
@@ -224,14 +239,22 @@ First deploy of the backend creates its Cloudflare Container application and pro
 confirm. It needs **Workers AI** and **Containers** enabled on the account. The frontend
 build reads the backend URL from [`frontend/.env.production`](./frontend/.env.production).
 
-The frontend deploy publishes both pages: `/` (chat) and `/admin` (admin console), plus
-`404.html` for everything else.
+The frontend deploy publishes all three pages: `/chat`, `/copilot` and `/admin`, plus
+`404.html` for `/` and everything else.
 
 ## Authentication
 
-The backend is behind an **API-key guard** (`core/src/auth.js`): every route except
-`/health` requires `Authorization: Bearer <API_TOKEN>`, and fails closed (503) if `API_TOKEN`
-is unset. Set it as a Cloudflare secret, and locally via `.dev.vars`:
+The backend has **two auth surfaces** (`core/src/auth.js`), and they take different
+credentials:
+
+- **admin / CLI** — `/admin/*`, agent deploys, skill-checks, session deletes. One shared
+  deployment secret, `Authorization: Bearer <API_TOKEN>` (`apiKeyGuard`), failing closed
+  (503) when `API_TOKEN` is unset.
+- **user chat** — creating a session and talking in it. The caller's own credential
+  (`userTokenGuard`): a Semantius token, or a better-auth session cookie. No API key is
+  accepted here, so a chat client can never browse data or deploy.
+
+Set the admin key as a Cloudflare secret, and locally via `.dev.vars`:
 
 ```bash
 node -e "console.log('hoth_'+require('crypto').randomBytes(24).toString('base64url'))" > .api-token
@@ -239,17 +262,28 @@ cd backend-b && printf 'API_TOKEN="%s"\n' "$(cat ../.api-token)" > .dev.vars   #
 wrangler secret put API_TOKEN --config backend-b/wrangler.jsonc                 # deployed (paste the value)
 ```
 
-The **frontend never bakes the key in** — you type it into the API-key field on the page
-(persisted to `localStorage`), and it rides every request: the FlueClient `token` option
-(chat + SSE) and an explicit header on the session-setup fetches. The API key says *this is
-our frontend*; **who** is chatting is the separate Semantius identity below.
+The **frontend never bakes the key in** — you type it into the API-key field on the *admin*
+page (persisted to `localStorage`), and it rides every admin request. The API key says
+*this is our operator console*; **who** is chatting is the separate Semantius identity
+below.
 
 ### User identity — no chat without a verified Semantius user
 
-Chat is only open to a real Semantius user. The client proves one with the request's own
-`Authorization: Bearer <org>:<jwt>` — the user surface (`userTokenGuard`, `core/src/auth.js`)
-takes a Semantius access token where the admin surface takes the deployment key. The
-transport form is **`<org>:<jwt>`** because the JWT alone doesn't say who issued it, and
+Chat is only open to a real Semantius user, proven by one of two credentials. **The bearer
+always wins**; the cookie is consulted only when there is no `Authorization` header:
+
+| credential | sent as | verified by |
+| --- | --- | --- |
+| Semantius token | `Authorization: Bearer <org>:<jwt>` | `<org>`'s OIDC userinfo endpoint |
+| better-auth session cookie | `x-better-auth-cookie: <value>`, or a normal `Cookie` header | `GET /session` + `POST /session/token` on the shared better-auth host |
+
+Both end at the **same verdict object** — `{ org, jwt, user }` — so everything downstream
+(session-id minting, the ownership gate, the sandbox's `SEMANTIUS_ORG`, egress injection)
+is credential-blind. Only the guard knows which one arrived.
+
+#### Semantius token
+
+The transport form is **`<org>:<jwt>`** because the JWT alone doesn't say who issued it, and
 the org is what selects the tenant host (every org has its own subdomain).
 
 The guard splits the value on the first colon and verifies it live
@@ -264,37 +298,90 @@ Authorization: Bearer <jwt>
 
 The issuer decides — no key material, JWKS fetch, or clock handling lives in this repo;
 an expired, malformed, foreign, or unknown-org token gets a non-2xx there and a **401**
-here, with no session written. On success the token's three identity facts are pinned to
-`session_context` on THE session record — and nowhere else:
+here, with no session written.
+
+#### Session cookie (better-auth)
+
+A user who signed in to the Semantius app already holds a better-auth session cookie, and
+that is the only credential a copilot embed can present — so when no bearer is sent, the
+gate takes the cookie instead. Two server-to-server calls against
+`SEMANTIUS_SESSION_BASE_URL` (default `https://api.semantius.cloud`) turn it into the same
+verdict:
+
+```
+GET  /session                          ← AUTHENTICATION, every request
+Cookie: __Secure-better-auth.session_token=<value>
+→ 200 {"session":{…},"user":{"org":"tests","sub":"user3","name":"Wei Chen","email":"admin@test.com"}}
+
+POST /session/token                    ← the sandbox's credential, CACHED
+x-jwt-exchange-api-key: <JWT_EXCHANGE_API_KEY>
+{"sessionCookie":"<value>","expiresIn":86400}
+→ 200 {"token":"<jwt>"}
+```
+
+Notes that matter:
+
+- **`user` already is the projected claim set** this repo keeps (`org`, `sub`, `name`,
+  `email`), so the org needs no guessing and no second identity lookup. Any org's host
+  validates a session created by any app sharing the same `BETTER_AUTH_SECRET` and
+  database, so one host serves every tenant — the tenant comes from the session's active
+  organization, not from the URL.
+- **The exchange is what the sandbox needs.** A cookie is useless at egress; the minted JWT
+  is what gets injected in place of the `__sak__` sentinel, exactly as on the bearer path.
+- **The exchange is cached in KV** under `authjwt:<sha256 of the cookie>` for 1 h (the JWT
+  itself lasts 24 h). Without it, every chat request would mint a fresh token *and* rewrite
+  it onto the session record. Only the cookie's **hash** is ever stored, never the cookie.
+- **Two transports, one credential.** Browsers cannot set `Cookie` from `fetch`, and this
+  backend is a different origin from the frontend Worker with wildcard-origin CORS and no
+  credentials — so a real cookie can never ride cross-site. The `x-better-auth-cookie`
+  header carries the value instead, and the backend rebuilds a proper `Cookie` header for
+  the upstream hop. Custom request headers need no CORS change (Hono's `cors()` echoes
+  `Access-Control-Request-Headers` when `allowHeaders` is unset).
+- **The exchanged JWT is not re-verified** against userinfo: the cookie was just validated
+  by the issuer, and the JWT came from the issuer authenticated with our own exchange key.
+  This does assume `/session`'s `user.sub` is what userinfo reports as `sub` — the
+  ownership gate compares `{ org, sub }`, so if those diverged, a `/chat` session could not
+  be opened from `/copilot`.
+- `JWT_EXCHANGE_API_KEY` is a **secret** (`.dev.vars` locally,
+  `wrangler secret put JWT_EXCHANGE_API_KEY` when deployed). Unset → the cookie path
+  answers **503** rather than a misleading 401; bearers keep working.
+
+#### What gets pinned to the session
+
+On success the verified identity's three facts are pinned to `session_context` on THE
+session record — and nowhere else:
 
 | field | value | read by |
 | --- | --- | --- |
 | `user` | the projected claims (`sub`, `name`, `email`, `email_verified`, `org`, `verifiedAt`) | the chat gate, to prove ownership on every later request |
-| `semantius_org` | the token's `<org>` half — **which tenant** the session acts on | `provisionSemantiusEnv` (`SEMANTIUS_ORG` in the container), and the echo egress header `x-semantius-org` |
-| `semantius_user` | the token's `sub` — **as whom** it acts | the record's own audit surface (data browser, session listing) |
+| `semantius_org` | the verified org (the token's `<org>` half, or the session's active organization) — **which tenant** the session acts on | `provisionSemantiusEnv` (`SEMANTIUS_ORG` in the container), and the echo egress header `x-semantius-org` |
+| `semantius_user` | the verified `sub` — **as whom** it acts | the record's own audit surface (data browser, session listing) |
 
-`semantius_jwt` (the bare credential) sits beside them; see "Egress" below. **Nothing
-identity- or tenant-shaped is ever taken from the request body**: those four keys are
-stripped from whatever `sessionContext` the client sends and rewritten from the verified
-token, so no caller can hand itself an org, a `sub`, or a user. The ingest response echoes
-`user` (what the frontend's status line shows) — there is no separate tenant field on the
-record, because the tenant *is* `semantius_org`.
+`semantius_jwt` (the bare credential — the presented one on the bearer path, the exchanged
+one on the cookie path) sits beside them; see "Egress" below. **Nothing identity- or
+tenant-shaped is ever taken from the request body**: those four keys are stripped from
+whatever `sessionContext` the client sends and rewritten from the verified identity, so no
+caller can hand itself an org, a `sub`, or a user. The ingest response echoes `user` (what
+the frontend's status line shows) — there is no separate tenant field on the record,
+because the tenant *is* `semantius_org`.
 
 The **chat gate** (`app.use('/agents/main/*', …)` in `backend-b/src/app.ts`) then admits
 a conversation only when its session record carries such a `user` — send, history read,
 and stream alike answer **401** otherwise, so a session created with no token can be
 provisioned and skill-checked but never chatted with. Consequences worth knowing:
 
-- The token is verified **per request** on the chat surface (`userTokenGuard` runs with the
-  gate), not pinned at creation: tokens live ~1 h while a session lives 24 h, so the client
-  re-presents a fresh one and the gate re-checks it against the record's `user`. When the
-  presented JWT differs from the stored one, the whole identity trio
+- The credential is verified **per request** on the chat surface (`userTokenGuard` runs with
+  the gate), not pinned at creation: tokens live ~1 h while a session lives 24 h, so the
+  client re-presents a fresh one and the gate re-checks it against the record's `user`. When
+  the verified JWT differs from the stored one, the whole identity trio
   (`semantius_jwt`/`semantius_org`/`semantius_user`) is re-stamped in one merge — that is
-  how a long conversation's sandbox credential stays live. Write-on-change only.
+  how a long conversation's sandbox credential stays live. Write-on-change only, which is
+  also why the cookie path caches its exchange: a freshly minted JWT every request would
+  rewrite the record every request.
 - GitHub-issue conversations reach the same agent through **in-process dispatch**
   (`channels/github.ts`), never through this HTTP route, so the webhook path is unaffected.
-- The frontend requires the token box before **New session** is enabled, and prints the
-  resolved user (`Wei Chen <admin@test.com> @tests`) in its status line.
+- Both user pages require the credential box before **New session** is enabled, and print
+  the resolved user (`Wei Chen <admin@test.com> @tests`) in the status line.
 
 `pnpm mint-token` (`scripts/mint-token.mjs`) mints a token to paste there: it exchanges a
 Semantius API key for a user JWT via the `client_credentials` grant against
@@ -665,10 +752,11 @@ agent-facing ones live in the conversation's Durable Object:
 (24 h TTL, removed by `DELETE /sessions/:id`) and **never delivered to the agent, the
 model, or the sandbox** — its two consumers are the identity gate at ingest and the egress
 handler, both reading `semantius_jwt` (see "User identity" below and "Session-context JWT
-injection" under Egress). The chat page (`/`) has a token textarea (persisted in
-localStorage); its value is sent as `sessionContext` with **New session** —
-ingest is create-only (it mints a fresh id per call and takes none from the caller), so the
-token cannot be swapped on a live session.
+injection" under Egress). The user pages (`/chat`, `/copilot`) have a credential textarea
+(persisted in localStorage), but its value never travels in the body: it rides the request
+HEADERS, and the identity fields are written from what the guard verified. Ingest is
+create-only (it mints a fresh id per call and takes none from the caller), so the
+credential cannot be swapped on a live session.
 
 **`payload` — model-visible, client-provided at creation.** Optional `payload` field
 on the creation seed (the `initialData` of the instance-creating send — Flue records
@@ -949,6 +1037,14 @@ conversation id. The positives (org/JWT split stored separately, user resolved f
 userinfo, chat admitted) need a live token, so they run only when `.env` carries
 `SEMANTIUS_API_KEY`/`SEMANTIUS_ORG` and print a skip note otherwise.
 
+The **cookie** checks cover the gate's second credential and need a live better-auth
+session cookie, which nothing here can mint — pass one as `SEMANTIUS_SESSION_COOKIE=<value>`
+or the block prints a skip note. They assert that both transports (`x-better-auth-cookie`
+and a real `Cookie` header) create a session and resolve to one identity, that the minted id
+carries the *cookie session's* tenant, that the cookie opens the conversation it created,
+that an invalid cookie is a 401 — and that **the bearer wins**: a valid cookie sent beside an
+invalid bearer must still 401, or the documented precedence would be a lie.
+
 The **credentials** checks close the loop inside the sandbox, on a semantius-admin
 session (its `proxy_whitelist` covers `*.semantius.ai`): the container carries
 `SEMANTIUS_JWT=__sak__` plus the token's `SEMANTIUS_ORG` and **no `SEMANTIUS_API_KEY`**,
@@ -957,7 +1053,8 @@ swapped for their JWT at egress. Same credential requirement as the identity pos
 
 ## Verified results
 
-All 69 acceptance checks pass against the deployed Workers. (The original A/B thesis —
+All 72 acceptance checks pass against the deployed Workers (the `[cookie]` block skipped —
+it needs a live better-auth session cookie). (The original A/B thesis —
 image-baked and dynamically-delivered skills produce byte-identical sandboxes and
 identical `activate_skill → read → bash` behavior — was proven while backend A still
 existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are

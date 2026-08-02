@@ -1,4 +1,10 @@
-import { verifySemantiusToken } from './identity.js';
+import {
+  extractSessionCookie,
+  SEMANTIUS_COOKIE_HINT,
+  SEMANTIUS_SESSION_BASE_URL,
+  verifySemantiusCookie,
+  verifySemantiusToken,
+} from './identity.js';
 
 /**
  * The backend has TWO auth surfaces, and they must not be confused:
@@ -9,7 +15,8 @@ import { verifySemantiusToken } from './identity.js';
  *                  Machine-to-machine, one shared deployment secret: apiKeyGuard
  *                  below.
  *   user chat    — creating a session and talking in it. A real person, proven
- *                  by their own Semantius token: userTokenGuard below.
+ *                  by their own Semantius token OR by their better-auth session
+ *                  cookie: userTokenGuard below.
  *
  * They were one blanket guard before user identity existed. Sharing it meant a
  * chat client had to hold the deploy-capable key, and left the Authorization
@@ -49,16 +56,27 @@ export function apiKeyGuard(options = {}) {
 }
 
 /**
- * User gate for the CHAT surface: `Authorization: Bearer <org>:<jwt>`, verified
- * on every request against that org's OIDC userinfo endpoint. The bearer is the
- * user's own credential — there is no shared key on this surface, and holding a
- * token grants exactly two things: create a session, and use one you own.
+ * User gate for the CHAT surface. TWO credentials are accepted, and the BEARER
+ * always wins when both are present:
  *
- * Verified per request, not once per session, because the token belongs to the
- * request: a conversation lives 24 h while a token lives ~1 h, so pinning
+ *   1. `Authorization: Bearer <org>:<jwt>` — the user's own Semantius access
+ *      token, verified against that org's OIDC userinfo endpoint.
+ *   2. a better-auth session cookie (`x-better-auth-cookie: <value>` from a
+ *      browser, or a normal `Cookie` header server-to-server) — only consulted
+ *      when there is no bearer. What a user who signed in to the legacy app
+ *      already holds, so a copilot embed needs no token minting at all.
+ *
+ * There is no shared key on this surface, and either credential grants exactly
+ * two things: create a session, and use one you own. Both paths end at the same
+ * `{ org, jwt, user }` verdict (identity.js), so nothing downstream has to care
+ * which one the caller used.
+ *
+ * Verified per request, not once per session, because the credential belongs to
+ * the request: a conversation lives 24 h while a token lives ~1 h, so pinning
  * identity at creation would keep a stale token working for the rest of the day
  * and leave the sandbox's own credential unrefreshable. Re-presenting the
- * current token makes expiry survivable — the client simply sends a fresh one.
+ * current credential makes expiry survivable — the client simply sends a fresh
+ * one, and on the cookie path the exchange mints a fresh JWT on its own.
  *
  * On success the verdict is put on the Hono context as `semantiusUser`
  * ({ org, jwt, user }) so the route doesn't verify a second time.
@@ -69,13 +87,39 @@ export function userTokenGuard(fetchImpl) {
   return async (c, next) => {
     const provided = c.req.header('authorization') ?? '';
     const match = /^Bearer\s+(.+)$/i.exec(provided.trim());
-    if (!match) {
-      return c.json(
-        { error: 'unauthorized: send Authorization: Bearer <org>:<jwt> (mint one with pnpm mint-token)' },
-        401,
+
+    let verified;
+    if (match) {
+      verified = await verifySemantiusToken(match[1], fetchImpl ?? fetch);
+    } else {
+      const cookie = extractSessionCookie({ get: (name) => c.req.header(name) ?? null });
+      if (!cookie) {
+        return c.json(
+          {
+            error:
+              'unauthorized: send Authorization: Bearer <org>:<jwt> (mint one with pnpm mint-token), ' +
+              `or ${SEMANTIUS_COOKIE_HINT}`,
+          },
+          401,
+        );
+      }
+      // Fail-closed and diagnosable, exactly as apiKeyGuard treats a missing
+      // API_TOKEN: a cookie cannot be exchanged for the JWT the sandbox needs
+      // without this key, and silently 401ing would look like a bad cookie.
+      if (!c.env?.JWT_EXCHANGE_API_KEY) {
+        return c.json({ error: 'server not configured: JWT_EXCHANGE_API_KEY is unset' }, 503);
+      }
+      verified = await verifySemantiusCookie(
+        cookie,
+        {
+          baseUrl: c.env?.SEMANTIUS_SESSION_BASE_URL || SEMANTIUS_SESSION_BASE_URL,
+          exchangeKey: c.env.JWT_EXCHANGE_API_KEY,
+          kv: c.env?.STORE,
+        },
+        fetchImpl ?? fetch,
       );
     }
-    const verified = await verifySemantiusToken(match[1], fetchImpl ?? fetch);
+
     if (!verified.ok) {
       return c.json({ error: `unauthorized: ${verified.error}` }, 401);
     }

@@ -314,25 +314,29 @@ sessions. Request isolation is the POC's proven property; tenant authz is the la
 
 ## 10. Frontend (React + Vite)
 
-`@flue/react` + `@flue/sdk`. **Two pages, one Worker, split by credential** (backend A is gone;
+`@flue/react` + `@flue/sdk`. **Three pages, one Worker, split by credential** (backend A is gone;
 everything is the `/agents/main` mount on backend B):
 
-- **`/` — chat (`index.html` → `ChatApp.tsx`).** Authenticated by the user's own Semantius token
+- **`/chat` — chat (`chat.html` → `ChatApp.tsx`).** Authenticated by the user's own Semantius token
   (`<org>:<jwt>`, also acceptable in the URL fragment `#jwt=…&session=…`). A conversation-scoped
   `FlueClient` per session (`useConversationClient`), plus an agent dropdown whose list is the
   bundler output glob-imported from `frontend/src/generated/agents/*.json` — re-running
   `pnpm bundle` after adding an `agents/<name>/` folder adds it with no code change.
   **New session** → `POST /sessions/agent` with the selected agent NAME; the backend mints the
   `sessionId` (the page generates no id of its own), then open chat. Render `messages[].parts`.
+- **`/copilot` — the same workbench (`copilot.html` → `CopilotApp.tsx`).** Authenticated by a
+  better-auth session cookie value instead (fragment `#cookie=…&session=…`), sent in the
+  `x-better-auth-cookie` header because a browser cannot set `Cookie` cross-origin. Both user pages
+  are thin wrappers over `ChatWorkbench.tsx`, differing only in the credential they collect.
 - **`/admin` — operator console (`admin.html` → `App.tsx`).** Authenticated by the deployment API
   key. Data browser (`/admin/collections*`, plus the read-only `/admin/agents/main/*` conversation
   mount) and a Costs tab (`/admin/costs` — today's Cloudflare container spend per session). The
   only link between the pages is one-way, admin → chat.
 
-Separate Vite entries so the chat bundle never ships the admin code. Neither path is declared in
-code beyond `CHAT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`; Workers assets resolves them
-from the filenames, with `not_found_handling: "404-page"` so a mistyped path does not fall back to
-chat. POC caveat: browser-as-bundle-origin inverts the production trust model (server-side tenant
+Separate Vite entries so the user bundles never ship the admin code. No path is declared in
+code beyond `CHAT_PAGE`/`COPILOT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`; Workers assets
+resolves them from the filenames. There is no `index.html`, and `not_found_handling: "404-page"`
+means `/` and every mistyped path answer a real 404 rather than falling back to a page. POC caveat: browser-as-bundle-origin inverts the production trust model (server-side tenant
 store); fine for the POC, not the prod seam (§12).
 
 ## 11. Build order

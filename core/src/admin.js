@@ -24,6 +24,8 @@ export const KV_GROUPS = {
   agentdef: 'Named agent definition (deployed via pnpm deploy:agent; no TTL)',
   agent: 'Agent bundle (one immutable per-session snapshot of a named definition)',
   container: 'Container pointer (containerId -> session id; the only containerId-keyed entry)',
+  authjwt:
+    'Exchanged Semantius JWT for one better-auth session cookie, keyed by the cookie\'s SHA-256 (never the cookie itself). 1 h TTL; see verifySemantiusCookie',
 };
 
 export const SESSION_KEY_PREFIX = 'session:';

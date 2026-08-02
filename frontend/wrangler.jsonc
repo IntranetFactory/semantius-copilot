@@ -2,14 +2,20 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "hoth-poc-frontend",
   "compatibility_date": "2026-06-01",
-  // Two static pages served straight from Workers assets — no Worker script
-  // needed. `/` -> index.html (chat), `/admin` -> admin.html (admin console,
-  // via the default auto-trailing-slash html_handling).
+  // Three static pages served straight from Workers assets — no Worker script
+  // needed. `/chat` -> chat.html, `/copilot` -> copilot.html, `/admin` ->
+  // admin.html, each via the default auto-trailing-slash html_handling.
   //
-  // NOT "single-page-application": with chat at `/`, an SPA fallback would make
-  // every mistyped path (a typo'd /admin above all) silently render the chat
-  // page. "404-page" serves dist/404.html instead — copied verbatim from
-  // public/ by Vite.
+  // There is deliberately no index.html, so `/` matches no asset. NOT
+  // "single-page-application": an SPA fallback would make every mistyped path
+  // (a typo'd /admin above all) silently render a page. "404-page" serves
+  // dist/404.html instead — copied verbatim from public/ by Vite — so `/` and
+  // every typo answer a real 404.
+  //
+  // That 404 page names NO path, not even in an HTML comment: it is what an
+  // unauthenticated prober sees, and the admin console's existence is not
+  // something to advertise. Keep it bare — the page inventory belongs here and
+  // in the README, which are not served.
   "assets": {
     "directory": "./dist",
     "not_found_handling": "404-page"

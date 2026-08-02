@@ -10,6 +10,10 @@
  *   API_TOKEN=<key> node scripts/acceptance.mjs
  *   API_TOKEN=<key> B_URL=https://... node scripts/acceptance.mjs
  *
+ * OPTIONAL: SEMANTIUS_SESSION_COOKIE=<value> adds the [cookie] block — the chat
+ * gate's second credential (a better-auth session cookie). Skipped with a NOTE
+ * when unset, because only a signed-in browser can produce one.
+ *
  * (Check ids C2-C5 keep their plan §13 numbering; C1 — "backend A is
  * OOTB/static" — retired with backend A itself.)
  */
@@ -28,6 +32,10 @@ if (!API_TOKEN) {
   process.exit(2);
 }
 const AUTH = { authorization: `Bearer ${API_TOKEN}` };
+// A live better-auth session cookie VALUE (`<token>.<signature>`), for the
+// optional [cookie] block. Nothing here can mint one — it comes from a browser
+// that signed in to the Semantius app.
+const SESSION_COOKIE = process.env.SEMANTIUS_SESSION_COOKIE;
 // Filled in by main() before any check runs: the USER surface (session creation
 // and chat) authenticates with a real Semantius token, never with AUTH.
 let USER_AUTH = {};
@@ -510,6 +518,70 @@ async function main() {
   check('identity', 'chat rejects the admin API key (401)', adminOnChat.status === 401, `status ${adminOnChat.status}`);
   const ghostRead = await uget(B_URL, `/agents/main/${uuid()}?view=history`);
   check('identity', 'chat rejects an unknown conversation id (401)', ghostRead.status === 401, `status ${ghostRead.status}`);
+
+  // --- The chat gate's second credential: a better-auth session cookie -----
+  // Bearer FIRST, cookie only when there is no bearer. The cookie is validated
+  // upstream by GET /session and exchanged for a JWT by POST /session/token, so
+  // a cookie session is indistinguishable downstream from a bearer one: same
+  // verdict shape, same tenant-prefixed id, same ownership gate. Requires a
+  // live cookie, which nothing here can mint.
+  if (SESSION_COOKIE) {
+    const cookieHeader = { 'x-better-auth-cookie': SESSION_COOKIE };
+    const realCookieHeader = { cookie: `__Secure-better-auth.session_token=${SESSION_COOKIE}` };
+
+    const cookieIngest = await createSession(B_URL, { agentName: bundle.agentName }, cookieHeader);
+    check('cookie', 'session create accepts the x-better-auth-cookie header (200)', cookieIngest.status === 200, `status ${cookieIngest.status} ${JSON.stringify(cookieIngest.json?.error ?? '')}`);
+    const cookieUser = cookieIngest.json?.user;
+    check(
+      'cookie',
+      'the verified user comes back with org + sub, like the bearer path',
+      typeof cookieUser?.org === 'string' && typeof cookieUser?.sub === 'string',
+      JSON.stringify(cookieUser),
+    );
+    check(
+      'cookie',
+      'the minted id carries the COOKIE session\'s tenant, not the token\'s',
+      typeof cookieIngest.id === 'string' && cookieIngest.id.startsWith(sessionTenantPrefix(cookieUser?.org ?? '', cookieUser?.sub ?? '')),
+      cookieIngest.id,
+    );
+
+    const cookieChat = await uget(B_URL, `/agents/main/${cookieIngest.id}?view=history`, cookieHeader);
+    check('cookie', 'the same cookie opens the conversation it created (200)', cookieChat.status === 200, `status ${cookieChat.status}`);
+
+    // The documented server-to-server form must work too, and must resolve to
+    // the SAME user — otherwise the two transports are two identities.
+    const realCookieIngest = await createSession(B_URL, { agentName: bundle.agentName }, realCookieHeader);
+    check('cookie', 'session create accepts a real Cookie header (200)', realCookieIngest.status === 200, `status ${realCookieIngest.status}`);
+    check(
+      'cookie',
+      'both cookie transports resolve to one identity',
+      realCookieIngest.json?.user?.sub === cookieUser?.sub && realCookieIngest.json?.user?.org === cookieUser?.org,
+    );
+
+    // A cookie is a credential, not a bypass.
+    const junkCookie = await createSession(B_URL, { agentName: bundle.agentName }, { 'x-better-auth-cookie': 'not.a-real-session' });
+    check('cookie', 'an invalid cookie is rejected (401)', junkCookie.status === 401, `status ${junkCookie.status}`);
+
+    // Priority: a VALID cookie beside an INVALID bearer must still 401 — if the
+    // cookie were consulted first (or as a fallback after the bearer failed),
+    // this would succeed and the documented precedence would be a lie.
+    const both = await createSession(B_URL, { agentName: bundle.agentName }, { ...cookieHeader, authorization: 'Bearer nope:nope' });
+    check('cookie', 'the bearer wins when both are sent (invalid bearer + valid cookie -> 401)', both.status === 401, `status ${both.status}`);
+
+    // The cookie's own conversation is not open to a stranger's credential.
+    const bearerOnCookieSession = await uget(B_URL, `/agents/main/${cookieIngest.id}?view=history`);
+    check(
+      'cookie',
+      'the ownership gate still applies to a cookie-created session',
+      bearerOnCookieSession.status === 200 || bearerOnCookieSession.status === 403,
+      `status ${bearerOnCookieSession.status} (200 only if the token and the cookie are the same user)`,
+    );
+
+    await del(B_URL, cookieIngest.id);
+    await del(B_URL, realCookieIngest.id);
+  } else {
+    console.log('NOTE  [cookie] skipped — set SEMANTIUS_SESSION_COOKIE=<value> to exercise better-auth cookie auth');
+  }
 
   // --- Sandbox credentials: the CLI acts AS the session user ---------------
   // The container gets no API key at all: SEMANTIUS_ORG comes from the token's

@@ -101,6 +101,14 @@ type Env = {
   CLOUDFLARE_ACCOUNT_ID?: string;
   /** Analytics-read token for GET /admin/costs. Secret; absent = costs disabled. */
   CLOUDFLARE_API_TOKEN?: string;
+  /**
+   * Server-to-server key for POST /session/token — trades a better-auth session
+   * cookie for the Semantius JWT the sandbox acts with. Secret; absent = the
+   * cookie half of the chat gate answers 503 (bearers keep working).
+   */
+  JWT_EXCHANGE_API_KEY?: string;
+  /** Host serving /session and /session/token. A var; defaults to api.semantius.cloud. */
+  SEMANTIUS_SESSION_BASE_URL?: string;
 };
 
 /** What `userTokenGuard` puts on the context once it has verified the bearer. */
@@ -258,11 +266,12 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
   });
 });
 
-// --- USER SURFACE (the caller's own Semantius token) ----------------------
+// --- USER SURFACE (the caller's own Semantius credential) -----------------
 // Creating a session is the user's own act, done from their browser, so it
-// takes the user bearer — not the admin key. The token also supplies the org
-// and the JWT the sandbox will act with, so nothing credential-shaped needs to
-// travel in the body any more.
+// takes the user's own credential — not the admin key. Either a Semantius
+// bearer (`<org>:<jwt>`) or a better-auth session cookie: the guard resolves
+// both to one verdict, which supplies the org and the JWT the sandbox will act
+// with, so nothing credential-shaped needs to travel in the body any more.
 app.post('/sessions/agent', userTokenGuard(), async (c) => {
   let agentName: string;
   let sessionContext: Record<string, unknown> | undefined;
@@ -295,11 +304,13 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   }
 
   // The session's owner and its Semantius credential both come from the
-  // verified bearer, never from the body: `user` is what the chat gate matches
-  // every later request against (so only this user can open this session), and
-  // the BARE jwt beside an explicit org is what egress injects into the
-  // sandbox's Semantius calls. `semantius_org` / `semantius_user` are the
-  // token's org and its `sub` — WHICH tenant this session acts on and AS WHOM,
+  // verified credential, never from the body: `user` is what the chat gate
+  // matches every later request against (so only this user can open this
+  // session), and the BARE jwt beside an explicit org is what egress injects
+  // into the sandbox's Semantius calls. On the cookie path that jwt is the one
+  // /session/token minted, which is exactly why the exchange happens at all —
+  // a cookie is useless to the sandbox. `semantius_org` / `semantius_user` are
+  // the verdict's org and its `sub` — WHICH tenant this session acts on and AS WHOM,
   // in the same naming as the CLI env pair, so nothing about the tenant is ever
   // invented locally. Reserved keys are stripped from whatever the client sent,
   // so no caller can hand itself an identity.
@@ -467,18 +478,22 @@ app.delete('/sessions/:id', apiKeyGuard(), async (c) => {
 });
 
 // Ownership gate for the chat surface. `userTokenGuard` (registered with it
-// below) has already verified the bearer on THIS request; what is left is to
-// prove the conversation belongs to that user:
+// below) has already verified the caller's credential on THIS request —  a
+// Semantius bearer or a better-auth session cookie, indistinguishable by the
+// time it lands here; what is left is to prove the conversation belongs to that
+// user:
 //   - no session record, or one without a `session_context.user` -> 401;
 //   - a record owned by somebody else -> 403. Without this check any holder of
-//     a valid token of their own could open a stranger's conversation just by
-//     knowing its id.
+//     a valid credential of their own could open a stranger's conversation just
+//     by knowing its id.
 //
 // A successful request also refreshes `session_context.semantius_jwt` whenever
-// the presented token differs from the stored one — that field is what egress
+// the verified JWT differs from the stored one — that field is what egress
 // injects into the sandbox's Semantius calls, so this is how a long
 // conversation's sandbox credential stays live (tokens last ~1 h, sessions
-// 24 h). Write-on-change only.
+// 24 h). Write-on-change only, which is also why the cookie path CACHES its
+// exchanged JWT: a freshly minted token on every request would rewrite the
+// record on every request.
 //
 // HTTP-only by construction: GitHub-issue conversations reach the same agent
 // through in-process dispatch (channels/github.ts), never through this route,

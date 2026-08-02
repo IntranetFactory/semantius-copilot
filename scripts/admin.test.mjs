@@ -48,6 +48,11 @@ import {
   putContainerPointer,
   resolveEgressPolicy,
 } from '../core/src/egress.js';
+import {
+  extractSessionCookie,
+  verifySemantiusCookie,
+  SESSION_JWT_KEY_PREFIX,
+} from '../core/src/identity.js';
 
 let failures = 0;
 let total = 0;
@@ -422,6 +427,152 @@ await (async () => {
   const query = containerCostQuery({ accountTag: 'acct', start: window.start, end: window.end });
   check('the query groups by the session LABEL (no containerName dimension exists)', query.query.includes('label(name: $label)'));
   check('the query defaults to the `session` label', query.variables.label === 'session');
+})();
+
+// --- better-auth session cookie (core/src/identity.js) ---------------------
+// The chat gate's second credential. Offline: the two upstream endpoints are a
+// fake fetch, so what is asserted here is OUR contract — which header forms are
+// accepted, what travels upstream, and that the exchange is cached by the
+// cookie's HASH rather than repeated (and rewritten onto the session record) on
+// every chat request.
+await (async () => {
+  console.log('\n== better-auth session cookie ==');
+
+  const COOKIE = 'sess-token-abc.sig-def';
+  const JWT = 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1c2VyMyJ9.c2ln';
+  const JWT2 = 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1c2VyMyIsIm4iOjJ9.c2ln';
+
+  // --- extractSessionCookie ---
+  check(
+    'the custom header is accepted (the only form a browser can send)',
+    extractSessionCookie(new Headers({ 'x-better-auth-cookie': COOKIE })) === COOKIE,
+  );
+  check(
+    'a real Cookie header is accepted — __Secure- name (HTTPS)',
+    extractSessionCookie(new Headers({ cookie: `__Secure-better-auth.session_token=${COOKIE}` })) === COOKIE,
+  );
+  check(
+    'a real Cookie header is accepted — bare name (plain HTTP)',
+    extractSessionCookie(new Headers({ cookie: `better-auth.session_token=${COOKIE}` })) === COOKIE,
+  );
+  check(
+    'unrelated cookies in the jar are skipped, not returned',
+    extractSessionCookie(new Headers({ cookie: `theme=dark; better-auth.session_token=${COOKIE}; other=1` })) === COOKIE,
+  );
+  check(
+    'the custom header wins over a Cookie header',
+    extractSessionCookie(new Headers({ 'x-better-auth-cookie': COOKIE, cookie: 'better-auth.session_token=stale' })) ===
+      COOKIE,
+  );
+  check('no better-auth cookie -> null', extractSessionCookie(new Headers({ cookie: 'theme=dark' })) === null);
+  check('no cookie headers at all -> null', extractSessionCookie(new Headers()) === null);
+
+  /** Fake /session + /session/token, recording every call. */
+  function fakeUpstream({ org = 'tests', sessionStatus = 200, jwt = JWT, tokenBody } = {}) {
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      calls.push({ url, init });
+      if (url.endsWith('/session')) {
+        if (sessionStatus !== 200) return new Response('no session', { status: sessionStatus });
+        return new Response(
+          JSON.stringify({
+            session: { id: 'sess1', expiresAt: '2026-08-02T00:00:00Z' },
+            user: { org, sub: 'user3', name: 'Wei Chen', email: 'admin@test.com', extra: 'dropped' },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify(tokenBody ?? { token: jwt }), { status: 200 });
+    };
+    return { calls, fetchImpl };
+  }
+
+  const options = (kv) => ({ baseUrl: 'https://api.semantius.cloud', exchangeKey: 'xk', kv });
+
+  // --- happy path ---
+  const kv = fakeKv();
+  const up = fakeUpstream();
+  const verdict = await verifySemantiusCookie(COOKIE, options(kv), up.fetchImpl);
+  check('a valid cookie verifies', verdict.ok === true, verdict.error ?? '');
+  check('the org comes from /session user.org', verdict.org === 'tests', String(verdict.org));
+  check('the jwt is the exchanged one', verdict.jwt === JWT);
+  check(
+    'the verdict user is the projected claim set, same as the bearer path',
+    verdict.user?.sub === 'user3' &&
+      verdict.user?.org === 'tests' &&
+      verdict.user?.name === 'Wei Chen' &&
+      verdict.user?.email === 'admin@test.com' &&
+      typeof verdict.user?.verifiedAt === 'string' &&
+      verdict.user?.extra === undefined,
+    JSON.stringify(verdict.user),
+  );
+  check('both endpoints are called, /session first', up.calls.length === 2 && up.calls[0].url.endsWith('/session') && up.calls[1].url.endsWith('/session/token'));
+  check(
+    'the cookie is forwarded to /session as a rebuilt Cookie header',
+    up.calls[0].init.headers.cookie === `__Secure-better-auth.session_token=${COOKIE}`,
+    up.calls[0].init.headers.cookie,
+  );
+  check(
+    'the exchange sends the api key and the cookie VALUE in the body',
+    up.calls[1].init.headers['x-jwt-exchange-api-key'] === 'xk' && JSON.parse(up.calls[1].init.body).sessionCookie === COOKIE,
+  );
+
+  const cacheKeys = [...kv._map.keys()].filter((k) => k.startsWith(SESSION_JWT_KEY_PREFIX));
+  check('the exchange is cached under one authjwt: key', cacheKeys.length === 1, cacheKeys.join(','));
+  check(
+    'the cache key is the cookie HASH — the cookie itself is never stored',
+    cacheKeys[0].length === SESSION_JWT_KEY_PREFIX.length + 64 &&
+      !cacheKeys[0].includes(COOKIE) &&
+      !JSON.stringify([...kv._map.values()]).includes(COOKIE),
+    cacheKeys[0],
+  );
+
+  // --- cache hit: /session still runs (it is the authn), the exchange does not ---
+  const warm = fakeUpstream({ jwt: JWT2 });
+  const second = await verifySemantiusCookie(COOKIE, options(kv), warm.fetchImpl);
+  check('a cached exchange is reused', second.ok === true && second.jwt === JWT, second.jwt);
+  check(
+    'a cache hit still validates the cookie but skips the exchange',
+    warm.calls.length === 1 && warm.calls[0].url.endsWith('/session'),
+    warm.calls.map((c) => c.url).join(','),
+  );
+
+  // --- switching active organization must not reuse the other tenant's token ---
+  const switched = fakeUpstream({ org: 'other', jwt: JWT2 });
+  const third = await verifySemantiusCookie(COOKIE, options(kv), switched.fetchImpl);
+  check(
+    'a cached token for a different org is discarded and re-exchanged',
+    third.ok === true && third.org === 'other' && third.jwt === JWT2 && switched.calls.length === 2,
+    `${third.org}/${switched.calls.length}`,
+  );
+
+  // --- rejections ---
+  const bad = fakeUpstream({ sessionStatus: 401 });
+  const rejected = await verifySemantiusCookie(COOKIE, options(fakeKv()), bad.fetchImpl);
+  check('an invalid session is rejected with the issuer status', rejected.ok === false && rejected.status === 401);
+  check('a rejected session never reaches the exchange', bad.calls.length === 1);
+
+  const unused = fakeUpstream();
+  const malformed = await verifySemantiusCookie('has spaces; and=semicolons', options(fakeKv()), unused.fetchImpl);
+  check('a malformed cookie is rejected without any network call', malformed.ok === false && unused.calls.length === 0);
+
+  const noKey = await verifySemantiusCookie(COOKIE, { kv: fakeKv() }, fakeUpstream().fetchImpl);
+  check('no exchange key bound server-side -> rejected, never open', noKey.ok === false);
+
+  const noOrg = fakeUpstream({ org: '' });
+  const orgless = await verifySemantiusCookie(COOKIE, options(fakeKv()), noOrg.fetchImpl);
+  check('a session with no active organization is rejected', orgless.ok === false && noOrg.calls.length === 1);
+
+  const junk = fakeUpstream({ tokenBody: { token: 'not-a-jwt' } });
+  const junkVerdict = await verifySemantiusCookie(COOKIE, options(fakeKv()), junk.fetchImpl);
+  check('an exchange that returns a non-JWS is rejected', junkVerdict.ok === false);
+
+  const aliased = fakeUpstream({ tokenBody: { access_token: JWT } });
+  const aliasVerdict = await verifySemantiusCookie(COOKIE, options(fakeKv()), aliased.fetchImpl);
+  check('the exchange response field may be token | access_token | jwt', aliasVerdict.ok === true && aliasVerdict.jwt === JWT);
+
+  const kvless = await verifySemantiusCookie(COOKIE, { exchangeKey: 'xk' }, fakeUpstream().fetchImpl);
+  check('no KV bound -> still verifies, just uncached', kvless.ok === true && kvless.jwt === JWT);
 })();
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);

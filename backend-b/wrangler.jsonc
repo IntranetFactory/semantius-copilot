@@ -53,6 +53,15 @@
     // ARIZE_SPACE_ID + ARIZE_API_KEY are secrets (.dev.vars locally,
     // wrangler secret put when deployed). No secrets = no export.
     "ARIZE_PROJECT_NAME": "hoth-poc",
+    // Better-auth session host for the chat gate's cookie path (core/src/
+    // identity.js): GET /session validates a forwarded session cookie, POST
+    // /session/token trades it for the Semantius JWT the sandbox acts with.
+    // Any org's host validates a session created by any app sharing the same
+    // BETTER_AUTH_SECRET and database, so ONE host serves every tenant — the
+    // tenant comes from the session's active organization, not from this URL.
+    // The exchange key is the JWT_EXCHANGE_API_KEY secret (.dev.vars locally,
+    // wrangler secret put when deployed). No key = cookie auth answers 503.
+    "SEMANTIUS_SESSION_BASE_URL": "https://api.semantius.cloud",
     // Langfuse tracing (src/otel.ts): OTLP endpoint region. The project is
     // selected by the LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY secrets
     // (.dev.vars locally, wrangler secret put when deployed). No keys = no export.
