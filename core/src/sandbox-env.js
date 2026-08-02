@@ -16,9 +16,10 @@
  * The image bakes the sentinel as a floor (see the Dockerfile) so a container
  * that somehow runs before this call holds a placeholder rather than nothing;
  * this function is what makes the pair correct for the session. Applied at two
- * points, exactly like skill provisioning: the ingest route (pre-warm) and the
- * agent's start callback (self-heal, since a cold container starts from the
- * image's environment again).
+ * points, exactly like skill provisioning: the agent's lazy boot path
+ * (backend-b/src/lazy-env.ts provisioning, right after skill extraction) and
+ * the admin skill-check route's replay (self-heal either way, since a cold
+ * container starts from the image's environment again).
  *
  * @typedef {Object} SandboxEnvLike
  * @property {(envVars: Record<string, string | undefined>) => Promise<unknown>} setEnvVars

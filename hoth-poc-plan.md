@@ -278,8 +278,12 @@ agent reached the container: image-baked + build-time meta (A) vs runtime-recons
 - **Reconstruct in 2 RPCs, not N:** write the bundle as one base64-tar blob (`writeFile`, 1 RPC) then
   `env.exec('base64 -d … | tar -xz -C /workspace/.agents/skills')` (1 RPC). Flue/SDK have **no batch
   write**, so per-file writes are N round-trips on every cold container (§15 P2).
-- **Pre-warm:** the ingest POST — which the frontend awaits before chatting (§10) — eagerly boots the
-  container and reconstructs, so the 1-3 s cold boot overlaps the user typing (§15 P1).
+- **Lazy boot (supersedes the §15 P1 pre-warm):** ingest is storage-only, and the frontend defers it to
+  the first message — so there is no typing window left to overlap a boot with. Instead the agent wraps
+  its SessionEnv (`backend-b/src/lazy-env.ts`): discovery + skills-tree reads are answered from the KV
+  bundle (byte-identical to the disk extraction), and the first op that needs a live machine
+  (exec/write/out-of-tree read) boots the container and reconstructs right there. Chat-only turns never
+  start a container; the 1-3 s boot lands inside the first shell-using tool call.
 - **Bundle validation (untrusted input)**, server-side before reconstruction: reject `..`, absolute,
   backslashes, symlinks, resolve-outside-dir; size/count caps. Flue/adapters validate nothing.
 - Any dir cleanup uses **`env.exec('rm -rf …')`** (the CF SandboxApi `rm()` throws on `recursive`/`force`,
@@ -322,8 +326,10 @@ everything is the `/agents/main` mount on backend B):
   `FlueClient` per session (`useConversationClient`), plus an agent dropdown whose list is the
   bundler output glob-imported from `frontend/src/generated/agents/*.json` — re-running
   `pnpm bundle` after adding an `agents/<name>/` folder adds it with no code change.
-  **New session** → `POST /sessions/agent` with the selected agent NAME; the backend mints the
-  `sessionId` (the page generates no id of its own), then open chat. Render `messages[].parts`.
+  **New session** opens a zero-cost draft (no request); the FIRST message sent fires
+  `POST /sessions/agent` with the selected agent NAME — the backend mints the `sessionId` (the page
+  generates no id of its own) — and the message is then delivered to the new session. Render
+  `messages[].parts`.
 - **`/copilot` — the same workbench (`copilot.html` → `CopilotApp.tsx`).** Authenticated by a
   better-auth session cookie value instead (fragment `#cookie=…&session=…`), sent in the
   `x-better-auth-cookie` header because a browser cannot set `Cookie` cross-origin. Both user pages
@@ -452,16 +458,19 @@ comparison by driving the deterministic core directly. Grouped by the five contr
 
 ## 15. Performance & cost
 
-- **P1 — Cold start (first-message latency).** A new session, or one idle >10 min, pays container boot
-  (~1-3 s typical, seconds-to-tens on the tail) + B's reconstruction + the discovery pass. **Mitigate:
-  pre-warm in the awaited ingest POST** (§8) so boot overlaps the user typing; raise `sleepAfter` for
-  active sessions (cost tradeoff); show a "preparing" state. Warm turns are fine.
+- **P1 — Cold start (first-SKILL latency), resolved by lazy boot (§8).** The original mitigation —
+  pre-warm inside the awaited ingest POST so boot overlaps typing — died with lazy session creation
+  (§10: ingest now fires at first-message time, no typing window). Superseding decision (2026-08-02):
+  boot only when a turn actually needs the machine. The lazy SessionEnv wrapper serves discovery and
+  SKILL.md reads from the KV bundle, so chat-only turns pay zero container time; the ~1-3 s boot (+2-RPC
+  reconstruction) happens inside the first exec/write, under the chat UI's busy indicator. Sessions
+  idle >10 min re-pay it on their next exec — same absent→write path.
 - **P2 — Reconstruction:** 2 RPCs via base64-tar + `exec` unpack (§8), not N per-file writes — there is
   no batch-write API.
-- **P3 — Per-turn discovery tax:** Flue re-runs discovery every message (~8 container round-trips, 3 of
-  them `exec` spawns; unconditional at `client.ts:269`, not cacheable as written). Sub-second warm for
-  one small skill → acceptable for the POC; an upstream memoization (keyed on skills-dir mtime) is a
-  later Flue enhancement, not POC work.
+- **P3 — Per-turn discovery tax: eliminated.** Flue still re-runs discovery every message
+  (unconditional per submission), but the lazy wrapper answers it from the KV bundle — 0 container
+  round-trips, warm or cold (was ~8, 3 of them `exec` spawns). The upstream memoization idea is moot
+  for this app.
 - **P4 — Outbound KV read:** `KV.get(containerId)` fires once per script egress, off the chat critical
   path. Keep the token in KV/DO, never in container env.
 - **P5 — Concurrency/cost:** account limits are generous (6 TiB mem / 1,500 vCPU / 30 TB disk

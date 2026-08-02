@@ -391,11 +391,15 @@ async function main() {
   );
 
   // --- C5: fail-closed egress — a session whose egress policy is gone -----
-  // Ingest pre-warms the container (skill files land on its disk), DELETE then
-  // removes the egress policy (pointer + record) + bundle. The warm container
-  // still holds the files, so the skill RUNS — but its egress must be
-  // rejected (no policy).
+  // Creation is storage-only now (no pre-warm), so land the skill files on
+  // the container's disk explicitly via the skill-check route (the same
+  // absent→write provisioning a real turn runs lazily); DELETE then removes
+  // the egress policy (pointer + record) + bundle. The warm container still
+  // holds the files, so the skill RUNS — but its egress must be rejected (no
+  // policy). Without the warm-up this check would pass vacuously: no files,
+  // non-zero exit, nothing about egress proven.
   const orphanId = (await createSession(B_URL, { agentName: bundle.agentName })).id;
+  await post(B_URL, `/sessions/${orphanId}/skill-check`, { op: 'count-skill-files' });
   await del(B_URL, orphanId); // removes egress policy + bundle snapshot
   const orphanRun = await post(B_URL, `/sessions/${orphanId}/skill-check`, { ...FIXED, debugEcho: true });
   const orphanOut = orphanRun.json.stdout ?? '';

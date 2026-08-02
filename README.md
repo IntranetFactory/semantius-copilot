@@ -131,10 +131,17 @@ pnpm deploy:agent --all                                 # every agents/ folder
 
 Skill delivery has TWO legs, and both are required:
 
-- **Files on disk** — `provisionAgentSkills` extracts the bundle into
-  `/workspace/.agents/skills/` (eagerly at ingest, self-healed on every delivered
-  message). This makes skill resources actually runnable (bun/node scripts, reference
-  files) and feeds Flue's workspace-skill discovery when that works.
+- **Files "on disk"** — served by the lazy SessionEnv wrapper
+  (`backend-b/src/lazy-env.ts`): until the container has booted, every read
+  under `/workspace/.agents/skills/` (Flue's workspace discovery, the model's
+  SKILL.md `read`s) is answered **from the KV bundle** — byte-identical to what
+  `provisionAgentSkills` extracts, at zero container cost. The first operation
+  that genuinely needs a live machine (`bash`/`grep`/`glob` exec, a write, a
+  read outside the skills tree) boots the container, extracts the bundle onto
+  the real disk and applies the Semantius env, then forwards; from then on the
+  same paths are served from disk. This makes skill resources actually runnable
+  (bun/node scripts, reference files) while chat-only turns never start a
+  container.
 - **Explicit catalog** — the bundle's SKILL.md frontmatter is parsed into
   `{name, description}` entries (`skillCatalogFromBundle`, `core/src/skill-catalog.js`)
   that ride the creation seed (frontend `AGENT_SEEDS`) and the stored agent meta;
@@ -148,14 +155,16 @@ composed system prompts with an EMPTY catalog (verified 2026-07-23 on the
 2.x nightly: the Braintrust-logged system prompt had no skills section while the
 deterministic skill-check proved the same container held all 70 files, and the SDK
 `exists()` probe — surfaced as `sdkExists` in the skill-check response — returned
-true when tested moments later). Catalog
+true when tested moments later; the bundle view now removes the container from
+that discovery path entirely). Catalog
 descriptions are truncated to 1024 chars (Flue's SkillDefinition cap). When
-workspace discovery does find the disk copy, the discovered skill wins the
-name-merge over the mounted definition — same content either way. That
+workspace discovery finds the skills (it reads the same bundle view), the
+discovered skill wins the name-merge over the mounted definition — same
+content either way. That
 discovered-wins merge is restored by our `@flue/runtime` patch (see
 Prerequisites): the stock nightly THROWS on the name conflict instead, and
-because the ingest pre-warm provisions the files before the first send,
-discovery often does see them — every submission of such a session then
+when discovery sees the files — which with the bundle view it reliably does —
+every submission of such a session then
 failed with a generic `internal_error` (root-caused via `wrangler tail`
 2026-07-26; backend B was undriveable until the patch).
 
@@ -383,6 +392,11 @@ provisioned and skill-checked but never chatted with. Consequences worth knowing
   (`channels/github.ts`), never through this HTTP route, so the webhook path is unaffected.
 - Both user pages require the credential box before **New session** is enabled, and print
   the resolved user (`Wei Chen <admin@test.com> @tests`) in the status line.
+- **New session is a zero-cost draft**: the button makes no request. The
+  `POST /sessions/agent` fires when the user sends their first message (the draft submit
+  creates the session, then delivers that message to it), so a session that is opened but
+  never typed into creates no KV records and no container. Session ids therefore appear
+  in the status line only after the first send.
 
 `pnpm mint-token` (`scripts/mint-token.mjs`) mints a token to paste there: it exchanges a
 Semantius API key for a user JWT via the `client_credentials` grant against
@@ -512,12 +526,13 @@ Three pieces make that work:
    would point every session at one tenant.
 2. **Per-session container environment.** `provisionSemantiusEnv`
    (`core/src/sandbox-env.js`) calls the sandbox SDK's `setEnvVars` with
-   `SEMANTIUS_ORG=<the token's org>` and `SEMANTIUS_JWT=<sentinel>`. Applied at ingest
-   (pre-warm) and re-applied by the agent's start callback on every message, because a
-   cold container comes back with only the image's environment — the same absent→write
-   self-heal shape as skill provisioning. A session with no verified user gets no
-   Semantius environment at all, so its CLI is unconfigured rather than pointed at
-   someone else's tenant.
+   `SEMANTIUS_ORG=<the token's org>` and `SEMANTIUS_JWT=<sentinel>`. Applied by the lazy
+   SessionEnv wrapper right after skill extraction whenever a container boots
+   (`backend-b/src/lazy-env.ts` → `provisionWorkspace` in `agents/main.ts`), and by the
+   admin skill-check route's replay — a cold container comes back with only the image's
+   environment, so provisioning always travels with the boot. A session with no verified
+   user gets no Semantius environment at all, so its CLI is unconfigured rather than
+   pointed at someone else's tenant.
 3. **The swap at egress.** The catch-all outbound handler resolves
    `session_context.semantius_jwt` per invocation and hands it to `brokerEgress` as the
    secret: every outbound header containing the sentinel gets it replaced with that JWT,

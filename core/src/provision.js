@@ -25,9 +25,10 @@ export const SKILLS_DIR = '/workspace/.agents/skills';
  * so its presence implies the whole agent was materialized for this id.
  * Zero-skill agents are valid and cost 0 RPCs.
  *
- * Safe to call from both the ingest route (pre-warm, plan §8/P1) and the
- * agent initializer (cold-container self-heal, plan §6) — same-id calls
- * converge on the same immutable content.
+ * Safe to call from both the agent's lazy SessionEnv wrapper (first
+ * container-needing op, backend-b/src/lazy-env.ts) and the admin skill-check
+ * route (deterministic cold-recovery replay) — same-id calls converge on the
+ * same immutable content.
  *
  * @param {SandboxLike} sandbox
  * @param {import('./agent.js').AgentBundle} bundle already-validated bundle

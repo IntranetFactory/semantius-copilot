@@ -32,6 +32,11 @@
   "kv_namespaces": [
     { "binding": "STORE", "id": "6799aa42675b47148d246feda057a0e5" }
   ],
+  // Workers Logs (dashboard "Logs" tab + wrangler tail): needed to attribute
+  // container boots — lazy-env.ts logs which operation triggered a boot.
+  "observability": {
+    "enabled": true
+  },
   // Workers AI binding — required when LLM_PROVIDER=cloudflare (no API key needed).
   "ai": { "binding": "AI" },
   "vars": {

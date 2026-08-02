@@ -42,14 +42,16 @@
  *      (`session:<id>`: meta + egress_secrets/whitelist + optional `sessionContext` —
  *      e.g. semantius_jwt, injected at egress, never delivered to the agent)
  *      plus the `container:<containerId>` pointer the outbound handler
- *      follows at egress,
- *  (d) pre-warms: eagerly boots the container and reconstructs the skills so
- *      the 1-3 s cold boot overlaps the user typing (plan §15 P1).
+ *      follows at egress.
  *
- * The route STORES the snapshot — reconstruction also lives in the
- * initializer, which self-heals every cold container. A snapshot is immutable
- * per id (plan §6/§13 C5), which minted ids give by construction: every create
- * is a fresh id, so nothing can be overwritten.
+ * The route ONLY stores: it never touches the container. The container boots
+ * lazily at the first sandbox operation that genuinely needs it (the agent's
+ * lazy SessionEnv wrapper provisions-then-forwards; see agents/main.ts and
+ * src/lazy-env.ts) — the old eager pre-warm (plan §15 P1) is gone
+ * because sessions are now created at first-message time, so there is no
+ * typing window left to overlap the boot with. A snapshot is immutable per id
+ * (plan §6/§13 C5), which minted ids give by construction: every create is a
+ * fresh id, so nothing can be overwritten.
  */
 import './braintrust';
 import './otel';
@@ -393,14 +395,10 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   });
   await putContainerPointer(c.env.STORE, containerId, id);
 
-  // Pre-warm + eager reconstruction (plan §8/§15 P1). The initializer will
-  // find the dirs present and no-op; on a later cold container it re-creates.
-  const sandbox = getSandbox(namespace, id);
-  await provisionAgentSkills(sandbox, bundle);
-  // Point the sandbox's semantius CLI at THIS user's org, with the sentinel
-  // standing in for their JWT (swapped at egress). Same self-healing shape as
-  // the skills: re-applied by the agent's start callback on a cold container.
-  await provisionSemantiusEnv(sandbox, org);
+  // NO pre-warm: creation is storage-only. The container boots lazily at the
+  // first sandbox operation that needs it (the agent's lazy SessionEnv
+  // wrapper provisions skills + Semantius env then), so a session whose user
+  // never exercises a skill never starts a container at all.
 
   // Deliberately minimal: no internals (skills, containerId, provisioning
   // outcome) — those live in the data browser and the /skill-check oracle.
@@ -420,10 +418,11 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
 
 // Deterministic skill-check (plan §13): NOT arbitrary exec — the command is
 // built server-side from a bounded op + validated params. Before running it
-// this replays EXACTLY the agent initializer's cold-container path — read
-// stored bundle, absent→write reconstruction — so cold-recovery is testable
-// without an LLM turn. Admin surface: it execs in the container, so it takes
-// the deployment key, never a user token.
+// this replays EXACTLY the lazy provisioning a real turn performs at its
+// first container-needing op — read stored bundle, absent→write
+// reconstruction, Semantius env — so cold-recovery is testable without an
+// LLM turn. Admin surface: it execs in the container, so it takes the
+// deployment key, never a user token.
 app.post('/sessions/:id/skill-check', apiKeyGuard(), async (c) => {
   const id = c.req.param('id');
   if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
@@ -443,6 +442,14 @@ app.post('/sessions/:id/skill-check', apiKeyGuard(), async (c) => {
   if (raw) {
     const bundle = validateAgentBundle(raw);
     reconstructed = (await provisionAgentSkills(sandbox, bundle)).reconstructed;
+    // Semantius-env heal, exactly like the lazy provisioning a real turn runs:
+    // a cold container starts from the image's baked sentinel, so re-point the
+    // CLI at THIS session's org before the check execs. Without this the
+    // `semantius-env` op would only pass on containers some real turn already
+    // provisioned — the check must be self-sufficient.
+    const record = await readSession(c.env.STORE, id);
+    const org = (record?.session_context as { semantius_org?: unknown } | undefined)?.semantius_org;
+    await provisionSemantiusEnv(sandbox, typeof org === 'string' ? org : undefined);
     // Mirror the initializer's egress-policy self-heal so the check exercises
     // the same policy a real turn would (deny-all stays deny-all: []; no
     // bearer is ever minted here, matching the old whitelist-only heal).

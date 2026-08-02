@@ -5,11 +5,15 @@
  * (instructions + model + skills) POSTed at session creation and stored under
  * `agent:<sessionId>`. This one Flue agent hosts them all.
  *
- * All per-session provisioning happens INSIDE the useAgentStart callback,
- * which Flue awaits on every delivered message before the model runs (and
- * before init-time skill discovery reads the sandbox) — so B self-heals on
- * every cold container. The ingest route only STORES the bundle; this is the
- * reconstruction site.
+ * Per-session provisioning is LAZY (lazy-env.ts): Flue's init-time workspace
+ * discovery runs at the start of every submission BEFORE the start hook, and
+ * on @cloudflare/sandbox its first RPC would boot the container — so instead
+ * of provisioning eagerly, the sandbox env is wrapped. Discovery and SKILL.md
+ * reads are answered from the KV bundle (byte-identical to the disk copy);
+ * the container boots at the first exec/write, which provisions skills +
+ * Semantius env right there (the per-submission cold-container self-heal).
+ * useAgentStart keeps only the KV-side work: meta migration and the egress
+ * policy. The ingest route only STORES the bundle.
  *
  * A bundle is immutable per session id, so reconstruction is always
  * absent→write, never overwrite (plan §6/§8).
@@ -51,6 +55,7 @@ import {
 } from '@hoth/core';
 import * as v from 'valibot';
 import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '../channels/github';
+import { lazySessionEnv } from '../lazy-env';
 import { agentModelSpecifier } from '../llm';
 import { drainLlmCalls } from '../usage';
 
@@ -258,15 +263,41 @@ export function Main({ id }: AgentProps) {
     };
   });
   const namespace = (env as unknown as Record<string, DurableObjectNamespace>)[active?.binding ?? 'Sandbox'];
-  useSandbox(cloudflareSandbox(getSandbox(namespace, id)), { cwd: '/workspace' });
+  // Lazy boot (see lazy-env.ts): the wrapper serves discovery + skills-tree
+  // reads from the KV bundle and only boots the container at the first
+  // exec/write — which then provisions skills + Semantius env (absent→write,
+  // no-op on a warm container). getSandbox() itself issues no RPC, so
+  // constructing the factory here costs nothing.
+  const loadBundle = async () => {
+    const raw = await STORE.get(bundleKey);
+    return raw ? (validateAgentBundle(raw) as { skills?: Record<string, Record<string, string>> }) : null;
+  };
+  const provisionWorkspace = async () => {
+    const sandbox = getSandbox(namespace, id);
+    const raw = await STORE.get(bundleKey);
+    if (raw) await provisionAgentSkills(sandbox, validateAgentBundle(raw));
+    // Same env heal as before: a cold container starts from the image's baked
+    // sentinel, so re-point the CLI at THIS session's org (chat sessions
+    // always have one; channel conversations no-op). Order matters: the
+    // skills exec above created the container session that setEnvVars needs.
+    const record = await readSession(STORE, id);
+    const org = (record?.session_context as { semantius_org?: unknown } | undefined)?.semantius_org;
+    await provisionSemantiusEnv(sandbox, typeof org === 'string' ? org : undefined);
+  };
+  const factory = cloudflareSandbox(getSandbox(namespace, id));
+  useSandbox(
+    { createSessionEnv: async (opts) => lazySessionEnv(await factory.createSessionEnv(opts), loadBundle, provisionWorkspace) },
+    { cwd: '/workspace' },
+  );
 
   // Explicit catalog mounting — the second leg of skill delivery (see
   // AgentMeta.skillCatalog). The definition's instructions POINT AT the
-  // on-disk SKILL.md rather than inlining it: the per-message self-heal in
-  // useAgentStart guarantees the files exist by the time tools run, keeps
-  // this state small, and keeps every relative reference inside the skill
-  // resolvable from a real directory. When workspace discovery ALSO finds
-  // the disk copy, the discovered skill wins the name merge — same content.
+  // on-disk SKILL.md rather than inlining it: the lazy env serves that read
+  // from the KV bundle before the container exists and from disk after (same
+  // bytes), keeps this state small, and keeps every relative reference inside
+  // the skill resolvable from a real directory. When workspace discovery ALSO
+  // finds the disk copy (it reads the same bundle view), the discovered skill
+  // wins the name merge — same content.
   for (const skill of active?.skillCatalog ?? []) {
     useSkill({
       name: skill.name,
@@ -302,19 +333,10 @@ export function Main({ id }: AgentProps) {
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[binding];
     const containerId = ns.idFromName(id).toString();
 
-    // Absent→write self-heal: no-op on a warm container, reconstructs after
-    // sleep/eviction reset the disk. Zero-skill agents provision nothing.
-    const sandbox = getSandbox(ns, id);
-    await provisionAgentSkills(sandbox, bundle);
-
-    // Semantius env self-heal: a cold container comes back with only the
-    // image's baked sentinel, so re-point the CLI at THIS session's org — the
-    // `<org>` half of the user's verified token, kept on the session record.
-    // Chat sessions always have one (the chat gate refuses sessions without a
-    // verified user); channel conversations present no token, so this no-ops.
-    const record = await readSession(STORE, id);
-    const org = (record?.session_context as { semantius_org?: unknown } | undefined)?.semantius_org;
-    await provisionSemantiusEnv(sandbox, typeof org === 'string' ? org : undefined);
+    // NO container work here: skills + Semantius env are provisioned lazily by
+    // the SessionEnv wrapper at the first op that needs the container (see
+    // provisionWorkspace above) — an eager heal here would boot a container
+    // even for turns that never touch the workspace.
 
     // Egress-policy self-heal: ensure the container pointer + egress record
     // carry the bundle's proxy_whitelist (covers channel conversations that
