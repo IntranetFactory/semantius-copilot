@@ -31,6 +31,7 @@ import { AgentChat } from './AgentChat';
 import {
   AGENT_NAMES,
   AGENT_SEEDS,
+  AGENTS,
   authHeaders,
   BACKEND,
   hasCredential,
@@ -183,7 +184,9 @@ export function ChatWorkbench({ title, auth, credential, initialSessionId }: Cha
         {detail || (authenticated ? 'Start a new session, or paste a session id and open it.' : '')}
       </p>
 
-      {client && phase === 'ready' ? <AgentChat key={sessionId} client={client} /> : null}
+      {client && phase === 'ready' ? (
+        <AgentChat key={sessionId} client={client} welcome={AGENTS[agentName]?.welcome} />
+      ) : null}
     </main>
   );
 }

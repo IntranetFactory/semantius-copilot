@@ -88,6 +88,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
   hash.update(model ?? '').update('\0');
   hash.update(config.model_base_url ?? '').update('\0');
   hash.update((config.proxy_whitelist ?? []).join(',')).update('\0');
+  hash.update(config.welcome ? JSON.stringify(config.welcome) : '').update('\0');
   hash.update(options.baseImage ?? 'node').update('\0');
   for (const skillName of Object.keys(skills).sort()) {
     hash.update(skillName).update('\0');
@@ -104,6 +105,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
     ...(model ? { model } : {}),
     ...(config.model_base_url ? { modelBaseUrl: config.model_base_url } : {}),
     ...(config.proxy_whitelist ? { proxyWhitelist: config.proxy_whitelist } : {}),
+    ...(config.welcome ? { welcome: config.welcome } : {}),
     skills,
   };
   return validateAgentBundle(bundle);

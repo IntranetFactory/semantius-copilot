@@ -15,7 +15,20 @@
  * @property {string} [model]      normalized provider/model specifier
  * @property {string} [modelBaseUrl] OpenAI-compatible endpoint override
  * @property {string[]} [proxyWhitelist] egress allow list (host globs); DENY-ALL when absent/empty
+ * @property {AgentWelcome} [welcome] welcome card shown by the chat UI while a conversation is empty
  * @property {Record<string, Record<string, string>>} skills skillName -> (rel-path -> utf-8 content)
+ */
+
+/**
+ * Welcome card config: UI-only, rendered by the chat frontend in place of the
+ * empty-conversation state. Clicking a prompt sends `prompt ?? display` as the
+ * user's message — immediately unless `prefill` is true, which only puts the
+ * text into the composer for editing.
+ *
+ * @typedef {Object} AgentWelcome
+ * @property {string} title
+ * @property {string} [subtitle]
+ * @property {Array<{ title: string, subtitle?: string, prompts: Array<{ display: string, prompt?: string, prefill?: boolean }> }>} [sections]
  */
 
 import {
@@ -34,6 +47,15 @@ export const AGENT_LIMITS = {
   maxAgentTotalBytes: 4 * 1024 * 1024,
   maxBaseUrlChars: 512,
   maxWhitelistHosts: 32,
+};
+
+/** Per-string caps on the welcome card. Deliberately no caps on the NUMBER of
+ * sections or prompts — the UI renders any count without truncation. */
+export const WELCOME_LIMITS = {
+  maxTitleChars: 200,
+  maxSubtitleChars: 500,
+  maxDisplayChars: 200,
+  maxPromptChars: 4096,
 };
 
 /** Exact host or `*.suffix` wildcard, lowercase (see isWhitelistedHost). */
@@ -61,6 +83,61 @@ function validateWhitelist(raw, label) {
 }
 
 /**
+ * Validate a welcome / welcome-card value (see the AgentWelcome typedef).
+ * Shape and string-length checks only; section/prompt COUNTS are unbounded.
+ *
+ * @param {unknown} raw
+ * @param {string} label
+ * @returns {AgentWelcome}
+ */
+function validateWelcome(raw, label) {
+  const { maxTitleChars, maxSubtitleChars, maxDisplayChars, maxPromptChars } = WELCOME_LIMITS;
+  const checkString = (value, name, max, required) => {
+    if (value === undefined && !required) return;
+    if (typeof value !== 'string' || value.length === 0 || value.length > max) {
+      throw new BundleValidationError(`${label}: ${name} must be a non-empty string of at most ${max} chars`);
+    }
+  };
+  const checkObject = (value, name, allowed) => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new BundleValidationError(`${label}: ${name} must be a JSON object`);
+    }
+    for (const key of Object.keys(value)) {
+      if (!allowed.includes(key)) {
+        throw new BundleValidationError(`${label}: ${name} has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
+      }
+    }
+    return /** @type {Record<string, unknown>} */ (value);
+  };
+
+  const welcome = checkObject(raw, 'welcome', ['title', 'subtitle', 'sections']);
+  checkString(welcome.title, 'welcome title', maxTitleChars, true);
+  checkString(welcome.subtitle, 'welcome subtitle', maxSubtitleChars, false);
+  if (welcome.sections !== undefined) {
+    if (!Array.isArray(welcome.sections)) {
+      throw new BundleValidationError(`${label}: sections must be an array`);
+    }
+    for (const rawSection of welcome.sections) {
+      const section = checkObject(rawSection, 'section', ['title', 'subtitle', 'prompts']);
+      checkString(section.title, 'section title', maxTitleChars, true);
+      checkString(section.subtitle, 'section subtitle', maxSubtitleChars, false);
+      if (!Array.isArray(section.prompts) || section.prompts.length === 0) {
+        throw new BundleValidationError(`${label}: section "${section.title}" must have a non-empty prompts array`);
+      }
+      for (const rawPrompt of section.prompts) {
+        const prompt = checkObject(rawPrompt, 'prompt', ['display', 'prompt', 'prefill']);
+        checkString(prompt.display, 'prompt display', maxDisplayChars, true);
+        checkString(prompt.prompt, 'prompt text', maxPromptChars, false);
+        if (prompt.prefill !== undefined && typeof prompt.prefill !== 'boolean') {
+          throw new BundleValidationError(`${label}: prompt prefill must be a boolean when present`);
+        }
+      }
+    }
+  }
+  return /** @type {AgentWelcome} */ (welcome);
+}
+
+/**
  * Model prefix rule: a specifier whose first path segment is a known provider
  * is used as-is; anything else gets the default `openrouter/` prefix, so plain
  * OpenRouter ids like `deepseek/deepseek-v4-flash` work unqualified.
@@ -79,14 +156,14 @@ export function normalizeModelSpecifier(model) {
  * not-yet-supported keys (future egress allow list etc.) fail at bundle time.
  *
  * @param {unknown} raw
- * @returns {{ instructions?: string, model?: string, model_base_url?: string }}
+ * @returns {{ instructions?: string, model?: string, model_base_url?: string, welcome?: AgentWelcome }}
  */
 export function validateAgentConfig(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BundleValidationError('agent.jsonc must be a JSON object');
   }
   const config = /** @type {Record<string, unknown>} */ (raw);
-  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'proxy_whitelist'];
+  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'proxy_whitelist', 'welcome'];
   for (const key of Object.keys(config)) {
     if (!allowed.includes(key)) {
       throw new BundleValidationError(`agent.jsonc has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
@@ -103,6 +180,9 @@ export function validateAgentConfig(raw) {
   }
   if (config.proxy_whitelist !== undefined) {
     validateWhitelist(config.proxy_whitelist, 'agent.jsonc "proxy_whitelist"');
+  }
+  if (config.welcome !== undefined) {
+    validateWelcome(config.welcome, 'agent.jsonc "welcome"');
   }
   return config;
 }
@@ -176,6 +256,9 @@ export function validateAgentBundle(raw) {
   }
   if (bundle.proxyWhitelist !== undefined) {
     validateWhitelist(bundle.proxyWhitelist, 'proxyWhitelist');
+  }
+  if (bundle.welcome !== undefined) {
+    validateWelcome(bundle.welcome, 'welcome');
   }
 
   const skills = bundle.skills;

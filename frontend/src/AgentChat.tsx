@@ -33,8 +33,10 @@ import {
 } from '@/components/ai-elements/prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning';
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '@/components/ai-elements/tool';
+import { WelcomeCard } from '@/components/ai-elements/welcome';
 import { Spinner } from '@/components/ui/spinner';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import type { AgentWelcome } from '@/lib/session';
 
 type AgentMessage = ReturnType<typeof useFlueAgent>['messages'][number];
 type AgentPart = AgentMessage['parts'][number];
@@ -47,7 +49,7 @@ function toChatStatus(status: ReturnType<typeof useFlueAgent>['status']): ChatSt
   return 'ready';
 }
 
-export function AgentChat({ client }: { client: FlueClient }) {
+export function AgentChat({ client, welcome }: { client: FlueClient; welcome?: AgentWelcome }) {
   const [input, setInput] = useState('');
   // One held SSE stream (same as Panel A) — needs the @durable-streams/client
   // patch. The v2 client is conversation-scoped, so no name/id here: the
@@ -76,27 +78,36 @@ export function AgentChat({ client }: { client: FlueClient }) {
         <Conversation>
           <ConversationContent>
             {agent.messages.length === 0 ? (
-              <ConversationEmptyState
-                icon={<MessageSquareIcon className="size-10" />}
-                title="No messages yet"
-                description="Send a message — it appears in Panel A too (same session)."
-              />
+              welcome ? (
+                <WelcomeCard
+                  welcome={welcome}
+                  onSend={(text) => void agent.sendMessage(text)}
+                  onPrefill={setInput}
+                />
+              ) : (
+                <ConversationEmptyState
+                  icon={<MessageSquareIcon className="size-10" />}
+                  title="No messages yet"
+                  description="Send a message — it appears in Panel A too (same session)."
+                />
+              )
             ) : (
               agent.messages.map((message) => <MessageView key={message.id} message={message} />)
             )}
-            {/* Busy-before-first-token: shown while a submission is in flight. Once
-                generation starts (status 'streaming'), the partial content / tool
-                cards render instead, so this hides. */}
-            {agent.status === 'submitted' ? (
-              <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                <Spinner /> Working…
-              </div>
-            ) : null}
           </ConversationContent>
           <ConversationScrollButton />
         </Conversation>
 
         <div className="border-t p-3">
+          {/* Busy strip: visible for the whole run (submitted AND streaming), not
+              just before the first token — during streaming the agent can spend
+              long stretches in server-side tool calls with nothing new rendering,
+              and the chat must not look idle while the stop icon shows. */}
+          {busy ? (
+            <div className="mb-2 flex items-center gap-2 text-muted-foreground text-sm">
+              <Spinner /> Working…
+            </div>
+          ) : null}
           <PromptInput onSubmit={handleSubmit}>
             <PromptInputBody>
               <PromptInputTextarea

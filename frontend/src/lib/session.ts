@@ -9,6 +9,14 @@ import { createFlueClient } from '@flue/sdk';
 import { BETTER_AUTH_COOKIE_HEADER, skillCatalogFromBundle } from '@hoth/core';
 import { useMemo } from 'react';
 
+/** One clickable starter prompt on the welcome card. The text sent (or
+ * prefilled, when `prefill` is true) is `prompt ?? display`. */
+export type WelcomePrompt = { display: string; prompt?: string; prefill?: boolean };
+export type WelcomeSection = { title: string; subtitle?: string; prompts: WelcomePrompt[] };
+/** Per-agent welcome card (agent.jsonc `welcome`) — shown by the chat UI while
+ * a conversation is empty. UI-only: never part of the AgentSeed. */
+export type AgentWelcome = { title: string; subtitle?: string; sections?: WelcomeSection[] };
+
 export type AgentBundle = {
   agentName: string;
   version: string;
@@ -17,6 +25,7 @@ export type AgentBundle = {
   model?: string;
   modelBaseUrl?: string;
   proxyWhitelist?: string[];
+  welcome?: AgentWelcome;
   skills: Record<string, Record<string, string>>;
 };
 

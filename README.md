@@ -96,6 +96,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "model": "openrouter/…",            // optional, pre-normalized (see LLM configuration)
   "modelBaseUrl": "https://…",        // optional, from model_base_url
   "proxyWhitelist": ["postman-echo.com"],  // optional — DENY-ALL egress when absent
+  "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
 }
 ```
@@ -417,6 +418,28 @@ Two layers:
   (no reasoning, 128k window). `model_base_url` overrides transport only — auth is always
   the worker-wide `LLM_API_KEY` secret. The override is applied per session from the
   agent's bundle.
+
+## Welcome card (per-agent `welcome`)
+
+The chat UI shows a per-agent welcome card while a conversation is empty, configured by
+the optional `welcome` key in `agent.jsonc` (validated in `core/src/agent.js`
+`validateWelcome`, mirrored in `core/agent.schema.json`): a `title`, optional
+`subtitle`, and `sections[]` (each with `title`, optional `subtitle`, and `prompts[]`).
+Each prompt has a `display` label, an optional fuller `prompt`, and an optional
+`prefill` flag. Semantics, implemented in ONE place —
+`frontend/src/components/ai-elements/welcome.tsx` (`WelcomeCard`), rendered by the
+shared `AgentChat` so `/chat` and `/copilot` cannot drift:
+
+- Clicking a prompt uses `prompt ?? display` as the text.
+- `prefill` absent/`false`: the text is **sent immediately** as the user's message.
+- `prefill: true`: the text only **fills the composer** for editing before sending.
+
+Layout: sections in a 2-column grid (1 column on narrow screens) with **no cap on the
+number of sections or prompts** — the UI never truncates; only string lengths are
+validated (title/display ≤200 chars, subtitle ≤500, prompt ≤4096, `WELCOME_LIMITS`).
+The field is UI-only: it rides the bundle (and its version hash) but never reaches the
+model, and it is deliberately NOT part of the `AgentSeed` sent to the backend. An agent
+without `welcome` gets the generic empty state.
 
 ## Egress (per-agent proxy_whitelist)
 

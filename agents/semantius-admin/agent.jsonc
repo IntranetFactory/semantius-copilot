@@ -7,5 +7,36 @@
   "proxy_whitelist": [
     "*.semantius.ai",
     "www.semantius.com"
-  ]
+  ],
+  // Shown by the chat UI while a conversation is empty (UI-only, never reaches
+  // the model). Clicking a prompt sends `prompt ?? display` immediately, unless
+  // `prefill: true` — then it only fills the composer for editing.
+  "welcome": {
+    "title": "Welcome to the Semantius Agent",
+    "subtitle": "I help you with everything on your Semantius data platform: working with your data, running analytics, managing the data model, and designing, building, and deploying whole business systems.",
+    "sections": [
+      {
+        "title": "Design & build",
+        "subtitle": "Model whole business systems",
+        "prompts": [
+          {
+            "display": "Design a data model for a new business system",
+            "prompt": "I want to design a new business system on Semantius. Interview me about the domain, then propose a semantic blueprint with entities, fields, relationships, and permissions.",
+            "prefill": true
+          },
+          { "display": "Audit my existing data model" },
+          { "display": "What can you build for me?" }
+        ]
+      },
+      {
+        "title": "Operate & analyze",
+        "subtitle": "Work with the live instance",
+        "prompts": [
+          { "display": "Show me the entities in my data model" },
+          { "display": "Run an analytical query over my data" },
+          { "display": "Onboard a new user to the platform" }
+        ]
+      }
+    ]
+  }
 }
