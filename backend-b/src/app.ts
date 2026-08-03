@@ -68,8 +68,10 @@ import {
   ECHO_HOST,
   SkillCheckError,
   isValidSessionId,
+  listSessions,
   mintSessionId,
   sessionIdTail,
+  sessionTenantPrefix,
   mergeSessionRecord,
   readSession,
   removeSessionIndex,
@@ -368,6 +370,40 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });
+});
+
+// The caller's own session index — every session whose id carries THIS user's
+// tenant prefix (`session:<org>-<sub>-…`; sessionTenantPrefix is "the unit of
+// tenant-scoped KV listing", core/src/config.js). The prefix only narrows the
+// KV read; it is NOT the access decision: ownership is re-checked per record
+// against `session_context.user`, exactly like the chat gate below — the
+// prefix is efficiency plumbing, never authorization (README "Session ids").
+// The response whitelists fields: THE session record also carries
+// egress_secrets and session_context.semantius_jwt, and neither may ever
+// reach a browser. Newest-first (listSessions sorts by createdAt); the 24 h
+// record TTL makes this inherently "recent sessions" — the same horizon the
+// chat surface can actually reopen.
+// `user` echoes WHOSE sessions these are (same shape as the session-create
+// response): a browser can hold several credentials, and an empty list is
+// indistinguishable from "listed as somebody else" unless the answer names
+// the identity it was scoped to.
+app.get('/sessions', userTokenGuard(), async (c) => {
+  const verified = c.get('semantiusUser');
+  const records = await listSessions(c.env.STORE, sessionTenantPrefix(verified.org, verified.user.sub));
+  const sessions = records
+    .filter((r) => {
+      const owner = ((r.session_context ?? {}) as Record<string, unknown>).user as
+        | { sub?: unknown; org?: unknown }
+        | undefined;
+      return owner?.sub === verified.user.sub && owner?.org === verified.user.org;
+    })
+    .map((r) => ({
+      id: String(r.id),
+      ...(typeof r.agentName === 'string' ? { agentName: r.agentName } : {}),
+      ...(typeof r.version === 'string' ? { version: r.version } : {}),
+      ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
+    }));
+  return c.json({ sessions, user: verified.user });
 });
 
 app.post('/sessions/agent', userTokenGuard(), async (c) => {

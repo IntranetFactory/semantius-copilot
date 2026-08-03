@@ -40,10 +40,15 @@ link can open a page ready to chat:
 The fragment is consumed once at page load and stripped from the address bar; the
 credential is persisted to this browser's localStorage, so the next visit needs no
 fragment at all (it does remain in browser history for that one entry — link-borne
-credentials are a POC/automation convenience, not a way to keep one secret). With no
-fragment and nothing stored, `/agent/<name>` falls back to ambient mode (see "Reusable
-chat surface"); `/chat` and `/copilot` show their paste box. Parsing lives in
-`frontend/src/pages.ts` (`consumeCredentialFragment`).
+credentials are a POC/automation convenience, not a way to keep one secret). On
+`/agent/<name>` a fragment handover also EVICTS the competing stored credential (a
+`#jwt=` removes the stored cookie and vice versa): the page prefers a stored cookie
+over a stored jwt, so leaving both behind made a later plain reload silently flip to
+the other identity — chatting and listing sessions as somebody else with no visible
+sign. The sidebar also names the identity the backend scoped its listing to ("signed
+in as `<sub>@<org>`"). With no fragment and nothing stored, `/agent/<name>` falls back
+to ambient mode (see "Reusable chat surface"); `/chat` and `/copilot` show their paste
+box. Parsing lives in `frontend/src/pages.ts` (`consumeCredentialFragment`).
 
 Both run on Cloudflare Workers (account `Ma@adenin.com`). The backend owns a container
 app (Containers) and a private KV namespace; the frontend is three static pages plus one
@@ -147,8 +152,9 @@ mode works cross-site today and is what `/copilot` uses.
   in the target's pnpm workspace config (the held SSE stream needs it).
 
 The backend contract the surface speaks (any backend-b-shaped Worker, addressed via
-`baseUrl`): `GET /agents`, `GET /agents/:name/meta`, `POST /sessions/agent`,
-`/agents/main/:sessionId` (flue v2 + SSE).
+`baseUrl`): `GET /agents`, `GET /agents/:name/meta`, `GET /sessions` (the caller's own
+sessions, whitelisted meta), `POST /sessions/agent`, `/agents/main/:sessionId` (flue v2
++ SSE).
 
 ## Layout
 
@@ -173,8 +179,10 @@ backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue
 frontend/    React + Vite — `/chat` and `/copilot` (the shared ChatPage:
              New-session button, agent dropdown from GET /agents; token vs.
              session-cookie auth), `/agent/<name>` (the input-free per-agent
-             page; worker/index.ts rewrites those paths to the shared shell)
-             and `/admin` (Data browser + Costs tab). `/` is a real 404.
+             page; worker/index.ts rewrites those paths to the shared shell;
+             a session sidebar — New request + the user's sessions for that
+             agent via GET /sessions) and `/admin` (Data browser + Costs
+             tab). `/` is a real 404.
 scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agents/
              folder and PUT it to the backend as a named KV definition) ·
              node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C2–C5) ·
@@ -381,11 +389,16 @@ credentials:
 - **admin / CLI** — `/admin/*`, agent deploys, skill-checks, session deletes. One shared
   deployment secret, `Authorization: Bearer <API_TOKEN>` (`apiKeyGuard`), failing closed
   (503) when `API_TOKEN` is unset.
-- **user chat** — creating a session, talking in it, and reading the agent registry
+- **user chat** — creating a session, talking in it, reading the agent registry
   (`GET /agents` — the deployed names; `GET /agents/:name/meta` — one agent's welcome card
-  + turn-1 seed, skill files excluded). The caller's own credential (`userTokenGuard`): a
-  Semantius token, or a better-auth session cookie. No API key is accepted here, so a chat
-  client can never browse data or deploy.
+  + turn-1 seed, skill files excluded), and listing their own sessions (`GET /sessions` —
+  tenant-prefix KV listing plus a per-record ownership re-check; the answer is whitelisted
+  meta only: id, agentName, version, createdAt — never the record, which also carries
+  `egress_secrets` and `session_context.semantius_jwt` — plus `user`, the verified
+  identity the listing was scoped to, same shape as the session-create response). The
+  caller's own credential
+  (`userTokenGuard`): a Semantius token, or a better-auth session cookie. No API key is
+  accepted here, so a chat client can never browse data or deploy.
 
 Set the admin key as a Cloudflare secret, and locally via `.dev.vars`:
 
@@ -733,7 +746,10 @@ channel's own instance id (`github:v1:owner:<o>:repo:<r>:issue:<n>`, minted by
 gate on the routes that still take an id (`/sessions/:id/skill-check`,
 `DELETE /sessions/:id` — both admin-key surfaces). Ownership is enforced by the chat gate
 against `session_context.user`, never by the id's prefix: the prefix is for operators
-reading the key space, not an access-control decision.
+reading the key space, not an access-control decision. `GET /sessions` (the per-agent
+page's session sidebar) is the tenant-prefix listing in action — the caller's prefix
+narrows the KV read, and ownership is still re-checked per record against
+`session_context.user` before an entry is returned.
 
 **Session substrate expires 24 h after last activity (fail-closed by design):** the
 bundle snapshot (`agent:<id>`), THE session record (`session:<id>`), and the container

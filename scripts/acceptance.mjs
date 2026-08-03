@@ -276,6 +276,33 @@ async function main() {
     String(bId),
   );
 
+  // --- GET /sessions: the caller's own session index -----------------------
+  // The tenant-prefix listing in action: the session just created must appear,
+  // entries must be the whitelisted meta ONLY (the record also carries
+  // egress_secrets and session_context.semantius_jwt — neither may ever reach
+  // a browser), and the route is a user surface (401 without a credential).
+  const mine = await uget(B_URL, '/sessions');
+  check('sessions', 'GET /sessions answers a user token (200)', mine.status === 200, `status ${mine.status}`);
+  check(
+    'sessions',
+    'lists the session just created',
+    Array.isArray(mine.json?.sessions) && mine.json.sessions.some((s) => s.id === bId),
+    `${mine.json?.sessions?.length ?? 0} entries`,
+  );
+  check(
+    'sessions',
+    'entries carry whitelisted fields only (no session_context / egress_secrets)',
+    (mine.json?.sessions ?? []).every((s) => s.session_context === undefined && s.egress_secrets === undefined),
+  );
+  check(
+    'sessions',
+    'the answer names the identity it was scoped to',
+    typeof mine.json?.user?.sub === 'string' && mine.json.user.sub.length > 0,
+    JSON.stringify(mine.json?.user ?? null).slice(0, 120),
+  );
+  const sessionsNoAuth = await fetch(`${B_URL}/sessions`);
+  check('sessions', 'GET /sessions rejects a request with no bearer (401)', sessionsNoAuth.status === 401, `status ${sessionsNoAuth.status}`);
+
   // --- Clean-base positive control: the live sandbox now has the file set --
   // (also the reconstruction proof — the ingest response deliberately carries
   // no provisioning internals, the deterministic file count here is the oracle)

@@ -363,6 +363,23 @@ await (async function run() {
   );
   check('sessionIdSegment leaves an already-short label alone', sessionIdSegment('user3', 12) === 'user3');
   check('sessionIdSegment lowercases and slugs', /^[a-z0-9][a-z0-9-]*$/.test(sessionIdSegment('User.Three', 12)));
+
+  // --- listSessions(idPrefix) — the GET /sessions listing seam --------------
+  // Three sessions across two tenants: fakeKv pages at 2, so the scoped
+  // listing also exercises cursor pagination under a prefix.
+  const uuidA = () => 'aaaaaaaa-0000-4000-8000-000000000001';
+  const uuidB = () => 'bbbbbbbb-0000-4000-8000-000000000002';
+  const lkv = fakeKv();
+  await putSessionIndex(lkv, mintSessionId('tests', 'user3', uuidA), { agentName: 'trip', createdAt: '2026-08-01T00:00:00Z' });
+  await putSessionIndex(lkv, mintSessionId('tests', 'user3', uuidB), { agentName: 'trip', createdAt: '2026-08-02T00:00:00Z' });
+  await putSessionIndex(lkv, mintSessionId('tests', 'user4', uuidA), { agentName: 'trip', createdAt: '2026-08-03T00:00:00Z' });
+  const scoped = await listSessions(lkv, sessionTenantPrefix('tests', 'user3'));
+  check(
+    "listSessions(prefix) lists only the tenant's sessions",
+    scoped.length === 2 && scoped.every((s) => String(s.id).startsWith('tests-user3-')),
+  );
+  check('listSessions(prefix) stays newest-first', scoped[0]?.createdAt === '2026-08-02T00:00:00Z');
+  check('listSessions without prefix still lists everything', (await listSessions(lkv)).length === 3);
 })();
 
 // --- Cloudflare container cost (core/src/cost.js) ---------------------------

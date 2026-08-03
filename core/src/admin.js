@@ -130,8 +130,14 @@ export async function putSessionIndex(kv, id, meta = {}) {
 }
 
 /**
- * List every indexed session, newest first by `createdAt`. Reads each value
+ * List indexed sessions, newest first by `createdAt`. Reads each value
  * (small JSON), so it costs one KV get per session — fine at POC cardinality.
+ *
+ * `idPrefix` narrows the listing to `session:<idPrefix>` — pass a
+ * sessionTenantPrefix (core/src/config.js) to list ONE user's sessions off the
+ * tenant-prefixed key space. Left-anchored KV prefix listing, so the narrowing
+ * happens at list time, never as a post-filter over every record. Empty by
+ * default: the admin collections below keep their all-sessions behavior.
  *
  * `createdAt` is an ISO-8601 UTC string, which sorts lexicographically in
  * chronological order — no Date parsing needed. Records written before the
@@ -139,13 +145,14 @@ export async function putSessionIndex(kv, id, meta = {}) {
  * they stay reachable instead of being interleaved unpredictably.
  *
  * @param {KvLike} kv
+ * @param {string} [idPrefix] session-id prefix, WITHOUT the `session:` group prefix
  * @returns {Promise<Array<{ id: string, [k: string]: unknown }>>}
  */
-export async function listSessions(kv) {
+export async function listSessions(kv, idPrefix = '') {
   const keys = [];
   let cursor;
   for (let page = 0; page < 1000; page++) {
-    const res = await kv.list({ prefix: SESSION_KEY_PREFIX, ...(cursor ? { cursor } : {}) });
+    const res = await kv.list({ prefix: SESSION_KEY_PREFIX + idPrefix, ...(cursor ? { cursor } : {}) });
     for (const k of res.keys) keys.push(k.name);
     if (res.list_complete || !res.cursor) break;
     cursor = res.cursor;

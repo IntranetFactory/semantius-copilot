@@ -9,6 +9,7 @@
  * The backend contract this module speaks (any backend-b-shaped Worker):
  *   GET  /agents                 names of every deployed agent
  *   GET  /agents/:name/meta      one agent's welcome card + turn-1 seed
+ *   GET  /sessions               the caller's own sessions (whitelisted meta)
  *   POST /sessions/agent         create a session (server mints the id)
  *   /agents/main/:sessionId      the conversation (flue v2 + SSE)
  */
@@ -116,6 +117,51 @@ export async function fetchAgentNames(auth: ChatAuth, baseUrl: string = BACKEND.
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`${response.status}: ${payload?.error ?? 'could not list agents'}`);
   return Array.isArray(payload?.agents) ? (payload.agents as string[]) : [];
+}
+
+/** One entry of `GET /sessions` — whitelisted session meta, never the record. */
+export type SessionListEntry = {
+  id: string;
+  agentName?: string;
+  version?: string;
+  /** ISO-8601 UTC; entries arrive newest-first. */
+  createdAt?: string;
+};
+
+/** What `GET /sessions` answers: the caller's sessions plus WHOSE they are —
+ * the identity the listing was scoped to. A browser can hold several
+ * credentials (jwt, cookie, ambient), and without the echo an empty list is
+ * indistinguishable from "listed as somebody else". */
+export type SessionListing = {
+  sessions: SessionListEntry[];
+  user?: { org?: string; sub?: string; email?: string; name?: string };
+};
+
+/**
+ * The caller's own sessions (`GET /sessions`), newest first. Tenant-scoped
+ * server-side (the id's tenant prefix narrows the KV listing, then each
+ * record's owner is re-checked), so the answer is exactly the sessions this
+ * credential may reopen. Deliberately NOT agent-filtered here — entries carry
+ * `agentName`, and a single-agent surface narrows client-side.
+ */
+export async function fetchSessions(auth: ChatAuth, baseUrl: string = BACKEND.baseUrl): Promise<SessionListing> {
+  const response = await fetch(`${baseUrl}/sessions`, authFetchInit(auth));
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`${response.status}: ${payload?.error ?? 'could not list sessions'}`);
+  // STRICT on a 200: a body that is not `{ sessions: [...] }` is an error, not
+  // an empty list — coercing it to [] would render the "no sessions yet" state
+  // for a truncated/rewritten response and hide the failure entirely.
+  if (!payload || !Array.isArray(payload.sessions)) {
+    throw new Error(
+      payload === null
+        ? 'malformed /sessions answer — body was not JSON'
+        : `malformed /sessions answer — ${JSON.stringify(payload).slice(0, 120)}`,
+    );
+  }
+  return {
+    sessions: payload.sessions as SessionListEntry[],
+    user: payload?.user && typeof payload.user === 'object' ? (payload.user as SessionListing['user']) : undefined,
+  };
 }
 
 /** What `POST /sessions/agent` answers on success. */
