@@ -1,0 +1,12 @@
+diff --git a/dist/conversation-stream-store-CIKkNpqs.mjs b/dist/conversation-stream-store-CIKkNpqs.mjs
+index 3da59aa268cbfaa38b106e8a03351091544b0061..300996567fdb36bfe98e341252de310bb289bc6e 100644
+--- a/dist/conversation-stream-store-CIKkNpqs.mjs
++++ b/dist/conversation-stream-store-CIKkNpqs.mjs
+@@ -389,7 +389,6 @@ function mergeSkillCatalog(definitionSkills, discoveredSkills) {
+ 	const merged = Object.create(null);
+ 	for (const skill of definitionSkills) merged[skill.name] = skill;
+ 	for (const [name, skill] of Object.entries(discoveredSkills)) {
+-		if (Object.hasOwn(merged, name)) throw new Error(`[flue] Skill name "${name}" appears in both agent definition and workspace discovery.`);
+ 		merged[name] = skill;
+ 	}
+ 	return merged;

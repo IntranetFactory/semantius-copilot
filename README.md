@@ -272,7 +272,8 @@ workspace discovery finds the skills (it reads the same bundle view), the
 discovered skill wins the name-merge over the mounted definition — same
 content either way. That
 discovered-wins merge is restored by our `@flue/runtime` patch (see
-Prerequisites): the stock nightly THROWS on the name conflict instead, and
+Prerequisites): the stock runtime (unchanged in 2.0.1) THROWS on the name
+conflict instead, and
 when discovery sees the files — which with the bundle view it reliably does —
 every submission of such a session then
 failed with a generic `internal_error` (root-caused via `wrangler tail`
@@ -286,6 +287,9 @@ as if instructions or skills are missing.
 ## Prerequisites
 
 - Node **>= 22.18** (Flue requirement; `nvm use 22.22.0`).
+- Flue **2.0.1** (first stable 2.x, released 2026-08-01; upgraded 2026-08-03 from
+  the 2.0 nightly `202607230552` — build, smoke, and all 72 acceptance checks
+  passed unchanged).
 - pnpm, Docker (for building the sandbox container image), a Cloudflare account with
   **Workers Paid + Containers** and **Workers AI** enabled.
 - Three dependency patches under `patches/` (applied automatically by `pnpm install`):
@@ -315,10 +319,12 @@ as if instructions or skills are missing.
     is safe (it even carries the untruncated description). Residual
     exposure: a same-named SKILL.md from any OTHER source (e.g. an agent
     writing its own) would now silently shadow a mounted definition.
-    **On every Flue bump:** the patch is keyed to the exact nightly
+    **On every Flue bump:** the patch is keyed to the exact runtime
     version — re-create it (`pnpm patch @flue/runtime@<new-version>`, remove
     the conflict `throw` in `mergeSkillCatalog`, `pnpm patch-commit`) unless
     upstream made the merge tolerant, or B stops double-delivering skills.
+    (Done for 2.0.1: stock 2.0.1 still throws — same one-line removal, now
+    in `dist/conversation-stream-store-CIKkNpqs.mjs`.)
   - `@durable-streams/client` — opens the held **SSE** connection on the first `updates`
     request in `live:'sse'` mode. The stock 0.2.6 client (still pinned by @flue/sdk v2) only
     opens SSE after reaching up-to-date, so while an agent is actively generating (never
@@ -1059,7 +1065,7 @@ Verify: send a chat turn, then check the project logs — llm spans should be na
 ### Arize AX (OpenTelemetry)
 
 Both backends also export to the Arize AX project **`hoth-poc`** via Flue's own
-OTel adapter — `@flue/opentelemetry` (pinned to the same runtime nightly) +
+OTel adapter — `@flue/opentelemetry` (pinned to the same runtime version) +
 `src/otel.ts` per backend (imported next to `./braintrust` in `app.ts`). The
 adapter projects runtime observations onto OTel **GenAI semconv** spans
 (`invoke_agent` / `chat` / `execute_tool` / `flue.operation …`), and Arize
@@ -1082,7 +1088,8 @@ render natively — no client-side mapping.
   that's what Arize's session view groups by.
 - **Root-span output enrichment (why the exporter is more than a POST)**:
   Arize's session conversation renders each trace from the ROOT
-  `invoke_agent` span's input/output — but the pinned nightly emits
+  `invoke_agent` span's input/output — but the runtime (observed on the 2.0
+  nightlies; the enrichment is a no-op if a later version projects it) emits
   conversation-prompt `operation` results that `@flue/opentelemetry` cannot
   project (`agentOutput` absent; structured `data` results dropped), so the
   root span has no `gen_ai.output.messages` and sessions showed an empty AI

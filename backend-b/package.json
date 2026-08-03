@@ -13,9 +13,9 @@
   "dependencies": {
     "@cloudflare/sandbox": "0.12.3",
     "@earendil-works/pi-ai": "^0.81.1",
-    "@flue/github": "2.0.0-nightly.202607230552",
-    "@flue/opentelemetry": "2.0.0-nightly.202607230552",
-    "@flue/runtime": "2.0.0-nightly.202607230552",
+    "@flue/github": "2.0.1",
+    "@flue/opentelemetry": "2.0.1",
+    "@flue/runtime": "2.0.1",
     "@hoth/core": "workspace:*",
     "@octokit/rest": "^22.0.1",
     "@opentelemetry/api": "^1.9.1",
@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.46.0",
-    "@flue/vite": "2.0.0-nightly.202607230552",
+    "@flue/vite": "2.0.1",
     "vite": "^8.1.5",
     "wrangler": "^4.113.0"
   }

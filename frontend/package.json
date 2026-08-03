@@ -11,8 +11,8 @@
     "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
-    "@flue/react": "2.0.0-nightly.202607230552",
-    "@flue/sdk": "2.0.0-nightly.202607230552",
+    "@flue/react": "2.0.1",
+    "@flue/sdk": "2.0.1",
     "@fontsource-variable/geist": "^5.3.0",
     "@radix-ui/react-use-controllable-state": "^1.2.4",
     "@streamdown/cjk": "^1.0.3",
