@@ -21,30 +21,134 @@ See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the original design and accepta
 | ---------- | --- |
 | Frontend — chat (users, Semantius token) | https://hoth-poc-frontend.ma532.workers.dev/chat |
 | Frontend — copilot (users, better-auth cookie) | https://hoth-poc-frontend.ma532.workers.dev/copilot |
+| Frontend — per-agent page, input-free (users, cookie or `#jwt=`) | https://hoth-poc-frontend.ma532.workers.dev/agent/\<name\> — one URL per KV-deployed agent, today [/agent/hoth-trip-planner](https://hoth-poc-frontend.ma532.workers.dev/agent/hoth-trip-planner) and [/agent/semantius-admin](https://hoth-poc-frontend.ma532.workers.dev/agent/semantius-admin) |
 | Frontend — admin console | https://hoth-poc-frontend.ma532.workers.dev/admin |
 | Backend — dynamic bundle (multi-agent) | https://hoth-poc-backend-b.ma532.workers.dev |
 
+**Credential-in-URL handover.** Every user page also accepts its credential in the URL
+*fragment* (`#…`, never a query string — the fragment is not sent to any server), so a
+link can open a page ready to chat:
+
+```
+/chat#jwt=<org>:<jwt>                          Semantius token (mint one: pnpm mint-token)
+/copilot#cookie=<value>                        better-auth session cookie VALUE (<token>.<signature>)
+/agent/<name>#jwt=<org>:<jwt>                  either key works here; jwt wins over cookie
+/agent/<name>#cookie=<value>
+…any of the above with &session=<id>           also open that session (deep link)
+```
+
+The fragment is consumed once at page load and stripped from the address bar; the
+credential is persisted to this browser's localStorage, so the next visit needs no
+fragment at all (it does remain in browser history for that one entry — link-borne
+credentials are a POC/automation convenience, not a way to keep one secret). With no
+fragment and nothing stored, `/agent/<name>` falls back to ambient mode (see "Reusable
+chat surface"); `/chat` and `/copilot` show their paste box. Parsing lives in
+`frontend/src/pages.ts` (`consumeCredentialFragment`).
+
 Both run on Cloudflare Workers (account `Ma@adenin.com`). The backend owns a container
-app (Containers) and a private KV namespace; the frontend is three static pages served from
-Workers assets with the backend URL baked in at build time.
+app (Containers) and a private KV namespace; the frontend is three static pages plus one
+dynamic page family served from Workers assets with the backend URL baked in at build time.
 
-**Three pages, three builds, one Worker.** `/chat` is the user chat page (`chat.html` →
-`src/chat-main.tsx` → `ChatApp.tsx`, authenticated by the user's own Semantius token);
-`/copilot` is the same workbench authenticated by a better-auth session cookie instead
-(`copilot.html` → `src/copilot-main.tsx` → `CopilotApp.tsx`); `/admin` is the operator
-console (`admin.html` → `src/admin-main.tsx` → `App.tsx`, authenticated by the deployment
-API key). Separate Vite entries so the user bundles never carry the admin code. The two
-user pages share `ChatWorkbench.tsx` and differ only in the credential they collect, so
-they cannot drift apart.
+**Three fixed pages, one dynamic family, one Worker.** `/chat` is the user chat page
+(`chat.html` → `src/chat-main.tsx` → `ChatApp.tsx`, authenticated by the user's own
+Semantius token); `/copilot` is the same page authenticated by a better-auth session cookie
+instead (`copilot.html` → `src/copilot-main.tsx` → `CopilotApp.tsx`); `/admin` is the
+operator console (`admin.html` → `src/admin-main.tsx` → `App.tsx`, authenticated by the
+deployment API key); and `/agent/<name>` is the INPUT-FREE per-agent chat (one shared shell,
+`agent-shell.html` → `src/agent-main.tsx` → `AgentApp.tsx` — no credential textarea, no
+agent dropdown, no session-id row; cookie or `#cookie=`/`#jwt=` fragment auth only).
+Separate Vite entries so the user bundles never carry the admin code. The conversation —
+draft, session creation, key-flip handoff, streaming — is `AgentChatContainer` (see
+"Reusable chat surface" below); `/chat` and `/copilot` share `ChatPage.tsx` as the chrome
+around it (credential textarea, agent dropdown, session-id row, status line) and differ
+only in the credential they collect, so they cannot drift apart. `/agent/<name>` renders
+the container directly, with no chrome at all — and with NO credential present it runs in
+ambient mode (the browser's own better-auth cookie rides on `credentials: 'include'`
+requests; a 401 renders as a signed-out notice).
 
-No path is declared anywhere: Workers assets serves each `<name>.html` at `/<name>` via its
-default `auto-trailing-slash` html_handling, and the one place the paths are written down in
-code is `CHAT_PAGE`/`COPILOT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`. There is
-deliberately **no `index.html`**, so `/` matches no asset; `not_found_handling` is
-`404-page` (`public/404.html`), **not** `single-page-application`, so `/` and every typo
-answer a real 404 instead of silently rendering a page that looks like it worked. That 404
-page names **no path**, not even in an HTML comment — it is what an unauthenticated prober
-sees, and `/admin`'s existence is not something to advertise.
+**The agent registry is RUNTIME, not build time.** No agent name, list, welcome card, or
+seed is baked into the frontend: the dropdown lists `GET /agents`, and `AgentChat` loads
+each agent's welcome + turn-1 seed from `GET /agents/:name/meta` — both read the live KV
+registry (`agentdef:<name>`), both behind the user-chat guard. Deploying an agent
+(`pnpm deploy:agent <name>`) makes it appear on every page, `/agent/<name>` included,
+with no frontend rebuild.
+
+No fixed path is declared anywhere: Workers assets serves each `<name>.html` at `/<name>`
+via its default `auto-trailing-slash` html_handling, and the one place paths are written
+down in code is `CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (hoth's page
+map + credential bootstrap — deliberately OUTSIDE the copyable ai-elements folder).
+`/agent/<name>` is the one path a Worker script serves:
+agents exist at runtime, so those URLs cannot be assets — `frontend/worker/index.ts` (the
+only Worker code, reached only via `run_worker_first: ["/agent", "/agent/*"]`) rewrites
+well-formed names to the built shell and lets everything else fall through to assets. There
+is deliberately **no `index.html`**, so `/` matches no asset; `not_found_handling` is
+`404-page` (`public/404.html`), **not** `single-page-application`, so `/`, every typo, bare
+`/agent`, and ill-formed `/agent/<junk>` answer a real 404 instead of silently rendering a
+page that looks like it worked. (A well-formed `/agent/<name>` whose agent is not deployed
+renders an in-page "agent unavailable" state — whether a name is real is the registry's
+call, not the asset layout's.) That 404 page names **no path**, not even in an HTML
+comment — it is what an unauthenticated prober sees, and `/admin`'s existence is not
+something to advertise.
+
+## Reusable chat surface (`frontend/src/components/ai-elements/`)
+
+The chat surface is designed to be **copied into other apps**. The folder has zero
+workspace imports (the one protocol constant, `x-better-auth-cookie`, is inlined in
+`session.ts`, mirroring `core/src/identity.js`); everything hoth-specific — page paths,
+localStorage keys, `#jwt=`/`#cookie=` fragment handover — lives in `frontend/src/pages.ts`
+and `App.tsx`, which are NOT part of the copy.
+
+**Entry point: `AgentChatContainer`** (`agent-chat-container.tsx`). Props:
+
+| Prop | Meaning |
+|---|---|
+| `agentName` (required) | which deployed agent to talk to |
+| `bearer?` | Semantius token `<org>:<jwt>` → `Authorization: Bearer` |
+| `authCookie?` | better-auth session cookie VALUE → `x-better-auth-cookie` header |
+| `baseUrl?` | backend origin (default: build-time `VITE_AGENTBACKEND_URL`) |
+| `sessionId?` | attach to an existing session instead of starting a draft |
+| `onSessionCreated?` | `(id, info)` — the server-minted id, for status lines/deep links |
+| `onError?` | session-create failure (also rendered inline by the container) |
+| `className?`, `placeholder?` | frame styling override / composer placeholder |
+
+`agentName`/`sessionId` are fixed per instance — hosts navigate by changing the
+container's `key` (see the key contract in the component header). Never feed
+`onSessionCreated`'s id back into the key: that remounts mid-handoff and races the first
+message.
+
+**Three auth modes** (server-side precedence: bearer, then the custom header, then the
+browser's cookie jar): `bearer`; `authCookie`; and **ambient** — BOTH empty. In ambient
+mode every request (including the SSE stream) goes out with `credentials: 'include'` and
+the browser attaches its own better-auth cookie; a 401 renders as the container's
+signed-out notice. Ambient requires: (1) the page's origin listed in the backend's
+`ALLOWED_ORIGINS` var (credentialed CORS + CSRF origin check, `backend-b/wrangler.jsonc`);
+(2) the backend **same-site** with the page — `workers.dev` is on the Public Suffix List,
+so two workers.dev hosts are cross-site and the cookie never rides; ambient needs
+backend-b on a custom domain under the embedding app's zone, and the better-auth cookie
+issued with `Domain=.<zone>` (better-auth `crossSubDomainCookies`). The custom-header
+mode works cross-site today and is what `/copilot` uses.
+
+**The copy set** (what another app must take):
+
+- `src/components/ai-elements/` (the surface), `src/components/ui/` (all shadcn
+  primitives — the transitive closure is the whole folder), `src/lib/utils.ts` (`cn`),
+  and the `@` alias (vite + tsconfig `paths`).
+- The theme layer: `src/index.css` — Tailwind v4 entry with the shadcn CSS variables,
+  `@custom-variant dark`, `@import "shadcn/tailwind.css"`, `@import "tw-animate-css"`,
+  the Geist font, and the `@source "../node_modules/streamdown/dist"` directive (without
+  it Streamdown's markdown classes get purged).
+- Runtime deps: `@flue/sdk`, `@flue/react` (React 18 peer), `ai`, `streamdown` +
+  `@streamdown/{cjk,code,math,mermaid}`, `shiki`, `motion`, `use-stick-to-bottom`,
+  `lucide-react`, `radix-ui`, `@radix-ui/react-use-controllable-state`, `cmdk`, `nanoid`,
+  `clsx`, `tailwind-merge`, `class-variance-authority`, `shadcn`, `tw-animate-css`,
+  `@fontsource-variable/geist`. Build deps: `tailwindcss` + `@tailwindcss/vite` (or an
+  equivalent Tailwind-4 setup scanning the copied folder).
+- The `@durable-streams/client` patch from `patches/` + its `patchedDependencies` entry
+  in the target's pnpm workspace config (the held SSE stream needs it).
+
+The backend contract the surface speaks (any backend-b-shaped Worker, addressed via
+`baseUrl`): `GET /agents`, `GET /agents/:name/meta`, `POST /sessions/agent`,
+`/agents/main/:sessionId` (flue v2 + SSE).
 
 ## Layout
 
@@ -66,10 +170,11 @@ backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue
              the named agent definition a session references (`{ agentName }` at ingest,
              resolved from KV `agentdef:<name>`) decides instructions, model, skills.
              First-turn identity rides the creating send's `initialData` (see plan §6).
-frontend/    React + Vite, three pages — `/chat` and `/copilot` (the shared
-             ChatWorkbench: New-session button, agent dropdown fed by the bundler
-             output; token vs. session-cookie auth) and `/admin` (Data browser +
-             Costs tab). `/` is a real 404.
+frontend/    React + Vite — `/chat` and `/copilot` (the shared ChatPage:
+             New-session button, agent dropdown from GET /agents; token vs.
+             session-cookie auth), `/agent/<name>` (the input-free per-agent
+             page; worker/index.ts rewrites those paths to the shared shell)
+             and `/admin` (Data browser + Costs tab). `/` is a real 404.
 scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agents/
              folder and PUT it to the backend as a named KV definition) ·
              node-smoke.mjs (portability, zero Cloudflare) · acceptance.mjs (C2–C5) ·
@@ -80,6 +185,9 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
              Braintrust) · cf-costs.mjs (`pnpm costs` — Cloudflare container cost
              per session, same query as the admin Costs tab) ·
              lib/semantius.mjs (the .env-driven token exchange those share).
+             `pnpm logs` streams the deployed backend's Workers Logs
+             (wrangler tail; observability.enabled in backend-b/wrangler.jsonc —
+             this is where lazy-env's "container boot triggered by …" line lands).
 ```
 
 ## Agents & the agent bundle
@@ -101,10 +209,11 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
 }
 ```
 
-Artifacts per run: `dist-bundle/<name>.agent.json` (canonical, used by acceptance and
-chat-probe) and `frontend/src/generated/agents/<name>.json` (glob-imported by the UI —
-a NEW agents/ folder shows up in the frontend agent dropdown after re-running `pnpm bundle`,
-no code change). Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
+Artifact per run: `dist-bundle/<name>.agent.json` (canonical, used by acceptance and
+chat-probe). The frontend consumes NO bundler output — the UI reads the agent registry at
+runtime (`GET /agents` for the dropdown, `GET /agents/:name/meta` for welcome + seed), so a
+NEW agent shows up on every page after `pnpm deploy:agent <name>`, with no frontend
+rebuild. Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
 instructions ≤64 KiB (`core/src/agent.js`). Zero-skill agents (no `skills/` folder) are
 valid — nothing is provisioned, the bundle still carries instructions/model.
 
@@ -144,7 +253,8 @@ Skill delivery has TWO legs, and both are required:
   container.
 - **Explicit catalog** — the bundle's SKILL.md frontmatter is parsed into
   `{name, description}` entries (`skillCatalogFromBundle`, `core/src/skill-catalog.js`)
-  that ride the creation seed (frontend `AGENT_SEEDS`) and the stored agent meta;
+  that ride the creation seed (served to the UI by `GET /agents/:name/meta`,
+  attached to sends by `AgentChat` via `withAgentSeed`) and the stored agent meta;
   `backend-b/src/agents/main.ts` mounts each entry with `useSkill()`, whose
   instructions point at the on-disk SKILL.md. This is what guarantees the model SEES
   the skills in its system-prompt "Available Skills" section.
@@ -227,18 +337,23 @@ pnpm smoke             # Node smoke test — core agent-bundle flow with zero Cl
 pnpm dev:frontend      # http://localhost:5173  (talks to localhost:3584 in dev)
                        # Vite serves the FILENAMES: /chat.html, /copilot.html, /admin.html.
                        # The extension-less /chat, /copilot, /admin paths are Workers assets
-                       # html_handling, so they exist only on a deployed build.
+                       # html_handling, so they exist only on a deployed build. /agent/<name>
+                       # DOES work in dev: a tiny middleware in vite.config.ts mirrors the
+                       # deployed Worker rewrite and serves agent-shell.html there.
 ```
 
 ## Deploy
 
 ```bash
-pnpm deploy            # bundle + deploy worker + all named agent defs + frontend, in order
-pnpm deploy:agents     # bundle + deploy:agent --all + deploy:frontend — ships agents/
-                       # content changes (named KV definitions for ingest, frontend-built
-                       # bundles for the dropdown + turn-1 seed; the worker is the generic
-                       # host and needs no redeploy). NEW sessions only; the GitHub
-                       # channel reads agentdef:hoth-trip-planner, so --all covers it.
+pnpm deploy            # deploy worker + all named agent defs + frontend, in order
+pnpm deploy:agents     # deploy:agent --all — ships agents/ content changes as named KV
+                       # definitions, and NOTHING else: deploy-agent.mjs builds each
+                       # bundle fresh from agents/<name>/ in memory (no pnpm bundle
+                       # needed — dist-bundle/ is only for acceptance/chat-probe), the
+                       # server validates at PUT, and the UI reads the registry at
+                       # runtime (dropdown, welcome, turn-1 seed) — no frontend or
+                       # worker redeploy. NEW sessions only; the GitHub channel reads
+                       # agentdef:hoth-trip-planner, so --all covers it.
 # or individually:
 pnpm deploy:b          # vite build + wrangler deploy the backend worker
 pnpm deploy:agent <n>  # bundle agents/<n>/ and PUT it to KV as agentdef:<n> (see above)
@@ -249,8 +364,8 @@ First deploy of the backend creates its Cloudflare Container application and pro
 confirm. It needs **Workers AI** and **Containers** enabled on the account. The frontend
 build reads the backend URL from [`frontend/.env.production`](./frontend/.env.production).
 
-The frontend deploy publishes all three pages: `/chat`, `/copilot` and `/admin`, plus
-`404.html` for `/` and everything else.
+The frontend deploy publishes the three fixed pages (`/chat`, `/copilot`, `/admin`), the
+`/agent/<name>` shell + its rewrite Worker, and `404.html` for `/` and everything else.
 
 ## Authentication
 
@@ -260,9 +375,11 @@ credentials:
 - **admin / CLI** — `/admin/*`, agent deploys, skill-checks, session deletes. One shared
   deployment secret, `Authorization: Bearer <API_TOKEN>` (`apiKeyGuard`), failing closed
   (503) when `API_TOKEN` is unset.
-- **user chat** — creating a session and talking in it. The caller's own credential
-  (`userTokenGuard`): a Semantius token, or a better-auth session cookie. No API key is
-  accepted here, so a chat client can never browse data or deploy.
+- **user chat** — creating a session, talking in it, and reading the agent registry
+  (`GET /agents` — the deployed names; `GET /agents/:name/meta` — one agent's welcome card
+  + turn-1 seed, skill files excluded). The caller's own credential (`userTokenGuard`): a
+  Semantius token, or a better-auth session cookie. No API key is accepted here, so a chat
+  client can never browse data or deploy.
 
 Set the admin key as a Cloudflare secret, and locally via `.dev.vars`:
 
@@ -442,7 +559,7 @@ the optional `welcome` key in `agent.jsonc` (validated in `core/src/agent.js`
 Each prompt has a `display` label, an optional fuller `prompt`, and an optional
 `prefill` flag. Semantics, implemented in ONE place —
 `frontend/src/components/ai-elements/welcome.tsx` (`WelcomeCard`), rendered by the
-shared `AgentChat` so `/chat` and `/copilot` cannot drift:
+shared `AgentChat` so `/chat`, `/copilot` and `/agent/<name>` cannot drift:
 
 - Clicking a prompt uses `prompt ?? display` as the text.
 - `prefill` absent/`false`: the text is **sent immediately** as the user's message.
@@ -451,9 +568,10 @@ shared `AgentChat` so `/chat` and `/copilot` cannot drift:
 Layout: sections in a 2-column grid (1 column on narrow screens) with **no cap on the
 number of sections or prompts** — the UI never truncates; only string lengths are
 validated (title/display ≤200 chars, subtitle ≤500, prompt ≤4096, `WELCOME_LIMITS`).
-The field is UI-only: it rides the bundle (and its version hash) but never reaches the
-model, and it is deliberately NOT part of the `AgentSeed` sent to the backend. An agent
-without `welcome` gets the generic empty state.
+The field is UI-only: it rides the bundle (and its version hash) and reaches the UI via
+`GET /agents/:name/meta`, but never reaches the model — `AgentChat` strips it before
+attaching the seed to a send (`seedFromMeta`), so it is deliberately NOT part of the
+`AgentSeed`. An agent without `welcome` gets the generic empty state.
 
 ## Egress (per-agent proxy_whitelist)
 

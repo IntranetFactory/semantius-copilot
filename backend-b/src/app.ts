@@ -59,6 +59,7 @@ import { getSandbox } from '@cloudflare/sandbox';
 import { createAgentRouter } from '@flue/runtime/routing';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { csrf } from 'hono/csrf';
 import { Main } from './agents/main';
 import {
   apiKeyGuard,
@@ -87,6 +88,7 @@ import {
   validateAgentBundle,
   AGENT_DEF_KEY_PREFIX,
   SKILL_NAME_RE,
+  skillCatalogFromBundle,
   STREAM_PROTOCOL_HEADERS,
   COST_BASIS,
   CONTAINER_RATES,
@@ -111,6 +113,14 @@ type Env = {
   JWT_EXCHANGE_API_KEY?: string;
   /** Host serving /session and /session/token. A var; defaults to api.semantius.cloud. */
   SEMANTIUS_SESSION_BASE_URL?: string;
+  /**
+   * Comma-separated exact origins allowed to make CREDENTIALED browser calls
+   * (the frontend Worker, plus any app embedding the chat same-site). A var;
+   * unset/empty = no browser origin is allowed. Non-browser callers (deploy
+   * scripts, curl, the GitHub webhook) send no Origin header and are never
+   * affected.
+   */
+  ALLOWED_ORIGINS?: string;
 };
 
 /** What `userTokenGuard` puts on the context once it has verified the bearer. */
@@ -124,10 +134,48 @@ const BUNDLE_TTL_SECONDS = 24 * 60 * 60;
 
 const app = new Hono<{ Bindings: Env; Variables: { semantiusUser: SemantiusUser } }>();
 
+/** The ALLOWED_ORIGINS var, parsed. Shared by the CORS echo and the CSRF
+ * origin check below, so the two can never disagree. */
+const allowedOrigins = (env: Env): string[] =>
+  (env.ALLOWED_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+
+// CORS is CREDENTIALED (ambient-cookie chat: the browser attaches its own
+// better-auth cookie to `credentials: 'include'` requests), which forbids the
+// old wildcard: browsers reject `*` with credentials, and echoing arbitrary
+// origins would let any website make cookie-authenticated calls. So the
+// origin is echoed only off the ALLOWED_ORIGINS allowlist — function form,
+// because `c.env` does not exist at module scope. Falsy return = no CORS
+// headers at all.
 // exposeHeaders: without it the browser can't read the durable-streams cursor
-// headers (Stream-Up-To-Date / Stream-Next-Offset), so the conversation client
-// busy-polls catch-up reads forever. See STREAM_PROTOCOL_HEADERS.
-app.use('*', cors({ exposeHeaders: STREAM_PROTOCOL_HEADERS }));
+// headers (Stream-Up-To-Date / Stream-Next-Offset), so the conversation
+// client busy-polls catch-up reads forever. See STREAM_PROTOCOL_HEADERS —
+// an explicit list on purpose: `*` is ignored on credentialed responses.
+app.use(
+  '*',
+  cors({
+    origin: (origin, c) => (allowedOrigins(c.env as Env).includes(origin) ? origin : ''),
+    credentials: true,
+    exposeHeaders: STREAM_PROTOCOL_HEADERS,
+  }),
+);
+
+// CSRF, scoped to EXACTLY the cookie-reachable unsafe-method surface: with
+// ambient cookies on, a hostile page can fire a no-preflight form POST
+// (text/plain) that CORS never inspects, and c.req.json() parses the body
+// regardless of Content-Type. Hono's csrf middleware 403s unsafe-method
+// requests whose Content-Type is form-like (missing counts as text/plain)
+// unless the Origin is allowlisted — JSON requests (the SDK always sends
+// application/json on body requests) are untouched, as is every
+// Authorization-only admin/CLI route (a bare curl DELETE /sessions/:id has no
+// Content-Type and would 403 under a wider scope — do not broaden this to
+// /sessions/* or /agents/*).
+// Known benign leftover: the ownership gate's write-on-change JWT refresh
+// (further down) runs on GET, and CORS never stops a cross-site GET from
+// EXECUTING server-side — it only refreshes the victim's own session record,
+// so there is nothing for an attacker to gain.
+const csrfGuard = csrf({ origin: (origin, c) => allowedOrigins(c.env as Env).includes(origin) });
+app.use('/sessions/agent', csrfGuard);
+app.use('/agents/main/*', csrfGuard);
 
 // GitHub webhook (POST /channels/github/webhook). Mounted BEFORE the API
 // key guard: GitHub can't send our bearer — the channel authenticates each
@@ -274,6 +322,54 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
 // bearer (`<org>:<jwt>`) or a better-auth session cookie: the guard resolves
 // both to one verdict, which supplies the org and the JWT the sandbox will act
 // with, so nothing credential-shaped needs to travel in the body any more.
+
+// The deployed-agent index: every `agentdef:<name>` key, names only. This is
+// what the chat pages' agent dropdown lists at RUNTIME — agents deploy to KV
+// independently of any frontend build, so the UI asks the registry instead of
+// baking a list in. User guard, not admin: listing which agents exist is part
+// of the chat surface, but not something for the unauthenticated.
+app.get('/agents', userTokenGuard(), async (c) => {
+  const names: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await c.env.STORE.list({ prefix: AGENT_DEF_KEY_PREFIX, cursor });
+    for (const key of page.keys) names.push(key.name.slice(AGENT_DEF_KEY_PREFIX.length));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return c.json({ agents: names.sort() });
+});
+
+// One agent's live definition meta: existence, the welcome card, and the
+// turn-1 seed (instructions, model, skillCatalog) — read from `agentdef:
+// <name>` on every call, so what the chat seeds a new session with can never
+// skew from the definition the session create snapshots. Skill FILES are
+// deliberately not returned — the UI needs the catalog, not the contents.
+// Path-safe next to the /agents/main mount: `main` is a static segment, so
+// Hono routes /agents/main/* to the conversation router, never here.
+app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
+  const name = c.req.param('name');
+  if (!SKILL_NAME_RE.test(name) || name.length > 64) {
+    return c.json({ error: 'invalid agent name (lowercase alphanumerics/hyphens, max 64)' }, 400);
+  }
+  const raw = await c.env.STORE.get(`${AGENT_DEF_KEY_PREFIX}${name}`);
+  if (!raw) {
+    return c.json({ error: `unknown agent "${name}" — deploy it with pnpm deploy:agent ${name}` }, 404);
+  }
+  // Re-validate on read (defense in depth, same as session create).
+  const bundle = validateAgentBundle(raw);
+  const skillCatalog = skillCatalogFromBundle(bundle);
+  return c.json({
+    agentName: bundle.agentName,
+    version: bundle.version,
+    baseImage: bundle.baseImage,
+    instructions: bundle.instructions,
+    ...(bundle.model ? { model: bundle.model } : {}),
+    ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
+    ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
+    ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
+  });
+});
+
 app.post('/sessions/agent', userTokenGuard(), async (c) => {
   let agentName: string;
   let sessionContext: Record<string, unknown> | undefined;

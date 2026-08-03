@@ -3,9 +3,12 @@
  * Agent bundler CLI (plan §5): scans the top-level agents/ folder, builds one
  * agent bundle per agents/<name>/ that has an agent.jsonc (folders without it
  * are skipped with a warning), asserts each bundle round-trips byte-identical,
- * and emits the artifacts where the consumers pick them up:
- *   - dist-bundle/<name>.agent.json                 (canonical artifacts)
- *   - frontend/src/generated/agents/<name>.json     (import.meta.glob'd by the UI)
+ * and emits the canonical artifacts:
+ *   - dist-bundle/<name>.agent.json
+ *
+ * The frontend consumes NO bundler output: the UI reads the agent registry at
+ * runtime from the backend (GET /agents, GET /agents/:name/meta), so deploying
+ * an agent never needs a frontend rebuild.
  *
  * Deployment to the backend is separate: scripts/deploy-agent.mjs builds the
  * same bundle and PUTs it to the worker as a named KV definition.
@@ -27,10 +30,9 @@ if (agents.length === 0) {
   process.exit(1);
 }
 
-// Clean output dirs so removed agents disappear from the frontend; drop
-// artifacts of the pre-multi-agent layout if they linger.
-rmSync(join(root, 'frontend', 'src', 'generated', 'agents'), { recursive: true, force: true });
-rmSync(join(root, 'frontend', 'src', 'generated', 'hoth-bundle.json'), { force: true });
+// Drop the artifacts of the retired build-time frontend registry — the UI
+// reads the backend registry at runtime now, so nothing may linger here.
+rmSync(join(root, 'frontend', 'src', 'generated'), { recursive: true, force: true });
 
 const bundles = new Map();
 const scratch = mkdtempSync(join(tmpdir(), 'hoth-bundle-'));
@@ -48,15 +50,10 @@ try {
 
 for (const [name, bundle] of bundles) {
   const json = JSON.stringify(bundle);
-  const outputs = [
-    join(root, 'dist-bundle', `${name}.agent.json`),
-    join(root, 'frontend', 'src', 'generated', 'agents', `${name}.json`),
-  ];
-  for (const out of outputs) {
-    mkdirSync(dirname(out), { recursive: true });
-    writeFileSync(out, json, 'utf-8');
-    console.log(`wrote ${out}`);
-  }
+  const out = join(root, 'dist-bundle', `${name}.agent.json`);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, json, 'utf-8');
+  console.log(`wrote ${out}`);
   console.log(`  agentName: ${bundle.agentName}`);
   console.log(`  version:   ${bundle.version}`);
   console.log(`  baseImage: ${bundle.baseImage}`);

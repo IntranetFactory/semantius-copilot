@@ -1,33 +1,29 @@
 /**
- * Shared between the three pages: the chat page (`/chat`, chat.html), the
- * copilot page (`/copilot`, copilot.html) and the admin console (`/admin`,
- * admin.html). They are separate builds on purpose — the user pages must not
- * carry the data browser, and their users never hold the deployment API key —
- * so anything more than one of them needs lives here.
+ * Chat/session machinery for the agent chat surface — auth, client
+ * construction, session creation, and agent-meta loading. Everything in here
+ * (and this folder) is app-agnostic: no page paths, no localStorage keys, no
+ * workspace imports, so the whole `components/ai-elements/` folder can be
+ * copied into another app as-is. Hoth-specific page wiring lives in
+ * src/pages.ts; the admin console's helpers live in src/App.tsx.
+ *
+ * The backend contract this module speaks (any backend-b-shaped Worker):
+ *   GET  /agents                 names of every deployed agent
+ *   GET  /agents/:name/meta      one agent's welcome card + turn-1 seed
+ *   POST /sessions/agent         create a session (server mints the id)
+ *   /agents/main/:sessionId      the conversation (flue v2 + SSE)
  */
 import { createFlueClient, type FlueClient } from '@flue/sdk';
-import { BETTER_AUTH_COOKIE_HEADER, SKILL_NAME_RE } from '@hoth/core';
 import { useEffect, useMemo, useState } from 'react';
 
-/** One clickable starter prompt on the welcome card. The text sent (or
- * prefilled, when `prefill` is true) is `prompt ?? display`. */
-export type WelcomePrompt = { display: string; prompt?: string; prefill?: boolean };
-export type WelcomeSection = { title: string; subtitle?: string; prompts: WelcomePrompt[] };
-/** Per-agent welcome card (agent.jsonc `welcome`) — shown by the chat UI while
- * a conversation is empty. UI-only: never part of the AgentSeed. */
-export type AgentWelcome = { title: string; subtitle?: string; sections?: WelcomeSection[] };
+import type { AgentWelcome } from './welcome';
 
-export type AgentBundle = {
-  agentName: string;
-  version: string;
-  baseImage: string;
-  instructions: string;
-  model?: string;
-  modelBaseUrl?: string;
-  proxyWhitelist?: string[];
-  welcome?: AgentWelcome;
-  skills: Record<string, Record<string, string>>;
-};
+/**
+ * The header a browser page sends the better-auth session cookie VALUE in
+ * (`cookie` auth mode below) — a page cannot set a real `Cookie` header from
+ * fetch. Mirrors the canonical constant in core/src/identity.js; inlined so
+ * this folder carries no workspace imports.
+ */
+const BETTER_AUTH_COOKIE_HEADER = 'x-better-auth-cookie';
 
 /**
  * Instance-creation seed for conversations: the definition meta minus the
@@ -51,148 +47,125 @@ export type AgentSeed = {
 export type AgentMeta = AgentSeed & { welcome?: AgentWelcome };
 
 /**
+ * Hoth's own backend location — the DEFAULT `baseUrl` everywhere in this
+ * module. Another app embedding this folder passes its backend's URL instead
+ * (AgentChatContainer's `baseUrl` prop); the env read is optional-chained so
+ * non-Vite bundlers don't crash on `import.meta.env`.
+ */
+export const BACKEND = {
+  label: 'Backend',
+  baseUrl: import.meta.env?.VITE_AGENTBACKEND_URL ?? 'http://localhost:3584',
+} as const;
+
+/** The one conversation URL a v2 FlueClient addresses (main mount + session id). */
+export const conversationUrl = (sessionId: string, baseUrl: string = BACKEND.baseUrl) =>
+  `${baseUrl}/agents/main/${encodeURIComponent(sessionId)}`;
+
+/**
+ * What the chat surface authenticates its requests with:
+ *
+ *   bearer      the user's own Semantius token (`<org>:<jwt>`) — sent as
+ *               `Authorization: Bearer`.
+ *   authCookie  a better-auth session cookie VALUE — sent in a custom header
+ *               (a page cannot set `Cookie` from fetch), which the backend
+ *               turns back into a real cookie on its server-to-server hop.
+ *   ambient     NO explicit credential: every request goes out with
+ *               `credentials: 'include'`, so the BROWSER attaches its own
+ *               better-auth cookie for the backend's domain. Requires the
+ *               backend to be same-site with the page (and in its CORS
+ *               allowlist); a missing/invalid browser session answers 401,
+ *               which the UI renders as signed-out.
+ *
+ * Server-side precedence when several arrive at once: bearer first, then the
+ * custom header, then the browser's cookie jar (core/src/auth.js).
+ */
+export type ChatAuth = { bearer: string } | { authCookie: string } | { ambient: true };
+
+/** The request headers one ChatAuth becomes. Ambient sends none — the
+ * credential is the browser's own cookie, attached by `authFetchInit`. */
+export function authHeaders(auth: ChatAuth): Record<string, string> {
+  if ('bearer' in auth) return { authorization: `Bearer ${auth.bearer}` };
+  if ('authCookie' in auth) return { [BETTER_AUTH_COOKIE_HEADER]: auth.authCookie };
+  return {};
+}
+
+/** The fetch init one ChatAuth needs — the single place ambient mode turns
+ * into `credentials: 'include'`. Spread it into every backend fetch. */
+export function authFetchInit(auth: ChatAuth): RequestInit {
+  return 'ambient' in auth
+    ? { headers: authHeaders(auth), credentials: 'include' }
+    : { headers: authHeaders(auth) };
+}
+
+/** Whether this auth can attempt a request at all. Ambient always can — the
+ * browser may hold a session cookie the page cannot see; the backend's 401 is
+ * the only authoritative "signed out". */
+export function hasCredential(auth: ChatAuth): boolean {
+  if ('ambient' in auth) return true;
+  return ('bearer' in auth ? auth.bearer : auth.authCookie).length > 0;
+}
+
+/**
  * Names of every deployed agent (`GET /agents`) — the RUNTIME agent registry.
  * There is no build-time agent list anywhere in this UI: agents deploy to
  * backend KV independently of any frontend build (`pnpm deploy:agent <name>`),
- * so the pages ask the backend which agents exist. Auth-gated like the rest of
- * the user surface — callable only once a credential is present.
+ * so the pages ask the backend which agents exist.
  */
-export async function fetchAgentNames(auth: ChatAuth): Promise<string[]> {
-  const response = await fetch(`${BACKEND.baseUrl}/agents`, { headers: authHeaders(auth) });
+export async function fetchAgentNames(auth: ChatAuth, baseUrl: string = BACKEND.baseUrl): Promise<string[]> {
+  const response = await fetch(`${baseUrl}/agents`, authFetchInit(auth));
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`${response.status}: ${payload?.error ?? 'could not list agents'}`);
   return Array.isArray(payload?.agents) ? (payload.agents as string[]) : [];
 }
 
-export const BACKEND = {
-  label: 'Backend',
-  baseUrl: import.meta.env.VITE_BACKEND_B_URL ?? 'http://localhost:3584',
-} as const;
-
-/** Deployment API key — ADMIN console only. Never read by the user pages. */
-export const API_KEY_STORAGE = 'hoth-api-key';
-/** The user's Semantius token (`<org>:<jwt>`) — CHAT page only. */
-export const TOKEN_STORAGE = 'hoth-semantius-jwt';
-/** The user's better-auth session cookie VALUE — COPILOT page only. */
-export const COOKIE_STORAGE = 'hoth-better-auth-cookie';
+/** What `POST /sessions/agent` answers on success. */
+export type SessionCreateInfo = {
+  sessionId: string;
+  agentName?: string;
+  version?: string;
+  user?: { org?: string; sub?: string; email?: string; name?: string };
+};
 
 /**
- * Where each page lives. THE single source of truth for the paths — the three
- * fixed pages are implicit in Workers assets (filename + html_handling), and
- * the `/agent/<name>` family is the frontend Worker's one rewrite
- * (frontend/worker/index.ts), so nothing else may hardcode any of them. `/` is
- * not a page: it is a real 404.
+ * Create a session (`POST /sessions/agent`). Name-based: the definition must
+ * already be deployed to KV via `pnpm deploy:agent <name>` — 404 otherwise.
+ * The credential travels in the headers, so nothing credential- or
+ * tenant-shaped goes in the body: the org and the user come from what the
+ * backend verifies. The SESSION ID comes back from the server — the id
+ * carries the tenant (`<org>-<sub>-<random>`), and an id a browser picked
+ * would let a client stamp any tenant it liked on its own KV keys.
  */
-export const CHAT_PAGE = '/chat';
-export const COPILOT_PAGE = '/copilot';
-export const ADMIN_PAGE = '/admin';
-export const AGENT_PAGE_PREFIX = '/agent';
-
-/** Deep link to the chat page, optionally opening one session. */
-export function chatPageUrl(sessionId?: string): string {
-  return sessionId ? `${CHAT_PAGE}#session=${encodeURIComponent(sessionId)}` : CHAT_PAGE;
-}
-
-/** Deep link to one agent's input-free page, optionally opening one session. */
-export function agentPageUrl(name: string, sessionId?: string): string {
-  const base = `${AGENT_PAGE_PREFIX}/${encodeURIComponent(name)}`;
-  return sessionId ? `${base}#session=${encodeURIComponent(sessionId)}` : base;
-}
-
-/**
- * The agent name an `/agent/<name>` page was opened for, from its pathname —
- * the inverse of `agentPageUrl`. Accepts a stray `.html` suffix (the shell
- * asset addressed by filename) and rejects anything that is not a well-formed
- * agent name, so a direct hit on the shell yields undefined, not a bogus name.
- */
-export function agentNameFromPath(pathname: string): string | undefined {
-  if (!pathname.startsWith(`${AGENT_PAGE_PREFIX}/`)) return undefined;
-  const name = pathname.slice(AGENT_PAGE_PREFIX.length + 1).replace(/\.html$/, '');
-  return SKILL_NAME_RE.test(name) && name.length <= 64 ? name : undefined;
-}
-
-/** The one conversation URL a v2 FlueClient addresses (main mount + session id). */
-export const conversationUrl = (sessionId: string) =>
-  `${BACKEND.baseUrl}/agents/main/${encodeURIComponent(sessionId)}`;
-
-/**
- * The same conversation, read through the admin console's credential. The
- * backend mounts the agent router twice — `/agents/main/*` for the owner's
- * Semantius token, `/admin/agents/main/*` (read-only, GET only) for the
- * deployment key — so the data browser can show conversations without the
- * operator holding anyone's user token.
- */
-export const adminConversationUrl = (sessionId: string) =>
-  `${BACKEND.baseUrl}/admin/agents/main/${encodeURIComponent(sessionId)}`;
-
-/**
- * What a page authenticates its chat requests with. The backend's chat gate
- * accepts either, bearer first (core/src/auth.js userTokenGuard):
- *
- *   bearer  the user's own Semantius token (`<org>:<jwt>`) — the chat page, and
- *           the admin console reading a conversation through its own key.
- *   cookie  a better-auth session cookie VALUE — the copilot page. It travels
- *           in a custom header, not a real Cookie header: a browser cannot set
- *           `Cookie` from fetch, and this backend is a different origin from
- *           the page, so a real cookie would never be sent at all.
- */
-export type ChatAuth = { bearer: string } | { cookie: string };
-
-/** The request headers one ChatAuth becomes. The single place either credential
- * is turned into a header — used for the plain POST /sessions/agent fetch and
- * by the conversation client below. */
-export function authHeaders(auth: ChatAuth): Record<string, string> {
-  return 'bearer' in auth
-    ? { authorization: `Bearer ${auth.bearer}` }
-    : { [BETTER_AUTH_COOKIE_HEADER]: auth.cookie };
-}
-
-/** Empty credential = nothing to authenticate with (an empty input box). */
-export function hasCredential(auth: ChatAuth): boolean {
-  return ('bearer' in auth ? auth.bearer : auth.cookie).length > 0;
-}
-
-/**
- * Read the credentials (and optionally a session id) out of the URL fragment —
- * `#jwt=<org>:<jwt>` and/or `#cookie=<value>`, either with `&session=<id>`.
- * That is how a link, or the admin console's "Open chat", hands one over. The
- * fragment never reaches the server; it is consumed once at mount and every
- * credential key is stripped from the address bar — also the key a page does
- * not use, so a mis-addressed link never leaves a credential sitting there.
- * Which key(s) a page honors is the page's call: /chat reads `jwt`, /copilot
- * reads `cookie`, /agent/<name> reads both (the bearer wins server-side).
- *
- * Call once per mount (via useMemo): it mutates history.
- */
-export function consumeCredentialFragment(): { jwt?: string; cookie?: string; session?: string } {
-  const raw = window.location.hash.replace(/^#/, '');
-  if (!raw) return {};
-  const params = new URLSearchParams(raw);
-  const jwt = params.get('jwt') ?? undefined;
-  const cookie = params.get('cookie') ?? undefined;
-  const session = params.get('session') ?? undefined;
-  if (jwt || cookie) {
-    // Don't leave a credential sitting in the address bar. (It stays in browser
-    // history for this entry either way — a link-borne credential is a
-    // convenience for POC/automation, not a way to keep one secret.)
-    params.delete('jwt');
-    params.delete('cookie');
-    const rest = params.toString();
-    window.history.replaceState(null, '', `${window.location.pathname}${rest ? `#${rest}` : ''}`);
+export async function createAgentSession(
+  auth: ChatAuth,
+  agentName: string,
+  baseUrl: string = BACKEND.baseUrl,
+): Promise<SessionCreateInfo> {
+  const init = authFetchInit(auth);
+  const response = await fetch(`${baseUrl}/sessions/agent`, {
+    ...init,
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders(auth) },
+    body: JSON.stringify({ agentName }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`${response.status}: ${payload?.error ?? JSON.stringify(payload)}`);
+  const id = payload?.sessionId;
+  if (typeof id !== 'string' || !id) {
+    throw new Error(`session create returned no sessionId: ${JSON.stringify(payload)}`);
   }
-  return { jwt, cookie, session };
+  return payload as SessionCreateInfo;
 }
 
 /**
  * Conversation-scoped client (v2: no deployment-wide client, no name/id).
  *
- * `auth` is the USER'S own credential: the chat surface authenticates every
- * request with it and the backend re-verifies it upstream, so a refreshed
- * credential takes effect on the next request and an expired one stops the
- * conversation. The SDK resolves `headers` on every request — including each
- * stream reconnection — so a cookie-authenticated conversation streams exactly
- * like a bearer one. The agent seed is NOT attached here: AgentChat owns the
- * meta and wraps the client via `withAgentSeed`.
+ * `auth` is the USER'S credential: the surface authenticates every request
+ * with it and the backend re-verifies it upstream, so a refreshed credential
+ * takes effect on the next request and an expired one stops the conversation.
+ * The SDK resolves headers/fetch on every request — including each stream
+ * reconnection — so cookie- and ambient-authenticated conversations stream
+ * exactly like bearer ones. The agent seed is NOT attached here: AgentChat
+ * owns the meta and wraps the client via `withAgentSeed`.
  */
 export function useConversationClient(
   auth: ChatAuth,
@@ -202,14 +175,21 @@ export function useConversationClient(
   // Destructured to primitives BEFORE the dependency array: `auth` is a fresh
   // object literal on every render, which would defeat the memo entirely.
   const bearer = 'bearer' in auth ? auth.bearer : '';
-  const cookie = 'cookie' in auth ? auth.cookie : '';
+  const authCookie = 'authCookie' in auth ? auth.authCookie : '';
+  const ambient = 'ambient' in auth;
   return useMemo(() => {
-    if (!sessionId || !(bearer || cookie)) return undefined;
+    if (!sessionId || !(ambient || bearer || authCookie)) return undefined;
     return createFlueClient({
       url: urlFor(sessionId),
-      ...(bearer ? { token: bearer } : { headers: { [BETTER_AUTH_COOKIE_HEADER]: cookie } }),
+      // The SDK routes EVERY request — sends, history, the SSE stream and its
+      // reconnects — through this fetch, so ambient mode rides on one wrapper.
+      ...(ambient
+        ? { fetch: ((input, init) => fetch(input, { ...init, credentials: 'include' })) as typeof fetch }
+        : bearer
+          ? { token: bearer }
+          : { headers: { [BETTER_AUTH_COOKIE_HEADER]: authCookie } }),
     });
-  }, [bearer, cookie, sessionId, urlFor]);
+  }, [ambient, bearer, authCookie, sessionId, urlFor]);
 }
 
 /**
@@ -232,8 +212,8 @@ export function seedFromMeta(meta: AgentMeta): AgentSeed {
 }
 
 /**
- * Cached per agent name for the page's lifetime: the draft → live key-flip
- * remounts AgentChat, and the remounted instance must see the meta
+ * Cached per backend + agent name for the page's lifetime: the draft → live
+ * key-flip remounts AgentChat, and the remounted instance must see the meta
  * SYNCHRONOUSLY — its first send creates the Flue instance, and that is the
  * only send whose `initialData` counts. AgentChat blocks draft submits until
  * the meta is here, so the cache is always warm by then.
@@ -244,36 +224,51 @@ const metaCache = new Map<string, AgentMeta>();
  * One agent's live definition meta (`GET /agents/:name/meta`): the turn-1 seed
  * plus the welcome card, straight from the backend registry — the runtime
  * counterpart of `fetchAgentNames`, and the only place the UI learns what an
- * agent is. 404 = the name names no deployed agent.
+ * agent is. `metaStatus` carries the HTTP status of a failure so callers can
+ * tell 401 (signed out — AgentChatContainer's signed-out notice) from 404
+ * (the name names no deployed agent — AgentChat's error card).
  */
-export function useAgentMeta(auth: ChatAuth, agentName?: string): { meta?: AgentMeta; metaError?: string } {
+export function useAgentMeta(
+  auth: ChatAuth,
+  agentName?: string,
+  baseUrl: string = BACKEND.baseUrl,
+): { meta?: AgentMeta; metaError?: string; metaStatus?: number } {
   const bearer = 'bearer' in auth ? auth.bearer : '';
-  const cookie = 'cookie' in auth ? auth.cookie : '';
-  const meta = agentName ? metaCache.get(agentName) : undefined;
-  const [result, setResult] = useState<{ name: string; error?: string }>();
+  const authCookie = 'authCookie' in auth ? auth.authCookie : '';
+  const ambient = 'ambient' in auth;
+  const cacheKey = agentName ? `${baseUrl}|${agentName}` : undefined;
+  const meta = cacheKey ? metaCache.get(cacheKey) : undefined;
+  const [result, setResult] = useState<{ key: string; error?: string; status?: number }>();
   useEffect(() => {
-    if (!agentName || meta || !(bearer || cookie)) return;
+    if (!agentName || !cacheKey || meta || !(ambient || bearer || authCookie)) return;
     let cancelled = false;
     (async () => {
+      const requestAuth: ChatAuth = ambient ? { ambient: true } : bearer ? { bearer } : { authCookie };
       try {
-        const response = await fetch(`${BACKEND.baseUrl}/agents/${encodeURIComponent(agentName)}/meta`, {
-          headers: authHeaders(bearer ? { bearer } : { cookie }),
-        });
+        const response = await fetch(
+          `${baseUrl}/agents/${encodeURIComponent(agentName)}/meta`,
+          authFetchInit(requestAuth),
+        );
         const payload = await response.json().catch(() => ({}));
         if (cancelled) return;
         if (!response.ok) {
-          setResult({ name: agentName, error: String(payload?.error ?? `could not load agent (${response.status})`) });
+          setResult({
+            key: cacheKey,
+            error: String(payload?.error ?? `could not load agent (${response.status})`),
+            status: response.status,
+          });
         } else {
-          metaCache.set(agentName, payload as AgentMeta);
-          setResult({ name: agentName }); // re-render so the cache read above picks it up
+          metaCache.set(cacheKey, payload as AgentMeta);
+          setResult({ key: cacheKey }); // re-render so the cache read above picks it up
         }
       } catch (err) {
-        if (!cancelled) setResult({ name: agentName, error: String(err) });
+        if (!cancelled) setResult({ key: cacheKey, error: String(err) });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [agentName, meta, bearer, cookie]);
-  return { meta, metaError: !meta && result && result.name === agentName ? result.error : undefined };
+  }, [agentName, cacheKey, meta, ambient, bearer, authCookie, baseUrl]);
+  const failed = !meta && result && result.key === cacheKey ? result : undefined;
+  return { meta, metaError: failed?.error, metaStatus: failed?.status };
 }

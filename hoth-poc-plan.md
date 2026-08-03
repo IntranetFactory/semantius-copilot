@@ -318,32 +318,48 @@ sessions. Request isolation is the POC's proven property; tenant authz is the la
 
 ## 10. Frontend (React + Vite)
 
-`@flue/react` + `@flue/sdk`. **Three pages, one Worker, split by credential** (backend A is gone;
-everything is the `/agents/main` mount on backend B):
+`@flue/react` + `@flue/sdk`. **Three fixed pages plus one dynamic family, one Worker, split by
+credential** (backend A is gone; everything is the `/agents/main` mount on backend B). The agent
+registry is RUNTIME, not build time: no agent name, list, welcome, or seed is baked into the
+frontend — the dropdown lists `GET /agents` and `AgentChat` loads welcome + turn-1 seed from
+`GET /agents/:name/meta` (both user-guarded reads of KV `agentdef:<name>`), so
+`pnpm deploy:agent <name>` makes an agent appear on every page with no frontend rebuild.
 
 - **`/chat` — chat (`chat.html` → `ChatApp.tsx`).** Authenticated by the user's own Semantius token
   (`<org>:<jwt>`, also acceptable in the URL fragment `#jwt=…&session=…`). A conversation-scoped
-  `FlueClient` per session (`useConversationClient`), plus an agent dropdown whose list is the
-  bundler output glob-imported from `frontend/src/generated/agents/*.json` — re-running
-  `pnpm bundle` after adding an `agents/<name>/` folder adds it with no code change.
-  **New session** opens a zero-cost draft (no request); the FIRST message sent fires
+  `FlueClient` per session (`useConversationClient`), plus an agent dropdown listing the runtime
+  registry. **New session** opens a zero-cost draft (no request); the FIRST message sent fires
   `POST /sessions/agent` with the selected agent NAME — the backend mints the `sessionId` (the page
   generates no id of its own) — and the message is then delivered to the new session. Render
   `messages[].parts`.
-- **`/copilot` — the same workbench (`copilot.html` → `CopilotApp.tsx`).** Authenticated by a
+- **`/copilot` — the same page (`copilot.html` → `CopilotApp.tsx`).** Authenticated by a
   better-auth session cookie value instead (fragment `#cookie=…&session=…`), sent in the
-  `x-better-auth-cookie` header because a browser cannot set `Cookie` cross-origin. Both user pages
-  are thin wrappers over `ChatWorkbench.tsx`, differing only in the credential they collect.
+  `x-better-auth-cookie` header because a browser cannot set `Cookie` cross-origin.
+- **`/agent/<name>` — the INPUT-FREE per-agent page (`agent-shell.html` → `AgentApp.tsx`).** One
+  shared shell served for every well-formed name by the only Worker code in the frontend
+  (`worker/index.ts`, reached via `run_worker_first: ["/agent", "/agent/*"]`). No controls at all:
+  the agent is fixed by the URL, the credential comes from `#cookie=`/`#jwt=` fragments or
+  localStorage — or from NEITHER: with no explicit credential the page runs in AMBIENT mode
+  (`credentials: 'include'`, the browser's own better-auth cookie; needs the backend same-site +
+  in ALLOWED_ORIGINS), and a 401 renders as a signed-out notice. A draft opens by itself.
+  Ill-formed names fall through to the real 404; a well-formed name that names no deployed agent
+  renders an in-page error (the registry decides existence, not the asset layout).
 - **`/admin` — operator console (`admin.html` → `App.tsx`).** Authenticated by the deployment API
   key. Data browser (`/admin/collections*`, plus the read-only `/admin/agents/main/*` conversation
   mount) and a Costs tab (`/admin/costs` — today's Cloudflare container spend per session). The
   only link between the pages is one-way, admin → chat.
 
-Separate Vite entries so the user bundles never ship the admin code. No path is declared in
-code beyond `CHAT_PAGE`/`COPILOT_PAGE`/`ADMIN_PAGE` in `frontend/src/lib/session.ts`; Workers assets
-resolves them from the filenames. There is no `index.html`, and `not_found_handling: "404-page"`
-means `/` and every mistyped path answer a real 404 rather than falling back to a page. POC caveat: browser-as-bundle-origin inverts the production trust model (server-side tenant
-store); fine for the POC, not the prod seam (§12).
+The conversation (draft, session create, key-flip handoff, streaming) is the reusable
+`AgentChatContainer` in `components/ai-elements/` — a folder with ZERO workspace imports,
+copyable into other apps (README "Reusable chat surface" documents the props, the three auth
+modes incl. ambient cookies, and the full copy set). `/chat` and `/copilot` share
+`ChatPage.tsx` as chrome around it; `/agent/<name>` renders it bare. Separate Vite entries
+so the user bundles never ship the admin code. No fixed path is declared in code beyond
+`CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (hoth's page map + credential
+bootstrap, deliberately outside the copyable folder);
+Workers assets resolves the fixed pages from the filenames. There is no `index.html`, and
+`not_found_handling: "404-page"` means `/` and every mistyped path answer a real 404 rather than
+falling back to a page.
 
 ## 11. Build order
 

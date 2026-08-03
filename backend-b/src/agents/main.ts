@@ -266,8 +266,10 @@ export function Main({ id }: AgentProps) {
   // Lazy boot (see lazy-env.ts): the wrapper serves discovery + skills-tree
   // reads from the KV bundle and only boots the container at the first
   // exec/write — which then provisions skills + Semantius env (absent→write,
-  // no-op on a warm container). getSandbox() itself issues no RPC, so
-  // constructing the factory here costs nothing.
+  // no-op on a warm container). getSandbox() is deferred with it: on a cold
+  // per-isolate cache it fires a `configure` RPC that wakes the sandbox DO
+  // (seen live 2026-08-02 as `HothSandbox.configure` on a chat-only turn), so
+  // it must not run at render.
   const loadBundle = async () => {
     const raw = await STORE.get(bundleKey);
     return raw ? (validateAgentBundle(raw) as { skills?: Record<string, Record<string, string>> }) : null;
@@ -284,9 +286,18 @@ export function Main({ id }: AgentProps) {
     const org = (record?.session_context as { semantius_org?: unknown } | undefined)?.semantius_org;
     await provisionSemantiusEnv(sandbox, typeof org === 'string' ? org : undefined);
   };
-  const factory = cloudflareSandbox(getSandbox(namespace, id));
   useSandbox(
-    { createSessionEnv: async (opts) => lazySessionEnv(await factory.createSessionEnv(opts), loadBundle, provisionWorkspace) },
+    {
+      createSessionEnv: async (opts) =>
+        lazySessionEnv(
+          '/workspace',
+          // Deferred: this is the first sandbox-DO contact, and it only runs
+          // on the provision/delegation path (never for bundle-served reads).
+          () => cloudflareSandbox(getSandbox(namespace, id)).createSessionEnv(opts),
+          loadBundle,
+          provisionWorkspace,
+        ),
+    },
     { cwd: '/workspace' },
   );
 

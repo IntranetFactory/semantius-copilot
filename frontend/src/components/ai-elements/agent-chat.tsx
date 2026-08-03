@@ -1,14 +1,14 @@
 /**
- * Panel B of the Chats (A/B) tab: the same flue agent session as Panel A, but
- * rendered with Vercel ai-elements (shadcn/Radix) for a richer UX — markdown
+ * One agent conversation, rendered with ai-elements (shadcn/Radix): markdown
  * tables, collapsible tool-call cards, streamed reasoning, auto-scroll, and a
- * real busy indicator.
+ * real busy indicator. Driven by `useFlueAgent({ client, live: 'sse' })`
+ * against the conversation's agent Durable Object (v2 conversation-scoped
+ * client); flue's `FlueConversationMessage` mirrors the AI SDK v5 `UIMessage`
+ * shape ai-elements consumes, so mapping is near 1:1.
  *
- * Data source is identical to Panel A's `Chat`: `useFlueAgent({ client,
- * live:'sse' })` against the same agent Durable Object (v2 conversation-scoped
- * client), so both panels still converge. flue's `FlueConversationMessage`
- * mirrors the AI SDK v5 `UIMessage` shape that ai-elements consumes, so
- * mapping is near 1:1 — only role/status need trivial maps.
+ * This is the RENDERER half of the surface: it needs a client (or draft
+ * callbacks) handed in. The reusable entry point that owns the session
+ * lifecycle is AgentChatContainer (./agent-chat-container.tsx).
  */
 import { useFlueAgent } from '@flue/react';
 import type { FlueClient } from '@flue/sdk';
@@ -16,13 +16,16 @@ import type { ChatStatus } from 'ai';
 import { MessageSquareIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { Spinner } from '@/components/ui/spinner';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
-} from '@/components/ai-elements/conversation';
-import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
+} from './conversation';
+import { Message, MessageContent, MessageResponse } from './message';
 import {
   PromptInput,
   PromptInputBody,
@@ -30,13 +33,11 @@ import {
   type PromptInputMessage,
   PromptInputSubmit,
   PromptInputTextarea,
-} from '@/components/ai-elements/prompt-input';
-import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning';
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '@/components/ai-elements/tool';
-import { WelcomeCard } from '@/components/ai-elements/welcome';
-import { Spinner } from '@/components/ui/spinner';
-import { TooltipProvider } from '@/components/ui/tooltip';
+} from './prompt-input';
+import { Reasoning, ReasoningContent, ReasoningTrigger } from './reasoning';
 import { seedFromMeta, useAgentMeta, withAgentSeed, type ChatAuth } from './session';
+import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from './tool';
+import { WelcomeCard } from './welcome';
 
 type AgentMessage = ReturnType<typeof useFlueAgent>['messages'][number];
 type AgentPart = AgentMessage['parts'][number];
@@ -53,9 +54,12 @@ export function AgentChat({
   client,
   auth,
   agentName,
+  baseUrl,
   initialMessage,
   onDraftSend,
   draftPending,
+  className,
+  placeholder,
 }: {
   /** Absent = draft mode: the surface renders before any session exists (the
    * hook stays dormant), and the first submit goes through onDraftSend. */
@@ -66,6 +70,8 @@ export function AgentChat({
    * welcome card and turn-1 seed itself, live from the backend registry
    * (useAgentMeta) — no build-time agent knowledge anywhere. */
   agentName: string;
+  /** Backend origin the meta is loaded from (defaults to session.ts BACKEND). */
+  baseUrl?: string;
   /** The text whose submit created this session — sent exactly once after the
    * live mount, so the user's first message is never lost in the handoff. */
   initialMessage?: string;
@@ -74,19 +80,23 @@ export function AgentChat({
   onDraftSend?: (text: string) => Promise<void>;
   /** True while the session create is in flight — locks the composer. */
   draftPending?: boolean;
+  /** Merged into the conversation frame (e.g. to override the default height). */
+  className?: string;
+  /** Composer placeholder text. */
+  placeholder?: string;
 }) {
   const [input, setInput] = useState('');
   // The agent's live definition meta: welcome card + turn-1 seed. Draft
   // submits are blocked until it is here (the very first send of a session
   // must carry the seed), so the key-flip remount below always finds it in
   // the module cache, synchronously.
-  const { meta, metaError } = useAgentMeta(auth, agentName);
+  const { meta, metaError } = useAgentMeta(auth, agentName, baseUrl);
   const welcome = meta?.welcome;
   // Attach the seed to every send; only the instance-creating send reads it.
   const seededClient = useMemo(() => (client && meta ? withAgentSeed(client, seedFromMeta(meta)) : client), [client, meta]);
-  // One held SSE stream (same as Panel A) — needs the @durable-streams/client
-  // patch. The v2 client is conversation-scoped, so no name/id here: the
-  // conversation is whatever URL the client was constructed with.
+  // One held SSE stream — needs the @durable-streams/client patch. The v2
+  // client is conversation-scoped, so no name/id here: the conversation is
+  // whatever URL the client was constructed with.
   const agent = useFlueAgent({ client: seededClient, live: 'sse' });
   const draft = !client;
 
@@ -171,7 +181,7 @@ export function AgentChat({
 
   return (
     <TooltipProvider>
-      <div className="mt-2 flex h-[60vh] flex-col overflow-hidden rounded-lg border bg-background text-foreground">
+      <div className={cn('mt-2 flex h-[60vh] flex-col overflow-hidden rounded-lg border bg-background text-foreground', className)}>
         <Conversation>
           <ConversationContent>
             {agent.messages.length === 0 ? (
@@ -195,7 +205,7 @@ export function AgentChat({
                 <ConversationEmptyState
                   icon={<MessageSquareIcon className="size-10" />}
                   title="No messages yet"
-                  description="Send a message — it appears in Panel A too (same session)."
+                  description="Send a message to start the conversation."
                 />
               )
             ) : (
@@ -219,7 +229,7 @@ export function AgentChat({
             <PromptInputBody>
               <PromptInputTextarea
                 value={input}
-                placeholder='Try: "Plan me a spa day in the Echo Basin, Aug 1-3 2026"'
+                placeholder={placeholder ?? 'Type a message…'}
                 onChange={(event) => setInput(event.currentTarget.value)}
               />
             </PromptInputBody>

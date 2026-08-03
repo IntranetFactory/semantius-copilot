@@ -132,14 +132,25 @@ export async function verifySemantiusToken(value, fetchImpl = fetch) {
 export const BETTER_AUTH_COOKIE_NAMES = ['__Secure-better-auth.session_token', 'better-auth.session_token'];
 
 /**
- * How a BROWSER hands us that cookie. A page cannot set a `Cookie` header from
- * fetch (forbidden header name), and the backend's CORS is wildcard-origin
- * without credentials, so a real cookie can never ride cross-origin from the
- * frontend Worker to the backend Worker. The copilot page therefore sends the
- * cookie VALUE in this custom header instead, and the backend turns it back
- * into a proper `Cookie` header on the server-to-server hop. Custom request
- * headers need no CORS change: Hono's `cors()` echoes
- * `Access-Control-Request-Headers` back when `allowHeaders` is unset.
+ * How a BROWSER hands us that cookie — two transports, both read by
+ * extractSessionCookie below:
+ *
+ *   1. This custom header, carrying the cookie VALUE. A page cannot set a
+ *      `Cookie` header from fetch (forbidden header name), so a CROSS-SITE
+ *      page (the workers.dev copilot page) pastes/forwards the value and the
+ *      backend turns it back into a proper `Cookie` header on the
+ *      server-to-server hop. Custom request headers need no CORS change:
+ *      Hono's `cors()` echoes `Access-Control-Request-Headers` back when
+ *      `allowHeaders` is unset. Inherently CSRF-proof (custom headers force a
+ *      preflight).
+ *
+ *   2. A real `Cookie` header, attached by the browser itself when a
+ *      SAME-SITE page fetches with `credentials: 'include'` ("ambient" mode —
+ *      no explicit credential in the app at all). This requires the backend's
+ *      credentialed CORS allowlist (ALLOWED_ORIGINS in backend-b) and its
+ *      CSRF origin check, both in backend-b/src/app.ts, and a cookie whose
+ *      Domain covers the backend host. Server-to-server callers use the same
+ *      shape.
  */
 export const BETTER_AUTH_COOKIE_HEADER = 'x-better-auth-cookie';
 

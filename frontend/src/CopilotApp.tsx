@@ -9,23 +9,26 @@
  * all.
  *
  * The value travels in the `x-better-auth-cookie` header, not a real Cookie
- * header: a browser cannot set `Cookie` from fetch, and this page's origin is
- * not the backend's, so a genuine cookie would never be sent. Pasting the value
- * is the POC stand-in for a same-site embed — see lib/session.ts `ChatAuth`.
+ * header: a browser cannot set `Cookie` from fetch. Pasting the value is the
+ * POC stand-in for a same-site embed — a page whose origin is same-site with
+ * the backend (and in its ALLOWED_ORIGINS) skips the pasting entirely via
+ * AMBIENT mode, where the browser's own cookie rides on
+ * `credentials: 'include'` requests. See components/ai-elements/session.ts
+ * `ChatAuth` for all three transports.
  *
  * The cookie can also arrive in the URL fragment (`/copilot#cookie=<value>`,
  * optionally with `&session=<id>`).
  */
 import { useMemo, useState } from 'react';
 
-import { ChatWorkbench } from './ChatWorkbench';
-import { consumeCredentialFragment, COOKIE_STORAGE } from './lib/session';
+import { ChatPage } from './ChatPage';
+import { consumeCredentialFragment, COOKIE_STORAGE } from './pages';
 
 export function CopilotApp() {
-  const fragment = useMemo(() => consumeCredentialFragment('cookie'), []);
+  const fragment = useMemo(() => consumeCredentialFragment(), []);
   const [cookie, setCookie] = useState(() => {
-    const initial = fragment.credential ?? localStorage.getItem(COOKIE_STORAGE) ?? '';
-    if (fragment.credential) localStorage.setItem(COOKIE_STORAGE, fragment.credential);
+    const initial = fragment.cookie ?? localStorage.getItem(COOKIE_STORAGE) ?? '';
+    if (fragment.cookie) localStorage.setItem(COOKIE_STORAGE, fragment.cookie);
     return initial;
   });
 
@@ -35,9 +38,9 @@ export function CopilotApp() {
   }
 
   return (
-    <ChatWorkbench
+    <ChatPage
       title="Hoth Copilot"
-      auth={{ cookie: cookie.trim() }}
+      auth={{ authCookie: cookie.trim() }}
       credential={{
         value: cookie,
         onChange: updateCookie,

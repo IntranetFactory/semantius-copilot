@@ -8,5 +8,36 @@
   // calls the (mock) Hoth Tourism API on this host — everything else is denied.
   "proxy_whitelist": [
     "postman-echo.com"
-  ]
+  ],
+  // Shown by the chat UI while a conversation is empty (UI-only, never reaches
+  // the model). Clicking a prompt sends `prompt ?? display` immediately, unless
+  // `prefill: true` — then it only fills the composer for editing.
+  "welcome": {
+    "title": "Welcome to the Hoth Trip Planner",
+    "subtitle": "I plan leisure trips on the planet Hoth: skiing on the North Ridge, spa bathing in the Echo Basin, and live opening times for every site straight from the Hoth Tourism API.",
+    "sections": [
+      {
+        "title": "Ski trips",
+        "subtitle": "The North Ridge alpine spine",
+        "prompts": [
+          {
+            "display": "Plan me a ski weekend on the North Ridge",
+            "prompt": "I'd like a ski weekend on Hoth's North Ridge. Ask me about my dates and skill level, then propose sites with their opening times.",
+            "prefill": true
+          },
+          { "display": "Where can I ski at night?" },
+          { "display": "What can kids do on Hoth?" }
+        ]
+      },
+      {
+        "title": "Spa & wellness",
+        "subtitle": "The Echo Basin thermal springs",
+        "prompts": [
+          { "display": "Plan a relaxing spa day in the Echo Basin" },
+          { "display": "Which sites offer hot-spring bathing?" },
+          { "display": "Where can I watch the aurora from a heated pool?" }
+        ]
+      }
+    ]
+  }
 }

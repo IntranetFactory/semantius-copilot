@@ -6,7 +6,6 @@ dist-bundle/
 .dev.vars
 .env
 .wrangler/
-frontend/src/generated/
 *.tsbuildinfo
 .api-token
 .reports/

@@ -2,22 +2,33 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "hoth-poc-frontend",
   "compatibility_date": "2026-06-01",
-  // Three static pages served straight from Workers assets — no Worker script
-  // needed. `/chat` -> chat.html, `/copilot` -> copilot.html, `/admin` ->
-  // admin.html, each via the default auto-trailing-slash html_handling.
+  // Three static pages served straight from Workers assets — `/chat` ->
+  // chat.html, `/copilot` -> copilot.html, `/admin` -> admin.html, each via the
+  // default auto-trailing-slash html_handling — plus ONE dynamic family:
+  // `/agent/<name>`, the input-free per-agent chat page. Agents are deployed to
+  // the backend KV registry at runtime (`pnpm deploy:agent <name>`), so those
+  // paths cannot be assets; `run_worker_first` sends exactly `/agent` and
+  // `/agent/*` through worker/index.ts, which rewrites well-formed names to the
+  // built agent-shell.html and lets everything else fall through to assets.
+  // No other path touches the Worker script.
   //
   // There is deliberately no index.html, so `/` matches no asset. NOT
   // "single-page-application": an SPA fallback would make every mistyped path
   // (a typo'd /admin above all) silently render a page. "404-page" serves
-  // dist/404.html instead — copied verbatim from public/ by Vite — so `/` and
-  // every typo answer a real 404.
+  // dist/404.html instead — copied verbatim from public/ by Vite — so `/`,
+  // every typo, bare `/agent`, and ill-formed `/agent/<junk>` answer a real
+  // 404. A well-formed `/agent/<name>` is the one exception: whether that
+  // agent exists is the backend registry's call, answered in-page.
   //
   // That 404 page names NO path, not even in an HTML comment: it is what an
   // unauthenticated prober sees, and the admin console's existence is not
   // something to advertise. Keep it bare — the page inventory belongs here and
   // in the README, which are not served.
+  "main": "./worker/index.ts",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/agent", "/agent/*"]
   }
 }

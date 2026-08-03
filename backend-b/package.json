@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite dev --port 3584",
     "build": "vite build",
-    "deploy": "vite build && wrangler deploy"
+    "deploy": "vite build && wrangler deploy",
+    "logs": "wrangler tail --format pretty"
   },
   "dependencies": {
     "@cloudflare/sandbox": "0.12.3",

@@ -31,14 +31,35 @@
 import { useFlueAgent } from '@flue/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import {
-  adminConversationUrl,
-  API_KEY_STORAGE,
-  BACKEND,
-  chatPageUrl,
-  useConversationClient,
-  type AgentBundle,
-} from './lib/session';
+import { BACKEND, useConversationClient } from './components/ai-elements/session';
+import type { AgentWelcome } from './components/ai-elements/welcome';
+import { API_KEY_STORAGE, chatPageUrl } from './pages';
+
+/** The full stored agent definition (KV `agentdef:<name>`), as the bundle
+ * viewer renders it: the turn-1 seed fields plus the welcome card and the
+ * skill FILES. Admin-only — the chat surface never sees skill contents, so
+ * this type lives here rather than in the copyable ai-elements folder. */
+type AgentBundle = {
+  agentName: string;
+  version: string;
+  baseImage: string;
+  instructions: string;
+  model?: string;
+  modelBaseUrl?: string;
+  proxyWhitelist?: string[];
+  welcome?: AgentWelcome;
+  skills: Record<string, Record<string, string>>;
+};
+
+/**
+ * A conversation read through the admin console's credential. The backend
+ * mounts the agent router twice — `/agents/main/*` for the owner's own
+ * credential, `/admin/agents/main/*` (read-only, GET only) for the deployment
+ * key — so the data browser can show conversations without the operator
+ * holding anyone's user token.
+ */
+const adminConversationUrl = (sessionId: string) =>
+  `${BACKEND.baseUrl}/admin/agents/main/${encodeURIComponent(sessionId)}`;
 
 export function App() {
   // Deployment API key: entered at runtime (never baked into the build) and
@@ -628,7 +649,7 @@ function SessionDetail({
  * and never needs the owner's Semantius token.
  */
 function ConversationView({ apiKey, sessionId }: { apiKey: string; sessionId: string }) {
-  const client = useConversationClient({ bearer: apiKey }, sessionId, undefined, adminConversationUrl);
+  const client = useConversationClient({ bearer: apiKey }, sessionId, adminConversationUrl);
   // Read-only catch-up: 'long-poll' reaches the stored state without holding the
   // SSE stream open (no live generation to follow when browsing).
   const agent = useFlueAgent({ client, live: 'long-poll' });

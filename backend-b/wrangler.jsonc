@@ -70,6 +70,13 @@
     // Langfuse tracing (src/otel.ts): OTLP endpoint region. The project is
     // selected by the LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY secrets
     // (.dev.vars locally, wrangler secret put when deployed). No keys = no export.
-    "LANGFUSE_BASE_URL": "https://us.cloud.langfuse.com"
+    "LANGFUSE_BASE_URL": "https://us.cloud.langfuse.com",
+    // Browser origins allowed to make CREDENTIALED calls (see Env in
+    // src/app.ts): CORS echoes the origin off this list (credentialed mode
+    // forbids the wildcard) and the CSRF check accepts form-type posts only
+    // from it. MUST contain the frontend Worker's origin, or every chat page
+    // loses CORS at deploy time. Add an embedding app's origin here once it
+    // runs same-site with this backend (ambient-cookie mode).
+    "ALLOWED_ORIGINS": "https://hoth-poc-frontend.ma532.workers.dev,http://localhost:5173"
   }
 }
