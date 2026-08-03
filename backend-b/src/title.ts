@@ -103,8 +103,15 @@ async function generateTitle(transcript: string, agent: AgentLlm | null | undefi
         { role: 'system', content: TITLE_SYSTEM_PROMPT },
         { role: 'user', content: transcript },
       ],
-      max_tokens: 30,
+      // Reasoning models spend the token budget on chain-of-thought and
+      // return `content: null` once max_tokens is hit (observed with
+      // tencent/hy3: finish_reason "length", 30/30 tokens in `reasoning`).
+      // So: turn reasoning off via OpenRouter's unified param (only sent to
+      // OpenRouter — a plain OpenAI-compatible endpoint may reject unknown
+      // fields) and keep headroom in case it still reasons.
+      max_tokens: 100,
       temperature: 0.3,
+      ...(target.baseUrl.includes('openrouter.ai') ? { reasoning: { enabled: false } } : {}),
     }),
   });
   if (!res.ok) return null;
