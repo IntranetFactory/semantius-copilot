@@ -158,10 +158,12 @@ export async function resolveEgressPolicy(kv, containerId) {
  * Per-message self-heal (agent initializer and the skill-check route): make
  * sure the pointer exists and the session record carries the bundle's
  * whitelist. Semantics preserved across refactors:
- *  - egress secrets are minted only when the caller passes `mintSecrets`
- *    (channel sessions) and only for host keys the record does not already
- *    have — a chat session's secrets are NEVER re-minted after expiry (plan
- *    §13 C5), and a warm session's existing entries never rotate;
+ *  - `egress_secrets` is NEVER created or modified here. The server must not
+ *    generate or hardcode credential values anywhere — a secret-retrieval
+ *    layer (resolving the tenant's secret REFERENCES from a vault/secrets
+ *    store) is the only thing that may ever populate the map, and that layer
+ *    does not exist yet (TODO; see the ingest route in backend-b/src/app.ts).
+ *    Until it does, credential-required hosts fail closed (injectAndForward);
  *  - everything else on the record (session_context, payload, session_data,
  *    session_state, meta) is preserved by the merge, never reconstructed.
  * Writes only on change: a warm session costs two reads, zero writes.
@@ -169,20 +171,13 @@ export async function resolveEgressPolicy(kv, containerId) {
  * @param {{ get(k: string): Promise<string | null>, put(k: string, v: string, o?: object): Promise<void> }} kv
  * @param {string} containerId
  * @param {string} sessionId
- * @param {{ whitelist: string[], mintSecrets?: () => Record<string, string> }} desired
+ * @param {{ whitelist: string[] }} desired
  */
 export async function ensureEgressPolicy(kv, containerId, sessionId, desired) {
   const record = (await readSession(kv, sessionId)) ?? {};
   const patch = {};
   const existingWhitelist = Array.isArray(record.whitelist) ? record.whitelist : null;
   if (JSON.stringify(existingWhitelist) !== JSON.stringify(desired.whitelist)) patch.whitelist = desired.whitelist;
-  if (desired.mintSecrets) {
-    // Per-host mint-if-absent: add only keys this record lacks, so an existing
-    // credential is never rotated under a live conversation.
-    const existing = readEgressSecrets(record) ?? {};
-    const minted = Object.entries(desired.mintSecrets()).filter(([host]) => !existing[host]);
-    if (minted.length > 0) patch.egress_secrets = { ...existing, ...Object.fromEntries(minted) };
-  }
   if (record.containerId !== containerId) patch.containerId = containerId;
   if (Object.keys(patch).length > 0) await mergeSessionRecord(kv, sessionId, patch);
   if ((await kv.get(CONTAINER_KEY_PREFIX + containerId)) !== sessionId) {

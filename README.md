@@ -394,7 +394,8 @@ credentials:
   + turn-1 seed, skill files excluded), and listing their own sessions (`GET /sessions` —
   tenant-prefix KV listing plus a per-record ownership re-check; the answer is whitelisted
   meta only: id, agentName, version, createdAt — never the record, which also carries
-  `egress_secrets` and `session_context.semantius_jwt` — plus `user`, the verified
+  `session_context.semantius_jwt` (and `egress_secrets`, once the secret-retrieval
+  layer populates it) — plus `user`, the verified
   identity the listing was scoped to, same shape as the session-create response). The
   caller's own credential
   (`userTokenGuard`): a Semantius token, or a better-auth session cookie. No API key is
@@ -618,7 +619,7 @@ A session's downstream credentials live on the record as a **map of host glob �
 credential**, matched with the same globber as the whitelist:
 
 ```json
-"egress_secrets": { "postman-echo.com": "hoth-tourism-key-671e2acf-5fac94ed-…" }
+"egress_secrets": { "postman-echo.com": "<resolved downstream credential>" }
 ```
 
 The container is given **nothing** for these hosts — not the value, not a placeholder, not
@@ -627,24 +628,29 @@ the knowledge that auth happens. The skill fetches the host with no `Authorizati
 header on the way out. Zero-knowledge injection: the sandbox cannot leak, misdirect, or
 even name a credential it has never seen.
 
+**Nothing writes this map today — secret retrieval is TODO.** The server must never
+generate or hardcode a credential value (the POC's original per-session
+`hoth-tourism-key-…` stand-ins, minted in Worker code, were removed for exactly that
+reason). The map is reserved for a **secret-retrieval layer**: at session creation the
+ingest route resolves the tenant's secret *references* (vault / secrets store) into
+per-session entries — see the `TODO(secret-retrieval)` comment in
+`backend-b/src/app.ts`'s ingest route, the one place it plugs in. Until that layer
+exists, every credential-required host **fails closed (403)** for every session,
+including the trip-planner's Hoth Tourism API demo host (`postman-echo.com`).
+
 Rules, all covered by `pnpm test`:
 
 - **Registering a host as credential-required is what makes absence fatal.** A host handled
   by this path with no matching map entry gets **403** — never an unauthenticated forward.
-  That's the fail-closed rule behind plan §13 C5: a chat session's credentials are never
-  re-minted, so an expired session whose policy self-heals recovers its whitelist but not
+  That's the fail-closed rule behind plan §13 C5: the self-heal never creates credentials,
+  so an expired session whose policy self-heals recovers its whitelist but not
   its ability to call the downstream API.
-- **Mint-if-absent, per host.** A warm entry never rotates; a new host can be added to a
-  live session without touching existing ones.
+- **The self-heal preserves the map verbatim** — a retrieval-populated entry is never
+  rotated or dropped under a live conversation.
 - **Per session, keyed by the container→session pointer**, so tenant A's key can never
-  surface in tenant B's container. C2 proves it: two concurrent sessions present different
-  credentials to the same upstream.
+  surface in tenant B's container.
 
-The POC's only entry is the fictional **Hoth Tourism API** — the trip-planner skill's
-partner API, played by `postman-echo.com` because it reflects the headers it received, which
-is what makes the injection assertable. There's no vault here, so ingest mints a per-session
-stand-in for what production would store as a secret *reference* (plan §12). Adding another
-downstream credential is a map entry, not a code change at egress.
+Adding another downstream credential is a map entry, not a code change at egress.
 
 **Not in this map: the session user's Semantius JWT** (`session_context.semantius_jwt`).
 It's the one credential with two jobs — the backend verifies it to authenticate the user
@@ -761,8 +767,8 @@ narrows the KV read, and ownership is still re-checked per record against
 bundle snapshot (`agent:<id>`), THE session record (`session:<id>`), and the container
 pointer (`container:<containerId>`) all carry a 24 h TTL; every merge into the session
 record (e.g. the per-response `session_state` mirror) refreshes its TTL, so an idle
-session expires 24 h after its last response. A chat session's `egress_secrets` are never
-re-minted after expiry (plan §13 C5) — an expired chat session loses egress and, on a cold
+session expires 24 h after its last response. A session's `egress_secrets` are never
+recreated by the self-heal (plan §13 C5) — an expired chat session loses egress and, on a cold
 container, its skills; start a new one. Named agent definitions (`agentdef:<name>`)
 deliberately have NO TTL: they are deployable artifacts, overwritten by the next
 `pnpm deploy:agent`, not session state. (Historical: the per-concern keys
@@ -1000,9 +1006,12 @@ nothing appears on GitHub.
   `agentdef:hoth-trip-planner` (`GITHUB_AGENT_NAME` in `channels/github.ts`) — the same
   definition chat sessions ingest by name; a normal `pnpm deploy:agent hoth-trip-planner`
   (or `--all`) updates both. No alias key exists anymore (the former
-  `agentdef:github-default` and the pre-named-definition keys are dead). The agent
-  initializer mints the `egress_secrets` entry itself (tagged `github` inside the credential
-  value) since these conversations never pass the ingest route. They carry no Semantius
+  `agentdef:github-default` and the pre-named-definition keys are dead). These
+  conversations never pass the ingest route, so the agent initializer self-heals their
+  whitelist — but, like every session, they get no `egress_secrets` until the
+  secret-retrieval layer exists (the former initializer-minted `github`-tagged entry was
+  removed with the rest of the server-side minting), so the credential-required echo host
+  fails closed. They carry no Semantius
   identity, so they get no `semantius_org` — and therefore no `x-semantius-org` header
   and no Semantius credential at egress.
 - Worker secrets: `GITHUB_WEBHOOK_SECRET` (channel creation throws at module init if
@@ -1192,16 +1201,18 @@ case-insensitive match also hits "egress **fails** closed" in a passing check's 
 Drives the **deterministic core** (the bounded `/sessions/:id/skill-check` route) so the
 checks are isolated from LLM nondeterminism. Covers: auth (401 without/with wrong key),
 named-definition deploys (`PUT /agents/:name` incl. overwrite + 401), name-based ingest
-(pinned to the deployed version), C2 (per-session downstream credentials, distinct across
-concurrent sessions, each carrying the verified token's org as `x-semantius-org`), C3
+(pinned to the deployed version), C2 (concurrent sessions both fail closed at the
+credential-required echo host — the distinct-credentials and `x-semantius-org` assertions
+return with the secret-retrieval layer), C3
 (single source of truth — reconstructed sandbox files == bundle bytes, sha256 per file),
-C4 (`opening-times.js` runs deterministically, and the injected `egress_secrets` credential
-reaches the echo upstream while the container sends none), C5
+C4 (the credential-required echo host fails closed — 403, no unauthenticated forward —
+until secret retrieval exists; the injected-credential assertion returns with it), C5
 (repeated creates by one user mint distinct ids — immutability per id is by construction
 now that the route mints them — plus fail-closed egress after teardown), session-id shape
 (server-minted, tenant-prefixed, sandbox-safe), plus clean-base, zero-skill-agent,
 per-agent-egress deny-all, session_context / session record (THE `session:<id>` record
-carries JWT context + egress_secrets + whitelist + containerId in one document, the
+carries JWT context + whitelist + containerId in one document — and no server-generated
+credential, `egress_secrets` stays absent until secret retrieval exists — the
 `container:<containerId>` pointer maps back to the session id, 422 on
 non-object/oversize bodies, record + pointer removed on DELETE),
 hostile-bundle-at-deploy (422), and name-based-ingest negatives (undeployed name 404,

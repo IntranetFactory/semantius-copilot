@@ -414,10 +414,19 @@ comparison by driving the deterministic core directly. Grouped by the five contr
   anyone could pick any value.
 - Also amended: "the bearer" is no longer a single record field. Downstream credentials live in
   `egress_secrets` — a map of **host glob → credential** (README "`egress_secrets`") — so a session
-  can hold several, each injected zero-knowledge for its own host, mint-if-absent per host, and
+  can hold several, each injected zero-knowledge for its own host, and
   fail-closed (403) where a host has no entry. The user's Semantius JWT stays out of the map: it is
   both the token the backend authenticates with and an egress secret, so it lives with the identity
   in `session_context` and uses the sentinel swap that the vendored CLI requires.
+- Amended 2026-08-03: the server-side **minting** of `egress_secrets` stand-ins
+  (`hoth-tourism-key-…`, generated in Worker code at ingest and by the GitHub-channel
+  initializer) is **removed** — a server must never generate or hardcode a credential value.
+  The map is now written only by a future **secret-retrieval layer** that resolves the
+  tenant's secret *references* (vault/secrets store) at session creation — plug-in point:
+  the `TODO(secret-retrieval)` in `backend-b/src/app.ts`'s ingest route. Until it exists,
+  credential-required hosts fail closed for every session, and the C2/C4 acceptance
+  assertions about injected credentials are replaced by fail-closed assertions (they return
+  with the retrieval layer).
 
 **C3 — Single source of truth (A-image == bundle == B-reconstructed, byte-identical).**
 - **Triple-hash:** `find . -type f | sort | xargs sha256sum` inside **A's built image**, == per-file

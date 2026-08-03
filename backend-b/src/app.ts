@@ -65,13 +65,11 @@ import {
   apiKeyGuard,
   BundleValidationError,
   buildSkillCheckCommand,
-  ECHO_HOST,
   SkillCheckError,
   isValidSessionId,
   listSessions,
   mintSessionId,
   sandboxNameForSession,
-  sessionIdTail,
   sessionTenantPrefix,
   mergeSessionRecord,
   readSession,
@@ -493,26 +491,21 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   // (sandboxNameForSession) — the only place the 63-char DNS ceiling binds.
   const containerId = namespace.idFromName(sandboxNameForSession(id)).toString();
 
-  // Per-session credentials for downstream services, keyed by host glob. The
-  // sandbox is given NOTHING — not the value, not a placeholder — and the
-  // outbound handler adds the header on the way out (core/src/egress.js).
-  // The POC's only entry is the fictional Hoth Tourism API (the echo host):
-  // there is no vault here, so ingest mints a per-session stand-in for what
-  // production would store as a secret REFERENCE. Add a host glob here to give
-  // a session another downstream credential — no code change at egress.
-  // The session user's Semantius JWT is deliberately NOT in this map: it is
-  // also the token the backend authenticates the user with, so it lives with
-  // the identity in session_context (see the identity comment above).
-  // Tagged with the HEAD OF THE RANDOM TAIL (`sessionIdTail`), not a slice of
-  // the whole id: the id's head is now the tenant prefix, identical for every
-  // session of one user, and the id's end is a suffix nobody can match against
-  // a full session id. This is the git-style short form, so a tag seen in an
-  // echo dump prefix-matches the session it belongs to.
-  const egressSecrets = { [ECHO_HOST]: `hoth-tourism-key-${sessionIdTail(id).slice(0, 8)}-${crypto.randomUUID()}` };
+  // TODO(secret-retrieval): downstream credentials (`egress_secrets`, a map of
+  // host glob -> credential consumed by core/src/egress.js) are NOT written
+  // here. The server must never generate or hardcode a secret value — this is
+  // where retrieval logic plugs in: resolve the tenant's secret REFERENCES
+  // (vault / secrets store) and put the resolved entries on the session
+  // record. Until that exists the map stays absent and every
+  // credential-required host fails closed at egress (403, injectAndForward).
+  // The session user's Semantius JWT is deliberately NOT part of that map: it
+  // is also the token the backend authenticates the user with, so it lives
+  // with the identity in session_context (see the identity comment above).
   await c.env.STORE.put(`agent:${id}`, raw, { expirationTtl: BUNDLE_TTL_SECONDS });
   // THE session record — the single mutable per-session document: browse
-  // meta, the egress fields (egress_secrets/whitelist, read by the outbound
-  // proxy via the container pointer), and the opaque client session_context (consumed
+  // meta, the egress fields (whitelist, and egress_secrets once retrieval
+  // logic populates it — read by the outbound proxy via the container
+  // pointer), and the opaque client session_context (consumed
   // at egress only, never delivered to the agent; it cannot be self-healed,
   // so TTL expiry fails soft to the sentinel-swap behavior). No
   // proxy_whitelist in the agent -> [] -> deny all. containerId is NOT
@@ -527,7 +520,6 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
     version: bundle.version,
     containerId,
     createdAt: new Date().toISOString(),
-    egress_secrets: egressSecrets,
     whitelist: bundle.proxyWhitelist ?? [],
     session_context: sessionContext,
   });

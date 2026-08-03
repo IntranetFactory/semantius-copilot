@@ -279,8 +279,9 @@ async function main() {
   // --- GET /sessions: the caller's own session index -----------------------
   // The tenant-prefix listing in action: the session just created must appear,
   // entries must be the whitelisted meta ONLY (the record also carries
-  // egress_secrets and session_context.semantius_jwt — neither may ever reach
-  // a browser), and the route is a user surface (401 without a credential).
+  // session_context.semantius_jwt — and, once the secret-retrieval layer
+  // lands, egress_secrets — neither may ever reach a browser), and the route
+  // is a user surface (401 without a credential).
   const mine = await uget(B_URL, '/sessions');
   check('sessions', 'GET /sessions answers a user token (200)', mine.status === 200, `status ${mine.status}`);
   check(
@@ -347,54 +348,46 @@ async function main() {
   const bHashes = parseHashes(bHash.json.stdout);
   check('C3', 'live sandbox hashes == bundle (byte-identical skill)', JSON.stringify(sorted(bHashes)) === JSON.stringify(sorted(bundleHashes)));
 
-  // --- C4: the skill runs deterministically in the sandbox ----------------
+  // --- C4: fail-closed pending secret retrieval ---------------------------
+  // The server no longer mints downstream credentials (they were placeholder
+  // values generated in Worker code — removed; a secret-retrieval layer will
+  // populate `egress_secrets` from stored secret REFERENCES, see the TODO in
+  // backend-b/src/app.ts). With no map entry the echo host is
+  // credential-REQUIRED but credential-less, so the skill's API call must be
+  // rejected at egress (403 from injectAndForward), never forwarded
+  // unauthenticated. When retrieval exists, C4 reverts to asserting the
+  // injected credential reaches the upstream while the container sends none.
   const bRun = await post(B_URL, `/sessions/${bId}/skill-check`, FIXED);
-  const bOut = normalizeTimes(bRun.json.stdout);
-  check('C4', 'opening-times.js runs (exit 0)', bRun.json.exitCode === 0);
-  check('C4', 'opening-times.js stdout is the expected JSON payload', bOut !== null, bOut ? `${bOut.length} chars` : 'unparseable');
-
-  // --- Per-process TLS trust: curl (system CA path, via the baked
-  //     CURL_CA_BUNDLE/SSL_CERT_FILE) reaches the whitelisted echo host over
-  //     HTTPS through the interceptor — a whitelisted host works from EVERY
-  //     tool, not just node ------------------------------------------------
-  const bCurl = await post(B_URL, `/sessions/${bId}/skill-check`, { op: 'curl-check' });
-  check('curl-tls', 'curl reaches whitelisted host over HTTPS (200)', (bCurl.json.stdout ?? '').trim() === '200', `got ${(bCurl.json.stdout ?? '').trim() || bCurl.json.stderr}`);
-
-  // --- C4 egress trace: the echo upstream saw this session's downstream
-  //     credential, the container sent none --------------------------------
-  const bEcho = await post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true });
-  const bHdr = echoHeaders(bEcho.json.stdout);
-  // Zero-knowledge injection: the sandbox sent no credential and holds none
-  // (not even a placeholder), yet the upstream saw this session's entry from
-  // the record's egress_secrets map.
   check(
     'C4',
-    'egress: upstream received the injected downstream credential',
-    bHdr?.authorization?.startsWith('Bearer hoth-tourism-key-') === true,
-    bHdr?.authorization ?? 'none',
+    'opening-times.js egress fails closed without a retrieved credential (HTTP 403, non-zero exit)',
+    bRun.json.exitCode !== 0 && /403/.test(bRun.json.stdout ?? ''),
+    snippet(bRun.json.stdout ?? ''),
   );
-  // The tenant on the wire is the org of the verified token — never a value the
-  // client picked (the ingest body carries nothing tenant-shaped any more).
-  check('C2', "egress carries the session's Semantius org", bHdr?.['x-semantius-org'] === tokenOrg, bHdr?.['x-semantius-org'] ?? 'none');
 
-  // --- C2: two concurrent sessions get DIFFERENT credentials, SAME tenant --
-  // Per-session separation is the egress_secrets entry (keyed by the
-  // container→session mapping, so tenant A's key can never surface in tenant
-  // B's container); the org is identity, so two sessions of one user must agree
-  // on it (a differing org would mean a session invented its tenant instead of
-  // taking it from the token).
+  // --- Per-process TLS trust: curl (system CA path, via the baked
+  //     CURL_CA_BUNDLE/SSL_CERT_FILE) completes the HTTPS handshake with the
+  //     interceptor for the whitelisted echo host. The proxy then answers 403
+  //     (credential-required host, no retrieved credential) — receiving that
+  //     status at all proves the TLS interception path from curl; a broken CA
+  //     trust would surface as curl exit error / 000, not an HTTP status.
+  const bCurl = await post(B_URL, `/sessions/${bId}/skill-check`, { op: 'curl-check' });
+  check('curl-tls', 'curl completes HTTPS via interceptor CA (proxy answers 403)', (bCurl.json.stdout ?? '').trim() === '403', `got ${(bCurl.json.stdout ?? '').trim() || bCurl.json.stderr}`);
+
+  // --- C2: concurrent sessions of one user, both fail-closed ---------------
+  // (The former different-credentials-per-session and x-semantius-org checks
+  // asserted properties of injected credentials; they return with the
+  // retrieval layer. b2Id is still needed by the C5 id checks below.)
   const b2Id = (await createSession(B_URL, { agentName: bundle.agentName })).id;
   const [b1e, b2e] = await Promise.all([
     post(B_URL, `/sessions/${bId}/skill-check`, { ...FIXED, debugEcho: true }),
     post(B_URL, `/sessions/${b2Id}/skill-check`, { ...FIXED, debugEcho: true }),
   ]);
-  const h1 = echoHeaders(b1e.json.stdout), h2 = echoHeaders(b2e.json.stdout);
-  check('C2', 'concurrent sessions carry different downstream credentials', !!h1?.authorization && !!h2?.authorization && h1.authorization !== h2.authorization);
   check(
     'C2',
-    "concurrent sessions of one user carry that user's org",
-    h1?.['x-semantius-org'] === tokenOrg && h2?.['x-semantius-org'] === tokenOrg,
-    `${h1?.['x-semantius-org'] ?? 'none'} / ${h2?.['x-semantius-org'] ?? 'none'}`,
+    'both concurrent sessions fail closed at egress (no credential to differ by yet)',
+    b1e.json.exitCode !== 0 && /403/.test(b1e.json.stdout ?? '') && b2e.json.exitCode !== 0 && /403/.test(b2e.json.stdout ?? ''),
+    `${snippet(b1e.json.stdout ?? '')} / ${snippet(b2e.json.stdout ?? '')}`,
   );
 
   // --- C5: immutable-per-id, now BY CONSTRUCTION ---------------------------
@@ -433,8 +426,9 @@ async function main() {
   check('C5', 'egress fails closed without an egress policy (403 from proxy)', /403|egress denied/.test(orphanOut) || orphanRun.json.exitCode !== 0, snippet(orphanOut));
 
   // --- session_context / session record: written at ingest, removed on DELETE
-  // THE session record (session:<id>) carries meta + egress_secrets/whitelist +
-  // session_context in ONE document; the container:<containerId> pointer is
+  // THE session record (session:<id>) carries meta + whitelist +
+  // session_context in ONE document (plus egress_secrets once the
+  // secret-retrieval layer populates it); the container:<containerId> pointer is
   // the only containerId-keyed entry. containerId is stored nowhere (it is
   // derivable in the Worker), so the pointer is located by scanning the
   // container group for the value === session id. Admin API shape: parsed
@@ -458,17 +452,19 @@ async function main() {
   const ctxStored = ctxRecord.json?.json?.session_context ?? {};
   check(
     'context',
-    'session record carries the client context, egress_secrets, and whitelist in one document',
+    'session record carries the client context and whitelist in one document',
     ctxRecord.status === 200 &&
       ctxStored.probe === ctxProbe &&
-      typeof ctxRecord.json?.json?.egress_secrets?.['postman-echo.com'] === 'string' &&
       Array.isArray(ctxRecord.json?.json?.whitelist),
     JSON.stringify(ctxRecord.json?.json ?? ctxRecord.json).slice(0, 140),
   );
+  // No server-generated credential of any shape on a fresh record: the old
+  // single `bearer` field is gone, and `egress_secrets` stays absent until
+  // the secret-retrieval layer (TODO in app.ts's ingest route) populates it.
   check(
     'context',
-    'egress_secrets is a host-glob map, not a bare credential field',
-    ctxRecord.json?.json?.bearer === undefined && typeof ctxRecord.json?.json?.egress_secrets === 'object',
+    'no server-generated downstream credential on the record (bearer gone, egress_secrets absent)',
+    ctxRecord.json?.json?.bearer === undefined && ctxRecord.json?.json?.egress_secrets === undefined,
     JSON.stringify(ctxRecord.json?.json?.egress_secrets ?? null).slice(0, 120),
   );
   {
@@ -682,18 +678,6 @@ ${failures === 0 ? 'ALL ACCEPTANCE CHECKS PASS' : `${failures} FAILED`}  (${tota
 }
 
 function sorted(obj) { return Object.fromEntries(Object.entries(obj).sort(([a], [b]) => a.localeCompare(b))); }
-function normalizeTimes(stdout) {
-  try {
-    const start = stdout.indexOf('[');
-    return JSON.stringify(JSON.parse(stdout.slice(start)));
-  } catch { return null; }
-}
-function echoHeaders(stdout) {
-  try {
-    const start = stdout.indexOf('{');
-    return JSON.parse(stdout.slice(start)).upstream_received_headers ?? null;
-  } catch { return null; }
-}
 function snippet(s) { return String(s).replace(/\s+/g, ' ').slice(0, 100); }
 
 main().catch((err) => { console.error(err); process.exit(1); });

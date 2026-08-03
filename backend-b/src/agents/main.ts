@@ -42,7 +42,6 @@ import {
 import { cloudflareSandbox } from '@flue/runtime/cloudflare';
 import {
   AGENT_DEF_KEY_PREFIX,
-  ECHO_HOST,
   ensureEgressPolicy,
   mergeSessionRecord,
   provisionAgentSkills,
@@ -192,15 +191,13 @@ export function Main({ id }: AgentProps) {
 
   // GitHub is just another channel: same bundle-driven identity (from the
   // trip-planner named definition), one conversation per issue — plus the
-  // delivery rule that answers must be posted back to the issue thread. Chat
-  // sessions get their egress_secrets from the ingest route (24 h TTL stays
-  // fail-closed, plan §13 C5); channel conversations never pass ingest, so
-  // they self-heal the mapping here — mint-if-absent, never rotating a warm one.
+  // delivery rule that answers must be posted back to the issue thread.
+  // No session type gets `egress_secrets` minted anywhere — downstream
+  // credentials come only from the future secret-retrieval layer (see the
+  // TODO in app.ts's ingest route); until then credential-required hosts
+  // fail closed at egress.
   const issueRef = gitHubRefFromConversation(id);
   const bundleKey = issueRef ? `${AGENT_DEF_KEY_PREFIX}${GITHUB_AGENT_NAME}` : `agent:${id}`;
-  // Goes into the minted credential's value, so an echo dump says which
-  // session it belonged to.
-  const secretTag = issueRef ? 'github' : undefined;
 
   // Two-path identity resolution (see AgentMeta docs): the persisted meta is
   // authoritative once the start callback lands it; the creation seed covers
@@ -361,17 +358,13 @@ export function Main({ id }: AgentProps) {
     // Egress-policy self-heal: ensure the container pointer + egress record
     // carry the bundle's proxy_whitelist (covers channel conversations that
     // never pass ingest, and expired TTLs on long-lived sessions). Downstream
-    // credentials are minted only for channel sessions and only for hosts the
-    // record lacks — a chat session's are never re-minted (plan §13 C5), warm
-    // ones never rotate — and the client-provided context is preserved,
-    // never reconstructed.
+    // credentials are never created here — `egress_secrets` comes only from
+    // the future secret-retrieval layer (TODO in app.ts's ingest route) — and
+    // the client-provided context is preserved, never reconstructed.
     // Deleted sessions never reach here — their bundle is gone, so the early
     // return above keeps them deny-all. Writes only on change.
     await ensureEgressPolicy(STORE, containerId, id, {
       whitelist: bundle.proxyWhitelist ?? [],
-      ...(secretTag
-        ? { mintSecrets: () => ({ [ECHO_HOST]: `hoth-tourism-key-${secretTag}-${crypto.randomUUID()}` }) }
-        : {}),
     });
   });
 

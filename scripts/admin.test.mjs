@@ -264,12 +264,13 @@ await (async function run() {
   check('readCollectionRecord(runs) is gone in v2', (await readCollectionRecord('runs', 'run-1', deps)) === null);
   check('readCollectionRecord(unknown) -> null', (await readCollectionRecord('zzz', 'x', deps)) === null);
 
-  // --- egress_secrets: host-glob lookup, mint-if-absent, fail-closed -------
+  // --- egress_secrets: host-glob lookup, fail-closed -----------------------
   // The record field is a MAP (host glob -> credential the sandbox never
-  // holds), so these cover the three rules that make it safe: match by the same
-  // globber as the whitelist, never rotate a warm credential, and deny when a
-  // host has no entry (that last one is plan §13 C5 — an expired chat session
-  // whose policy self-heals must not get egress back).
+  // holds). NOTHING in the server writes it today — it is reserved for the
+  // future secret-retrieval layer (see the TODO in backend-b/src/app.ts) —
+  // so these cover the read side: match by the same globber as the
+  // whitelist, and deny when a host has no entry (plan §13 C5 — a session
+  // whose policy self-heals must not gain egress credentials).
   check('egressSecretForHost matches an exact host', egressSecretForHost({ 'postman-echo.com': 'k1' }, 'postman-echo.com') === 'k1');
   check('egressSecretForHost matches a subdomain glob', egressSecretForHost({ '*.partner.example': 'k2' }, 'api.partner.example') === 'k2');
   check('egressSecretForHost does not match a glob against the bare apex', egressSecretForHost({ '*.partner.example': 'k2' }, 'partner.example') === undefined);
@@ -304,23 +305,18 @@ await (async function run() {
 
   const skv2 = fakeKv();
   const desired = { whitelist: ['postman-echo.com'] };
-  await ensureEgressPolicy(skv2, 'cid-m', 'sess-m', { ...desired, mintSecrets: () => ({ 'postman-echo.com': 'minted-1' }) });
-  const firstMint = (await readSession(skv2, 'sess-m'))?.egress_secrets?.['postman-echo.com'];
-  await ensureEgressPolicy(skv2, 'cid-m', 'sess-m', { ...desired, mintSecrets: () => ({ 'postman-echo.com': 'minted-2' }) });
-  const secondMint = (await readSession(skv2, 'sess-m'))?.egress_secrets?.['postman-echo.com'];
-  check('ensureEgressPolicy mints a missing credential', firstMint === 'minted-1');
-  check('ensureEgressPolicy never rotates a warm credential', secondMint === 'minted-1');
-  await ensureEgressPolicy(skv2, 'cid-m', 'sess-m', { ...desired, mintSecrets: () => ({ '*.partner.example': 'minted-3' }) });
-  const grown = (await readSession(skv2, 'sess-m'))?.egress_secrets;
-  check(
-    'ensureEgressPolicy adds a new host without touching the existing one',
-    grown?.['*.partner.example'] === 'minted-3' && grown?.['postman-echo.com'] === 'minted-1',
-  );
   await ensureEgressPolicy(skv2, 'cid-n', 'sess-n', desired);
   check(
-    'ensureEgressPolicy without mintSecrets heals the whitelist but no credential (C5)',
+    'ensureEgressPolicy heals the whitelist but never creates a credential (C5)',
     (await readSession(skv2, 'sess-n'))?.egress_secrets === undefined &&
       (await readSession(skv2, 'sess-n'))?.whitelist?.[0] === 'postman-echo.com',
+  );
+  // A retrieval-populated credential must survive the self-heal untouched.
+  await mergeSessionRecord(skv2, 'sess-n', { egress_secrets: { 'postman-echo.com': 'vault-resolved-1' } });
+  await ensureEgressPolicy(skv2, 'cid-n', 'sess-n', desired);
+  check(
+    'ensureEgressPolicy preserves an existing egress_secrets map verbatim',
+    (await readSession(skv2, 'sess-n'))?.egress_secrets?.['postman-echo.com'] === 'vault-resolved-1',
   );
 
   // --- Tenant-prefixed session ids ---------------------------------------
