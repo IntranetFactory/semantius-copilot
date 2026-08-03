@@ -30,7 +30,7 @@
  *                     in to a same-site backend needs no handover at all; a
  *                     401 renders as the container's signed-out notice.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AgentChatContainer } from './components/ai-elements/agent-chat-container';
 import { SessionSidebar } from './components/ai-elements/session-sidebar';
@@ -96,6 +96,16 @@ export function AgentApp() {
     setSessionsRefresh((n) => n + 1);
   }
 
+  // Refetch the list a beat after each response settles: the backend generates
+  // the session title fire-and-forget at response finish, so it lands in KV
+  // shortly AFTER the stream closes — an immediate refetch would miss it.
+  const settleTimer = useRef<ReturnType<typeof setTimeout>>();
+  function onResponseSettled() {
+    clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => setSessionsRefresh((n) => n + 1), 3000);
+  }
+  useEffect(() => () => clearTimeout(settleTimer.current), []);
+
   useEffect(() => {
     if (agentName) document.title = agentName;
   }, [agentName]);
@@ -144,6 +154,7 @@ export function AgentApp() {
           authCookie={authCookie}
           sessionId={explicitSessionId}
           onSessionCreated={onSessionCreated}
+          onResponseSettled={onResponseSettled}
           className="h-auto min-h-0 flex-1"
         />
       </main>

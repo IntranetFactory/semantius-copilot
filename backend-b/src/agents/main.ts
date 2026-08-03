@@ -49,6 +49,7 @@ import {
   provisionSemantiusEnv,
   readSession,
   resolveSandboxBinding,
+  sandboxNameForSession,
   skillCatalogFromBundle,
   SKILLS_DIR,
   validateAgentBundle,
@@ -57,6 +58,7 @@ import * as v from 'valibot';
 import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '../channels/github';
 import { lazySessionEnv } from '../lazy-env';
 import { agentModelSpecifier } from '../llm';
+import { drainTitleTranscript, maybeGenerateTitle } from '../title';
 import { drainLlmCalls } from '../usage';
 
 type Env = {
@@ -140,6 +142,7 @@ type SessionState = {
   cost_total: number;
   tool_calls_count: number;
   llm_calls_count: number;
+  responses_count: number;
 };
 
 const ZERO_SESSION_STATE: SessionState = {
@@ -151,6 +154,7 @@ const ZERO_SESSION_STATE: SessionState = {
   cost_total: 0,
   tool_calls_count: 0,
   llm_calls_count: 0,
+  responses_count: 0,
 };
 
 /** Untrusted (client-supplied) seed -> AgentMeta, or null when unusable. */
@@ -248,6 +252,8 @@ export function Main({ id }: AgentProps) {
           cost_total: Math.round((prev.cost_total + usage.cost.total) * 1e6) / 1e6,
           tool_calls_count: prev.tool_calls_count + response.toolCalls.length,
           llm_calls_count: prev.llm_calls_count + llmCalls,
+          // ?? 0: sessions persisted before this field existed.
+          responses_count: (prev.responses_count ?? 0) + 1,
         }),
     );
     // Mirror every agent-side data channel into THE session record in one
@@ -257,6 +263,9 @@ export function Main({ id }: AgentProps) {
     if (Object.keys(agentDataNow).length > 0) patch.session_data = agentDataNow;
     if (payloadFromSeed(seed) !== null) patch.payload = seed?.payload;
     mergeSessionRecord(STORE, id, patch).catch(() => {});
+    // Sidebar title (session record `title`): void, fire-and-forget — the
+    // callback stays synchronous and the response is never delayed.
+    maybeGenerateTitle(STORE, id, drainTitleTranscript(id), active, next.responses_count);
     return {
       session_state: next,
       ...(specifier.startsWith('openrouter/') ? { usage, model: specifier } : {}),
@@ -275,7 +284,7 @@ export function Main({ id }: AgentProps) {
     return raw ? (validateAgentBundle(raw) as { skills?: Record<string, Record<string, string>> }) : null;
   };
   const provisionWorkspace = async () => {
-    const sandbox = getSandbox(namespace, id);
+    const sandbox = getSandbox(namespace, sandboxNameForSession(id));
     const raw = await STORE.get(bundleKey);
     if (raw) await provisionAgentSkills(sandbox, validateAgentBundle(raw));
     // Same env heal as before: a cold container starts from the image's baked
@@ -293,7 +302,7 @@ export function Main({ id }: AgentProps) {
           '/workspace',
           // Deferred: this is the first sandbox-DO contact, and it only runs
           // on the provision/delegation path (never for bundle-served reads).
-          () => cloudflareSandbox(getSandbox(namespace, id)).createSessionEnv(opts),
+          () => cloudflareSandbox(getSandbox(namespace, sandboxNameForSession(id))).createSessionEnv(opts),
           loadBundle,
           provisionWorkspace,
         ),
@@ -342,7 +351,7 @@ export function Main({ id }: AgentProps) {
       });
     }
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[binding];
-    const containerId = ns.idFromName(id).toString();
+    const containerId = ns.idFromName(sandboxNameForSession(id)).toString();
 
     // NO container work here: skills + Semantius env are provisioned lazily by
     // the SessionEnv wrapper at the first op that needs the container (see

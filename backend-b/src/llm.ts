@@ -71,6 +71,28 @@ const PROVIDER_BASE_URLS: Record<string, string | undefined> = {
 export type AgentLlm = { agentName: string; model?: string; modelBaseUrl?: string };
 
 /**
+ * The raw OpenAI-compatible chat-completions endpoint for a session's model —
+ * for one-shot side calls (session title generation) that must not run
+ * through the Flue harness. Same resolution order as agentModelSpecifier:
+ * agent model override -> env default; agent model_base_url -> LLM_BASE_URL
+ * -> the provider's stock endpoint. Null when there is no HTTP endpoint
+ * (cloudflare AI binding) or no key — callers skip the feature.
+ */
+export function chatCompletionsTarget(
+  agent?: AgentLlm | null,
+): { baseUrl: string; model: string; apiKey: string } | null {
+  const spec = agent?.model ?? MODEL_SPECIFIER;
+  const slash = spec.indexOf('/');
+  const provider = spec.slice(0, slash);
+  const model = spec.slice(slash + 1);
+  if (provider === 'cloudflare') return null;
+  const baseUrl = agent?.modelBaseUrl ?? vars.LLM_BASE_URL ?? PROVIDER_BASE_URLS[provider];
+  const apiKey = vars.LLM_API_KEY;
+  if (!baseUrl || !apiKey) return null;
+  return { baseUrl, model, apiKey };
+}
+
+/**
  * Per-agent model resolution. No overrides -> the env-derived default.
  * Overrides resolve metadata-preservingly — Flue trusts catalog metadata
  * blindly (`reasoning` gates thinking, `contextWindow` sets the compaction

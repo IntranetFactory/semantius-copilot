@@ -57,6 +57,7 @@ export function AgentChatContainer({
   baseUrl = BACKEND.baseUrl,
   sessionId,
   onSessionCreated,
+  onResponseSettled,
   onError,
   className,
   placeholder,
@@ -75,6 +76,10 @@ export function AgentChatContainer({
   /** The server-minted id of the session the first submit created — for the
    * host's status line / deep links only, never for the container's key. */
   onSessionCreated?: (sessionId: string, info: SessionCreateInfo) => void;
+  /** Fires once each time a run settles (busy → idle) — e.g. to refresh a
+   * session list whose server-side metadata (generated title) trails the
+   * response. */
+  onResponseSettled?: () => void;
   /** Session-create failure. The container also renders the error inline, so
    * wiring this is optional. */
   onError?: (error: unknown) => void;
@@ -166,6 +171,7 @@ export function AgentChatContainer({
         initialMessage={pendingMessage}
         onDraftSend={createAndSend}
         draftPending={creating}
+        onResponseSettled={onResponseSettled}
         className={className}
         placeholder={placeholder}
       />

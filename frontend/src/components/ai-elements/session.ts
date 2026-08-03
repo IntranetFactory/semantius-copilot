@@ -126,6 +126,8 @@ export type SessionListEntry = {
   version?: string;
   /** ISO-8601 UTC; entries arrive newest-first. */
   createdAt?: string;
+  /** LLM-generated session title (present once the backend produced one). */
+  title?: string;
 };
 
 /** What `GET /sessions` answers: the caller's sessions plus WHOSE they are —

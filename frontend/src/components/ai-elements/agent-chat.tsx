@@ -58,6 +58,7 @@ export function AgentChat({
   initialMessage,
   onDraftSend,
   draftPending,
+  onResponseSettled,
   className,
   placeholder,
 }: {
@@ -80,6 +81,9 @@ export function AgentChat({
   onDraftSend?: (text: string) => Promise<void>;
   /** True while the session create is in flight — locks the composer. */
   draftPending?: boolean;
+  /** Fires once each time a run settles (busy → idle) — e.g. for hosts to
+   * refresh a session list whose server-side metadata trails the response. */
+  onResponseSettled?: () => void;
   /** Merged into the conversation frame (e.g. to override the default height). */
   className?: string;
   /** Composer placeholder text. */
@@ -114,6 +118,23 @@ export function AgentChat({
 
   const chatStatus: ChatStatus = draft ? (draftPending ? 'submitted' : 'ready') : toChatStatus(agent.status);
   const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
+
+  // Settle edge (busy → idle) reported to the host. Ref-guarded so re-renders
+  // at a stable status never re-fire; the callback lives in a ref so a host
+  // passing a fresh closure each render doesn't churn the effect.
+  const wasBusy = useRef(false);
+  const settledCallback = useRef(onResponseSettled);
+  settledCallback.current = onResponseSettled;
+  useEffect(() => {
+    if (busy) {
+      wasBusy.current = true;
+      return;
+    }
+    if (wasBusy.current) {
+      wasBusy.current = false;
+      settledCallback.current?.();
+    }
+  }, [busy]);
 
   // The draft submit, echoed as an optimistic user bubble while the session
   // create is in flight (the dormant hook has no messages to show it).

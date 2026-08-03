@@ -70,6 +70,7 @@ import {
   isValidSessionId,
   listSessions,
   mintSessionId,
+  sandboxNameForSession,
   sessionIdTail,
   sessionTenantPrefix,
   mergeSessionRecord,
@@ -254,7 +255,7 @@ const sandboxRpc = async (fn: () => Promise<unknown>) => {
 app.get('/admin/sessions/:id/sandbox', async (c) => {
   const id = c.req.param('id');
   if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
-  return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, id).snapshotStatus()));
+  return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, sandboxNameForSession(id)).snapshotStatus()));
 });
 app.post('/admin/sessions/:id/sandbox', async (c) => {
   const id = c.req.param('id');
@@ -264,9 +265,11 @@ app.post('/admin/sessions/:id/sandbox', async (c) => {
   // waiting out the production timings.
   const armIn = Number(c.req.query('in'));
   if (Number.isFinite(armIn) && armIn > 0) {
-    return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, id).armSnapshot(Math.min(armIn, 3600))));
+    return c.json(
+      await sandboxRpc(() => getSandbox(c.env.Sandbox, sandboxNameForSession(id)).armSnapshot(Math.min(armIn, 3600))),
+    );
   }
-  return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, id).snapshotNow()));
+  return c.json(await sandboxRpc(() => getSandbox(c.env.Sandbox, sandboxNameForSession(id)).snapshotNow()));
 });
 
 // Admin read of the SAME conversations the chat surface serves, mounted under
@@ -402,6 +405,7 @@ app.get('/sessions', userTokenGuard(), async (c) => {
       ...(typeof r.agentName === 'string' ? { agentName: r.agentName } : {}),
       ...(typeof r.version === 'string' ? { version: r.version } : {}),
       ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
+      ...(typeof r.title === 'string' ? { title: r.title } : {}),
     }));
   return c.json({ sessions, user: verified.user });
 });
@@ -485,7 +489,9 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   // and the bearer KV key must derive from this same binding (plan §7/§16).
   const binding = resolveSandboxBinding(bundle.baseImage);
   const namespace = (c.env as unknown as Record<string, DurableObjectNamespace>)[binding];
-  const containerId = namespace.idFromName(id).toString();
+  // Container identity drops the USER segment: name = `<org>-<tail>`
+  // (sandboxNameForSession) — the only place the 63-char DNS ceiling binds.
+  const containerId = namespace.idFromName(sandboxNameForSession(id)).toString();
 
   // Per-session credentials for downstream services, keyed by host glob. The
   // sandbox is given NOTHING — not the value, not a placeholder — and the
@@ -569,7 +575,7 @@ app.post('/sessions/:id/skill-check', apiKeyGuard(), async (c) => {
   const raw = await c.env.STORE.get(`agent:${id}`);
   const binding = raw ? resolveSandboxBinding((JSON.parse(raw) as { baseImage: string }).baseImage) : 'Sandbox';
   const namespace = (c.env as unknown as Record<string, DurableObjectNamespace>)[binding];
-  const sandbox = getSandbox(namespace, id);
+  const sandbox = getSandbox(namespace, sandboxNameForSession(id));
   let reconstructed = false;
   if (raw) {
     const bundle = validateAgentBundle(raw);
@@ -585,7 +591,7 @@ app.post('/sessions/:id/skill-check', apiKeyGuard(), async (c) => {
     // Mirror the initializer's egress-policy self-heal so the check exercises
     // the same policy a real turn would (deny-all stays deny-all: []; no
     // bearer is ever minted here, matching the old whitelist-only heal).
-    await ensureEgressPolicy(c.env.STORE, namespace.idFromName(id).toString(), id, {
+    await ensureEgressPolicy(c.env.STORE, namespace.idFromName(sandboxNameForSession(id)).toString(), id, {
       whitelist: bundle.proxyWhitelist ?? [],
     });
   }
@@ -608,7 +614,7 @@ app.post('/sessions/:id/skill-check', apiKeyGuard(), async (c) => {
 app.delete('/sessions/:id', apiKeyGuard(), async (c) => {
   const id = c.req.param('id');
   if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
-  const containerId = c.env.Sandbox.idFromName(id).toString();
+  const containerId = c.env.Sandbox.idFromName(sandboxNameForSession(id)).toString();
   // Pointer first: egress fails closed immediately, even if a later delete fails.
   await removeContainerPointer(c.env.STORE, containerId);
   await c.env.STORE.delete(`agent:${id}`);

@@ -117,7 +117,13 @@ export function SessionSidebar({
               onClick={() => onOpenSession(entry.id)}
               type="button"
             >
-              <span className="font-mono text-xs">{sessionIdTail(entry.id).slice(0, 8)}</span>
+              {/* Generated title once the backend produced one; the id-tail
+                  short label is the fallback for brand-new/legacy sessions. */}
+              {entry.title ? (
+                <span className="w-full truncate text-sm">{entry.title}</span>
+              ) : (
+                <span className="font-mono text-xs">{sessionIdTail(entry.id).slice(0, 8)}</span>
+              )}
               {entry.createdAt ? (
                 <span className="text-muted-foreground text-xs">{new Date(entry.createdAt).toLocaleString()}</span>
               ) : null}
