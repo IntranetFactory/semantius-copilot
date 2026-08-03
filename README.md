@@ -711,12 +711,14 @@ calls the echo host over 443 and the injected credential rides inside TLS.
 ### Session ids — server-minted and tenant-prefixed
 
 A chat session id is `<org>-<sub>-<32 hex>` — e.g.
-`tests-user3-1ea1a17e8e68456ab587986db90a4fc9` — minted by the ingest route from the
-identity the user guard just verified (`mintSessionId`, `core/src/config.js`). The route
-takes **no id from the caller**: the browser used to generate one with
-`crypto.randomUUID()`, which made "server-minted, globally unique, never reused"
-(plan §6) a promise nobody enforced and would have let a client stamp any tenant it liked
-on its own KV keys.
+`tests-user3-1ea1a17e8e68456ab587986db90a4fc9`, or for a UUID-shaped sub
+`tests-019d78248034755eb95e88f46bb2c8dc-1ea1a17e8e68456ab587986db90a4fc9` — minted by
+the ingest route from the identity the user guard just verified (`mintSessionId`,
+`core/src/config.js`). The identity segments ride **verbatim** (lowercased, separators
+stripped) — a user id is never truncated or hashed into the id. The route takes **no id
+from the caller**: the browser used to generate one with `crypto.randomUUID()`, which
+made "server-minted, globally unique, never reused" (plan §6) a promise nobody enforced
+and would have let a client stamp any tenant it liked on its own KV keys.
 
 Why the tenant rides the id: it is the only place that puts it in every key derived from
 the session (`session:<id>`, `agent:<id>`). Before this, the tenant lived only *inside*
@@ -729,16 +731,20 @@ and break `session:`/`agentdef:` listing.
 
 Shape constraints, all enforced by `mintSessionId` and asserted in `pnpm test`:
 
-- **Hyphens, not colons.** `:` would survive the SDK's `sanitizeSandboxId` (0.12.3
-  validates, it does not rewrite), but the id is also spliced into `sandbox-<id>` and
-  into container preview hostnames, which are DNS labels.
-- **≤63 characters**, because `sanitizeSandboxId` rejects longer ids — a violation would
-  surface as a broken container at the end of provisioning, not as a validation error.
-  Hence the segment caps (org ≤16, sub ≤12) and the dash-stripped UUID tail: 62 worst case.
-- **Injective segments.** An identity value that does not survive slugging (too long,
-  uppercase, punctuation — a UUID-shaped `sub`) is truncated *and* suffixed with a short
-  FNV-1a hash of the original, so two identities can never collapse onto one prefix and
-  quietly break tenant scoping.
+- **Hyphens, not colons**, and hyphen-free segments: `:` would break `kvGroupOf` (split
+  on the first colon), and compaction strips separators from the identity values, so a
+  minted id is always exactly three `-`-separated parts — `<org>-<sub>-<tail>`.
+- **The SANDBOX name is `<org>-<tail>` — the USER segment is dropped**
+  (`sandboxNameForSession`, the single derivation every `getSandbox()`/`idFromName()`
+  call and the `container:` pointer go through). The container name is the only consumer
+  bound by the sandbox SDK's 63-char `sanitizeSandboxId` DNS-label ceiling; the session
+  id itself is just a KV key suffix (512-byte budget) and a DO name (unbounded), so the
+  full sub never has to be squeezed into a DNS label. Caps: org ≤30 (so org + 32-hex
+  tail fits 63), sub ≤64, id ≤128 (`SESSION_ID_MAX`). Channel ids (no hyphen) pass
+  through `sandboxNameForSession` whole.
+- **Pathological values only** (alphanumeric content beyond a cap) fall back to
+  truncation plus a short FNV-1a hash of the original — a guard for the key budgets,
+  not identity policy; no real IdP sub hits it.
 
 Not every conversation id has this shape: **channel conversations** are keyed by their
 channel's own instance id (`github:v1:owner:<o>:repo:<r>:issue:<n>`, minted by

@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sessionTenantPrefix } from '../core/src/index.js';
+import { sandboxNameForSession, sessionTenantPrefix, SESSION_ID_MAX } from '../core/src/index.js';
 import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -260,7 +260,7 @@ async function main() {
   check(
     'session-id',
     'ingest mints the session id (route takes none)',
-    typeof bId === 'string' && bId.length > 0 && bId.length <= 63,
+    typeof bId === 'string' && bId.length > 0 && bId.length <= SESSION_ID_MAX,
     `${bId} (${String(bId).length} chars)`,
   );
   check(
@@ -271,9 +271,9 @@ async function main() {
   );
   check(
     'session-id',
-    'minted id is sandbox-safe (lowercase DNS label, no leading/trailing hyphen)',
-    /^[a-z0-9][a-z0-9-]{6,61}[a-z0-9]$/.test(String(bId)),
-    String(bId),
+    'the SANDBOX name derived from the id (org + tail, user dropped) is a legal DNS label',
+    /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(sandboxNameForSession(String(bId))),
+    sandboxNameForSession(String(bId)),
   );
 
   // --- GET /sessions: the caller's own session index -----------------------

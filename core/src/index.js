@@ -47,6 +47,7 @@ export {
   SESSION_ID_RE,
   isValidSessionId,
   mintSessionId,
+  sandboxNameForSession,
   sessionIdTail,
   sessionTenantPrefix,
   sessionIdSegment,

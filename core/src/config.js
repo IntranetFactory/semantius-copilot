@@ -104,10 +104,11 @@ export const STREAM_PROTOCOL_HEADERS = [
   'Producer-Received-Seq',
 ];
 
-/** Session ids are server-minted (plan §6/§9.6). This shape is a fixed point of
- * the sandbox SDK's sanitizeSandboxId, which keeps `containerId =
- * idFromName(id)` derivable in the Worker. */
-export const SESSION_ID_RE = /^[a-z0-9][a-z0-9-]{6,61}[a-z0-9]$/;
+/** Session ids are server-minted (plan §6/§9.6). The id itself is only a KV
+ * key suffix and a DO name (neither cares about length) — the sandbox SDK's
+ * 63-char sanitizeSandboxId limit applies to the CONTAINER name, which is the
+ * id's random tail alone (sandboxNameForSession below), never the full id. */
+export const SESSION_ID_RE = /^[a-z0-9][a-z0-9-]{6,159}[a-z0-9]$/;
 
 export function isValidSessionId(id) {
   return typeof id === 'string' && SESSION_ID_RE.test(id) && !id.startsWith('-') && !id.endsWith('-');
@@ -115,7 +116,16 @@ export function isValidSessionId(id) {
 
 /**
  * TENANT-PREFIXED SESSION IDS — `<org>-<sub>-<32 hex>`, e.g.
- * `tests-user3-1ea1a17e8e68456ab587986db90a4fc9`.
+ * `tests-user3-1ea1a17e8e68456ab587986db90a4fc9` or, for a UUID sub,
+ * `tests-019d78248034755eb95e88f46bb2c8dc-1ea1a17e8e68456ab587986db90a4fc9`.
+ *
+ * The identity segments ride VERBATIM (lowercased, separators stripped) — a
+ * user id is never truncated or hashed into the id. What made truncation look
+ * necessary was the sandbox SDK's 63-char sanitizeSandboxId ceiling, but that
+ * ceiling binds the CONTAINER name, not the session id: the container is named
+ * by the id's random tail alone (sandboxNameForSession), which drops the
+ * tenant from the DNS-label role entirely. The session id itself is only a KV
+ * key suffix (512-byte budget) and a DO name (unbounded).
  *
  * Why the prefix: the tenant used to live only INSIDE the session record
  * (`session_context.semantius_org`), so "every session of org X" meant reading
@@ -124,16 +134,20 @@ export function isValidSessionId(id) {
  * so KV prefix listing is tenant-scoped and the data browser shows ownership
  * without opening a record.
  *
- * Why hyphens, not colons: `:` would survive the SDK's sanitizeSandboxId (it
- * validates, it does not rewrite), but the id is also spliced into
- * `sandbox-<id>` and into container preview hostnames, which are DNS labels.
- * Hyphens keep every downstream use legal. It also keeps `kvGroupOf` (split on
- * the FIRST colon, admin.js) grouping by `session`/`agent` — the reason the
- * tenant goes INSIDE the id rather than in front of the group prefix.
+ * Why hyphens, not colons: `:` would break `kvGroupOf` (split on the FIRST
+ * colon, admin.js), which is what keeps `session:`/`agent:` grouping intact —
+ * the reason the tenant goes INSIDE the id rather than in front of the group
+ * prefix.
  *
- * Why the caps: sanitizeSandboxId rejects ids over 63 characters, so both label
- * segments are bounded and the random tail is a v4 UUID with its dashes
- * stripped — 16 + 1 + 12 + 1 + 32 = 62 in the worst case.
+ * Why the caps: the org segment must fit the CONTAINER name beside the tail
+ * (sandbox name = `<org>-<tail>` ≤ 63 ⇒ org ≤ 30), and the sub cap is a
+ * generous guard, not identity policy — no real IdP sub exceeds 64
+ * alphanumerics; the hash fallback beyond a cap only exists so a pathological
+ * value cannot blow the budgets. Both identity segments are HYPHEN-FREE by
+ * construction (compaction strips separators; the fallback concatenates
+ * head+hash without one), so every minted id is exactly three `-`-separated
+ * parts — which is what lets the sandbox name be re-derived from the id
+ * alone. Worst case id: 30 + 1 + 64 + 1 + 32 = 128 (SESSION_ID_MAX).
  *
  * Why server-minted: a prefix the caller chooses proves nothing. The org/sub
  * pair comes from the verified bearer (the ingest route's `semantiusUser`),
@@ -144,9 +158,9 @@ export function isValidSessionId(id) {
  * their channel's instance id (`github:v1:owner:…`) and have no Semantius user
  * at all. `isValidSessionId` stays the shape gate for routes that take an id.
  */
-export const SESSION_ID_MAX = 63;
-export const SESSION_ORG_SEGMENT_MAX = 16;
-export const SESSION_SUB_SEGMENT_MAX = 12;
+export const SESSION_ID_MAX = 128;
+export const SESSION_ORG_SEGMENT_MAX = 30;
+export const SESSION_SUB_SEGMENT_MAX = 64;
 
 /** FNV-1a (32-bit), 6 hex chars. A stable, dependency-free disambiguator for
  * identity values that do not survive slugging — NOT a security primitive. */
@@ -160,21 +174,30 @@ function shortHash(value) {
 }
 
 /**
- * One id segment from an identity value: the value itself when it is already a
- * short lowercase label (`tests`, `user3` — the common case), otherwise a
- * truncated slug plus a hash of the ORIGINAL. The hash is what keeps the
- * segment injective: without it a truncated long org, or two subs differing
- * only past the cut, would share a prefix and silently break tenant scoping.
+ * One id segment from an identity value: its COMPACTED form (lowercased,
+ * separators stripped) whenever that fits the cap — `user3` stays `user3`,
+ * and a UUID sub becomes its 32 hex chars verbatim, so the segment IS the
+ * user id, not an abbreviation of it. Only a value whose alphanumeric content
+ * exceeds the cap falls back to truncation plus a hash of the ORIGINAL, which
+ * keeps over-long values from sharing a prefix past the cut. The fallback
+ * concatenates head and hash WITHOUT a separator: segments must stay
+ * hyphen-free so a minted id is always exactly `<org>-<sub>-<tail>` and the
+ * sandbox name can be re-derived from the id alone (sandboxNameForSession).
+ *
+ * Stripping separators does erase them (`user-3` and `user3` compact alike) —
+ * accepted: identity values within one provider share a format, and ownership
+ * never rests on the prefix (the chat gate and the listing both re-check the
+ * record's full `session_context.user`).
  *
  * @param {unknown} value
  * @param {number} max segment length ceiling
  */
 export function sessionIdSegment(value, max) {
   const raw = String(value ?? '');
-  const slug = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  if (slug && slug === raw.toLowerCase() && slug.length <= max) return slug;
-  const head = slug.slice(0, Math.max(1, max - 7)).replace(/-+$/, '') || 'x';
-  return `${head}-${shortHash(raw)}`;
+  const compact = raw.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (compact && compact.length <= max) return compact;
+  const head = compact.slice(0, Math.max(1, max - 6)) || 'x';
+  return `${head}${shortHash(raw)}`;
 }
 
 /** The prefix every session id of this (org, sub) starts with — the unit of
@@ -194,8 +217,8 @@ export function sessionTenantPrefix(org, sub) {
 export function mintSessionId(org, sub, uuid = () => crypto.randomUUID()) {
   const id = `${sessionTenantPrefix(org, sub)}${uuid().replace(/-/g, '')}`;
   // Unreachable given the segment caps; an assert rather than a code path,
-  // because an over-long id would be rejected by the sandbox SDK at the far end
-  // of provisioning instead of here.
+  // because an over-long id would silently blow the KV key budget downstream
+  // instead of failing here.
   if (id.length > SESSION_ID_MAX || !isValidSessionId(id)) {
     throw new Error(`minted an unusable session id (${id.length} chars)`);
   }
@@ -203,9 +226,9 @@ export function mintSessionId(org, sub, uuid = () => crypto.randomUUID()) {
 }
 
 /**
- * The random tail of a minted id — everything after the tenant prefix. The tail
- * is the only hyphen-free part of the id, so it is always the last `-` segment
- * however many hyphens the org/sub slugs contributed.
+ * The random tail of a minted id — everything after the tenant prefix. The
+ * tail never contains a hyphen and always comes last, so it is the final `-`
+ * segment however many hyphens the org/sub segments contributed.
  *
  * Use this (not a slice of the whole id) wherever a session needs a SHORT
  * label: the id's head is now the tenant prefix, identical for every session of
@@ -216,4 +239,28 @@ export function mintSessionId(org, sub, uuid = () => crypto.randomUUID()) {
 export function sessionIdTail(id) {
   const parts = String(id ?? '').split('-');
   return parts[parts.length - 1] ?? '';
+}
+
+/**
+ * The name a session's SANDBOX CONTAINER goes by — `<org>-<tail>`, the USER
+ * segment dropped. The container name is the one consumer bound by the
+ * sandbox SDK's 63-char DNS-label ceiling (it is spliced into preview
+ * hostnames): the org keeps the tenant visible on the container, the tail is
+ * the unique part, and the user id — the only segment that cannot be bounded
+ * without mangling it — stays out of the DNS-label role entirely
+ * (org ≤30 + 1 + 32 = 63 worst case). Re-derivable from the id alone because
+ * minted ids are exactly `<org>-<sub>-<tail>` with hyphen-free segments.
+ * Every getSandbox()/idFromName() call and the `container:<containerId>`
+ * pointer MUST derive from this one function — a single site using the full
+ * id would boot a second container for the same session.
+ *
+ * Channel conversation ids (`github:v1:…`) contain no hyphen and pass through
+ * whole — their sandbox naming is unchanged by this indirection.
+ *
+ * @param {string} id session/conversation id
+ */
+export function sandboxNameForSession(id) {
+  const value = String(id ?? '');
+  if (!value.includes('-')) return value;
+  return `${value.split('-')[0]}-${sessionIdTail(value)}`;
 }

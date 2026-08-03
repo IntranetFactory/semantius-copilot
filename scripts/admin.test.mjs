@@ -29,6 +29,7 @@ import {
 import {
   isValidSessionId,
   mintSessionId,
+  sandboxNameForSession,
   sessionIdSegment,
   sessionIdTail,
   sessionTenantPrefix,
@@ -333,17 +334,39 @@ await (async function run() {
     mintSessionId('tests', 'user3', uuidStub) === 'tests-user3-1ea1a17e8e68456ab587986db90a4fc9',
     mintSessionId('tests', 'user3', uuidStub),
   );
+  check(
+    'a UUID-shaped sub rides the id VERBATIM (compacted, never truncated/hashed)',
+    sessionTenantPrefix('tests', '019d7824-8034-755e-b95e-88f46bb2c8dc') ===
+      'tests-019d78248034755eb95e88f46bb2c8dc-',
+    sessionTenantPrefix('tests', '019d7824-8034-755e-b95e-88f46bb2c8dc'),
+  );
   check('sessionTenantPrefix matches what mintSessionId emits', mintSessionId('tests', 'user3', uuidStub).startsWith(sessionTenantPrefix('tests', 'user3')));
   check('minted id passes the session-id shape gate', isValidSessionId(mintSessionId('tests', 'user3', uuidStub)));
   check(
-    'minted id fits the sandbox SDK 63-char ceiling for worst-case identities',
+    'minted id stays under SESSION_ID_MAX for worst-case identities',
     mintSessionId('a'.repeat(63), 'b'.repeat(200), uuidStub).length <= SESSION_ID_MAX,
     `${mintSessionId('a'.repeat(63), 'b'.repeat(200), uuidStub).length} chars`,
   );
   check(
-    'long identities stay distinct after truncation (hash disambiguator)',
-    sessionTenantPrefix('acme-corporation-europe', 'x') !== sessionTenantPrefix('acme-corporation-asia', 'x'),
-    `${sessionTenantPrefix('acme-corporation-europe', 'x')} vs ${sessionTenantPrefix('acme-corporation-asia', 'x')}`,
+    'the SANDBOX name (org + tail, user dropped) fits the 63-char DNS label even then',
+    sandboxNameForSession(mintSessionId('a'.repeat(63), 'b'.repeat(200), uuidStub)).length <= 63,
+    sandboxNameForSession(mintSessionId('a'.repeat(63), 'b'.repeat(200), uuidStub)),
+  );
+  check(
+    'sandboxNameForSession drops the user segment, keeps org + tail',
+    sandboxNameForSession('tests-019d78248034755eb95e88f46bb2c8dc-1ea1a17e8e68456ab587986db90a4fc9') ===
+      'tests-1ea1a17e8e68456ab587986db90a4fc9',
+    sandboxNameForSession('tests-019d78248034755eb95e88f46bb2c8dc-1ea1a17e8e68456ab587986db90a4fc9'),
+  );
+  check(
+    'sandboxNameForSession passes hyphen-free channel ids through whole',
+    sandboxNameForSession('github:v1:owner:adenin:repo:hoth:issue:12') === 'github:v1:owner:adenin:repo:hoth:issue:12',
+  );
+  check(
+    'long org slugs ride verbatim once compacted',
+    sessionTenantPrefix('acme-corporation-europe', 'x') === 'acmecorporationeurope-x-' &&
+      sessionTenantPrefix('acme-corporation-europe', 'x') !== sessionTenantPrefix('acme-corporation-asia', 'x'),
+    sessionTenantPrefix('acme-corporation-europe', 'x'),
   );
   check(
     'uuid-shaped subs stay distinct',
@@ -362,7 +385,7 @@ await (async function run() {
     sessionIdTail(mintSessionId('acme-corporation-europe', '@@@', uuidStub)),
   );
   check('sessionIdSegment leaves an already-short label alone', sessionIdSegment('user3', 12) === 'user3');
-  check('sessionIdSegment lowercases and slugs', /^[a-z0-9][a-z0-9-]*$/.test(sessionIdSegment('User.Three', 12)));
+  check('sessionIdSegment compacts mixed-case/punctuated values', sessionIdSegment('User.Three', 12) === 'userthree');
 
   // --- listSessions(idPrefix) — the GET /sessions listing seam --------------
   // Three sessions across two tenants: fakeKv pages at 2, so the scoped
