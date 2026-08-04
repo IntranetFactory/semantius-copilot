@@ -5,7 +5,7 @@
  *
  * Exists so observability changes (Braintrust, Arize/OTel) can be verified
  * without clicking through the frontend: send a turn here, then check the
- * Braintrust `hoth-poc` logs / Arize `hoth-poc` project for the trace.
+ * Braintrust `semantius-copilot` logs / Arize `semantius-copilot` project for the trace.
  *
  *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}']
  *
@@ -43,7 +43,7 @@ const payloadArg = args.find((arg) => arg.startsWith('--payload='));
 if (payloadArg) payload = JSON.parse(payloadArg.slice('--payload='.length));
 const message = args.find((arg) => !arg.startsWith('--')) ?? 'Reply with the single word OK.';
 const adminKey = process.env.API_TOKEN || readFileSync(join(root, '.api-token'), 'utf8').trim();
-const base = process.env.B_URL ?? 'https://hoth-poc-backend-b.ma532.workers.dev';
+const base = process.env.B_URL ?? 'https://semantius-copilot-backend-b.ma532.workers.dev';
 // The chat surface authenticates as the USER (their own Semantius token as the
 // bearer), the admin surface with the shared deployment key. The probe drives
 // both: chat for the turn itself, admin for the session-record read at the end.

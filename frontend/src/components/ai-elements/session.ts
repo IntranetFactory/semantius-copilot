@@ -3,7 +3,7 @@
  * construction, session creation, and agent-meta loading. Everything in here
  * (and this folder) is app-agnostic: no page paths, no localStorage keys, no
  * workspace imports, so the whole `components/ai-elements/` folder can be
- * copied into another app as-is. Hoth-specific page wiring lives in
+ * copied into another app as-is. Semantius Copilot-specific page wiring lives in
  * src/pages.ts; the admin console's helpers live in src/App.tsx.
  *
  * The backend contract this module speaks (any backend-b-shaped Worker):
@@ -48,7 +48,7 @@ export type AgentSeed = {
 export type AgentMeta = AgentSeed & { welcome?: AgentWelcome };
 
 /**
- * Hoth's own backend location — the DEFAULT `baseUrl` everywhere in this
+ * Semantius Copilot's own backend location — the DEFAULT `baseUrl` everywhere in this
  * module. Another app embedding this folder passes its backend's URL instead
  * (AgentChatContainer's `baseUrl` prop); the env read is optional-chained so
  * non-Vite bundlers don't crash on `import.meta.env`.

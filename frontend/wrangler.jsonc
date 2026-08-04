@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "hoth-poc-frontend",
+  "name": "semantius-copilot-frontend",
   "compatibility_date": "2026-06-01",
   // Three static pages served straight from Workers assets — `/chat` ->
   // chat.html, `/copilot` -> copilot.html, `/admin` -> admin.html, each via the

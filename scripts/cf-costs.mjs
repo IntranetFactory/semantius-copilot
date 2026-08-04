@@ -11,7 +11,7 @@
  * KV, which this script has no binding for — so the LLM column is endpoint-only,
  * by design rather than by omission. `pnpm sessions` is the CLI for LLM cost.
  *
- * The join is the `session` label HothSandbox stamps on every container it
+ * The join is the `session` label SemantiusCopilotSandbox stamps on every container it
  * starts (backend-b/src/cloudflare.ts). Cloudflare's dataset has no dimension
  * that carries a name we choose — the `containerName` in some example queries
  * does not exist — so `--introspect` is here to settle field names against the

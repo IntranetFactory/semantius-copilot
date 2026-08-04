@@ -94,7 +94,7 @@ import {
   COST_BASIS,
   CONTAINER_RATES,
   utcDayWindow,
-} from '@hoth/core';
+} from '@semantius-copilot/core';
 import { channel } from './channels/github';
 import { fetchContainerCosts } from './costs';
 
@@ -230,7 +230,7 @@ app.get('/admin/costs', async (c) => {
   return c.json({ ...window, currency: 'USD', rates: CONTAINER_RATES, basis: COST_BASIS, ...costs });
 });
 
-// The per-session container-cost SNAPSHOT (`session_sandbox`), which HothSandbox
+// The per-session container-cost SNAPSHOT (`session_sandbox`), which SemantiusCopilotSandbox
 // writes ~15 min after its container stops. That task runs on a fuse inside a
 // Durable Object nobody is watching, so it needs a window:
 //   GET  — did it run, what did it decide, is it still armed?

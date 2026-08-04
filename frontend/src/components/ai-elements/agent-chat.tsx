@@ -319,7 +319,7 @@ function PartView({ part }: { part: AgentPart }) {
         </Tool>
       );
     case 'file':
-      // Defensive — hoth likely emits no attachments. Render inline if present.
+      // Defensive — the backend likely emits no attachments. Render inline if present.
       if (!part.url) return null;
       return part.mediaType?.startsWith('image/') ? (
         <img src={part.url} alt={part.filename ?? ''} className="max-w-full rounded-md" />

@@ -8,7 +8,7 @@
  * The sandbox seam is satisfied by a local-fs adapter (Node fs + child
  * shell), state is in-memory, and there is no egress broker: the "API" is a
  * local HTTP echo server, so the test is fully offline. No import in this
- * file or in @hoth/core touches anything Cloudflare.
+ * file or in @semantius-copilot/core touches anything Cloudflare.
  */
 import { execFile as execFileCb, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -37,7 +37,7 @@ function check(name, ok, extra = '') {
 }
 
 // --- local sandbox adapter over a temp "workspace" (the sandbox seam) -----
-const workspace = mkdtempSync(join(tmpdir(), 'hoth-smoke-'));
+const workspace = mkdtempSync(join(tmpdir(), 'semantius-copilot-smoke-'));
 let rpcCount = 0;
 const localSandbox = {
   async writeFile(path, content) {
@@ -76,7 +76,7 @@ await new Promise((resolve) => echo.listen(0, '127.0.0.1', resolve));
 const echoUrl = `http://127.0.0.1:${echo.address().port}/post`;
 
 // Scratch agents/ tree for the scanner/JSONC/zero-skill checks.
-const scratchAgents = mkdtempSync(join(tmpdir(), 'hoth-agents-'));
+const scratchAgents = mkdtempSync(join(tmpdir(), 'semantius-copilot-agents-'));
 
 try {
   // 1. bundle + round-trip is exercised by the bundler; here: create + validate

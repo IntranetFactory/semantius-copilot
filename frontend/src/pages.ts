@@ -1,9 +1,9 @@
 /**
- * Hoth's page map + credential bootstrap — everything about WHERE this app's
+ * Semantius Copilot's page map + credential bootstrap — everything about WHERE this app's
  * pages live and HOW they receive credentials. App-level on purpose: the
  * reusable chat surface (components/ai-elements/) must stay copyable into
  * other apps, and none of this — page paths, localStorage keys, URL-fragment
- * handover — travels with it. This module may import `@hoth/core` (the
+ * handover — travels with it. This module may import `@semantius-copilot/core` (the
  * ai-elements folder may not), and must never import react or @flue/* so the
  * frontend Worker (worker/index.ts) can share it without bundling either.
  *
@@ -12,14 +12,14 @@
  * `/agent/<name>` family is the frontend Worker's one rewrite. `/` is not a
  * page: it is a real 404.
  */
-import { SKILL_NAME_RE } from '@hoth/core';
+import { SKILL_NAME_RE } from '@semantius-copilot/core';
 
 /** Deployment API key — ADMIN console only. Never read by the user pages. */
-export const API_KEY_STORAGE = 'hoth-api-key';
+export const API_KEY_STORAGE = 'semantius-copilot-api-key';
 /** The user's Semantius token (`<org>:<jwt>`) — CHAT page only. */
-export const TOKEN_STORAGE = 'hoth-semantius-jwt';
+export const TOKEN_STORAGE = 'semantius-copilot-jwt';
 /** The user's better-auth session cookie VALUE — COPILOT page only. */
-export const COOKIE_STORAGE = 'hoth-better-auth-cookie';
+export const COOKIE_STORAGE = 'semantius-copilot-better-auth-cookie';
 
 export const CHAT_PAGE = '/chat';
 export const AGENT_PAGE_PREFIX = '/agent';

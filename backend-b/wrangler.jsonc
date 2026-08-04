@@ -1,26 +1,23 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "hoth-poc-backend-b",
+  "name": "semantius-copilot-backend-b",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
   // Flue v2 generates one DO class per agent (Flue<Pascal(identity)>Agent).
-  // The beta-era FlueRegistry class is gone in v2, hence the v3
-  // deleted_classes entry (append-only history). v4: the agent was renamed
-  // hoth -> main (generic multi-agent host), abandoning pre-rename sessions.
+  // Fresh v1 history: this worker was created 2026-08-04 as the rename of
+  // hoth-poc-backend-b (whose v1-v4 migration history is in git); Durable
+  // Object state did not carry over, KV does (bound by namespace id below).
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["FlueRegistry", "FlueHothAgent"] },
-    { "tag": "v2", "new_sqlite_classes": ["HothSandbox"] },
-    { "tag": "v3", "deleted_classes": ["FlueRegistry"] },
-    { "tag": "v4", "new_sqlite_classes": ["FlueMainAgent"], "deleted_classes": ["FlueHothAgent"] }
+    { "tag": "v1", "new_sqlite_classes": ["SemantiusCopilotSandbox", "FlueMainAgent"] }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "Sandbox", "class_name": "HothSandbox" }]
+    "bindings": [{ "name": "Sandbox", "class_name": "SemantiusCopilotSandbox" }]
   },
   // placement stays "smart" (default) — "targeted" breaks outboundByHost
   // header injection (sandbox-sdk#661, plan §7).
   "containers": [
     {
-      "class_name": "HothSandbox",
+      "class_name": "SemantiusCopilotSandbox",
       "image": "./Dockerfile",
       // Build context = repo root so the image can COPY the shared semantius
       // CLI from ../linux-x64/ (single binary, no per-backend duplication).
@@ -53,11 +50,11 @@
     // Braintrust tracing (src/braintrust.ts): traces land in this project.
     // The API key is the BRAINTRUST_API_KEY secret (.dev.vars locally,
     // wrangler secret put when deployed) — never a vars value. No key = no export.
-    "BRAINTRUST_PROJECT_NAME": "hoth-poc",
+    "BRAINTRUST_PROJECT_NAME": "semantius-copilot",
     // Arize AX tracing (src/otel.ts): traces land in this Arize project.
     // ARIZE_SPACE_ID + ARIZE_API_KEY are secrets (.dev.vars locally,
     // wrangler secret put when deployed). No secrets = no export.
-    "ARIZE_PROJECT_NAME": "hoth-poc",
+    "ARIZE_PROJECT_NAME": "semantius-copilot",
     // Better-auth session host for the chat gate's cookie path (core/src/
     // identity.js): GET /session validates a forwarded session cookie, POST
     // /session/token trades it for the Semantius JWT the sandbox acts with.
@@ -77,6 +74,6 @@
     // from it. MUST contain the frontend Worker's origin, or every chat page
     // loses CORS at deploy time. Add an embedding app's origin here once it
     // runs same-site with this backend (ambient-cookie mode).
-    "ALLOWED_ORIGINS": "https://hoth-poc-frontend.ma532.workers.dev,http://localhost:5173"
+    "ALLOWED_ORIGINS": "https://semantius-copilot-frontend.ma532.workers.dev,http://localhost:5173"
   }
 }

@@ -35,7 +35,7 @@ if (agents.length === 0) {
 rmSync(join(root, 'frontend', 'src', 'generated'), { recursive: true, force: true });
 
 const bundles = new Map();
-const scratch = mkdtempSync(join(tmpdir(), 'hoth-bundle-'));
+const scratch = mkdtempSync(join(tmpdir(), 'semantius-copilot-bundle-'));
 try {
   for (const name of agents) {
     const agentDir = join(agentsDir, name);

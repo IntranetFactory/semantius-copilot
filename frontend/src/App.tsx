@@ -1,5 +1,5 @@
 /**
- * Hoth POC admin console (`/admin`, plan §10): a read-only Data browser over
+ * Semantius Copilot admin console (`/admin`, plan §10): a read-only Data browser over
  * everything the backend persists in Cloudflare, plus today's Cloudflare
  * container spend per session (the Costs tab).
  *
@@ -77,7 +77,7 @@ export function App() {
   return (
     <main>
       <header>
-        <h1>Hoth Trip Planner &middot; admin</h1>
+        <h1>Semantius Copilot &middot; admin</h1>
         <nav className="tabs">
           <button
             type="button"

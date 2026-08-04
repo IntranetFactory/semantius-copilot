@@ -6,7 +6,7 @@ index bafd9e68136039ae0eef76f222915dc0a5b2e8b3..bd495ebf5284ff5e628a781337968621
  	const startOffset = options.offset ?? `-1`;
  	fetchUrl.searchParams.set(OFFSET_QUERY_PARAM, startOffset);
  	const live = options.live ?? true;
-+	// PATCH (hoth-poc): open the held SSE connection on the FIRST request in
++	// PATCH (semantius-copilot): open the held SSE connection on the FIRST request in
 +	// sse mode, instead of JSON catch-up reads until upToDate (busy-poll flood
 +	// while a live agent generates). See dist/index.js patch for rationale.
 +	if (live === `sse`) fetchUrl.searchParams.set(LIVE_QUERY_PARAM, `sse`);
@@ -21,7 +21,7 @@ index 3baef8ccdbc2c0a424642bf38ab9be70b5096b1a..389f6651240561f3e37468bb7233f36a
  	const startOffset = options.offset ?? `-1`;
  	fetchUrl.searchParams.set(OFFSET_QUERY_PARAM, startOffset);
  	const live = options.live ?? true;
-+	// PATCH (hoth-poc): open the held SSE connection on the FIRST request in
++	// PATCH (semantius-copilot): open the held SSE connection on the FIRST request in
 +	// sse mode, instead of doing JSON catch-up reads until upToDate. Without
 +	// this, observing a live-generating agent never reaches upToDate and the
 +	// client busy-polls catch-up reads at network speed. The server streams

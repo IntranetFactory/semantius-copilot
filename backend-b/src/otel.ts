@@ -45,7 +45,7 @@ import {
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 
-const SERVICE_NAME = 'hoth-poc-backend-b';
+const SERVICE_NAME = 'semantius-copilot-backend-b';
 const ARIZE_ENDPOINT = 'https://otlp.arize.com/v1/traces';
 
 /** Concatenated text parts of a gen_ai.*.messages JSON attribute, or undefined. */
@@ -302,7 +302,7 @@ if (spanProcessors.length > 0) {
       // Arize's project selector (openinference.project.name); without it
       // traces land in a project named after service.name. Langfuse ignores
       // it (projects are selected by API key there).
-      'openinference.project.name': process.env.ARIZE_PROJECT_NAME ?? 'hoth-poc',
+      'openinference.project.name': process.env.ARIZE_PROJECT_NAME ?? 'semantius-copilot',
     }),
     spanProcessors,
   });

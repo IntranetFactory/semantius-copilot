@@ -31,7 +31,7 @@ export function ChatApp() {
 
   return (
     <ChatPage
-      title="Hoth Trip Planner"
+      title="Semantius Copilot"
       auth={{ bearer: token.trim() }}
       credential={{
         value: token,

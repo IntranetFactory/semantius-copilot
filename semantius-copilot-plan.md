@@ -1,4 +1,4 @@
-# Hoth Trip-Planner POC — Plan (rev. 5, consolidated)
+# Semantius Copilot (formerly Hoth Trip-Planner POC) — Plan (rev. 5, consolidated)
 
 ## 1. Goal & thesis
 
@@ -64,7 +64,7 @@ c:\dev\semantius-copilot\             pnpm workspace; conventional package names
 ### agents/ folder & agent.jsonc
 
 Each agent is one folder under `agents/`. `agent.jsonc` is REQUIRED (JSONC — comments and
-trailing commas allowed; parsed by `jsonc-parser` in `@hoth/core/node`); a folder without it
+trailing commas allowed; parsed by `jsonc-parser` in `@semantius-copilot/core/node`); a folder without it
 is skipped by the bundler with a warning. Properties (schema `core/agent.schema.json` —
 kept OUT of agents/ so the folder holds only agents; unknown keys rejected — future keys
 are added to schema + `validateAgentConfig` together):
@@ -355,7 +355,7 @@ copyable into other apps (README "Reusable chat surface" documents the props, th
 modes incl. ambient cookies, and the full copy set). `/chat` and `/copilot` share
 `ChatPage.tsx` as chrome around it; `/agent/<name>` renders it bare. Separate Vite entries
 so the user bundles never ship the admin code. No fixed path is declared in code beyond
-`CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (hoth's page map + credential
+`CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (the app's page map + credential
 bootstrap, deliberately outside the copyable folder);
 Workers assets resolves the fixed pages from the filenames. There is no `index.html`, and
 `not_found_handling: "404-page"` means `/` and every mistyped path answer a real 404 rather than

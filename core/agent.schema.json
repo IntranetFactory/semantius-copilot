@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Hoth agent configuration (agent.jsonc)",
+  "title": "Semantius Copilot agent configuration (agent.jsonc)",
   "description": "Per-agent config in agents/<name>/agent.jsonc. The file is REQUIRED: folders without it are skipped by the bundler. Skills live in agents/<name>/skills/<skill>/; an optional INSTRUCTIONS.md next to the config is appended to `instructions`. This schema mirrors validateAgentConfig in core/src/agent.js — change both together.",
   "type": "object",
   "additionalProperties": false,

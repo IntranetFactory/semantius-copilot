@@ -3,7 +3,7 @@
  * conversation, session lifecycle included. Drop this component into any app
  * — the whole `components/ai-elements/` folder (plus the shadcn `ui/` folder,
  * `lib/utils.ts`, and the theme CSS) is copyable as-is; nothing in it knows
- * hoth's pages.
+ * Semantius Copilot's pages.
  *
  * Backend contract (any backend-b-shaped Worker, addressed via `baseUrl`):
  *   GET  /agents/:name/meta      welcome card + turn-1 seed

@@ -39,7 +39,7 @@ export function CopilotApp() {
 
   return (
     <ChatPage
-      title="Hoth Copilot"
+      title="Semantius Copilot"
       auth={{ authCookie: cookie.trim() }}
       credential={{
         value: cookie,

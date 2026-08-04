@@ -19,7 +19,7 @@
 import { env } from 'cloudflare:workers';
 import { createGitHubChannel, type GitHubIssueRef } from '@flue/github';
 import { defineTool, dispatch } from '@flue/runtime';
-import { AGENT_DEF_KEY_PREFIX, putSessionIndex, readSession } from '@hoth/core';
+import { AGENT_DEF_KEY_PREFIX, putSessionIndex, readSession } from '@semantius-copilot/core';
 import { Octokit } from '@octokit/rest';
 import * as v from 'valibot';
 import { Main } from '../agents/main';
@@ -27,7 +27,7 @@ import { Main } from '../agents/main';
 const secrets = env as Record<string, string | undefined>;
 
 /** Appended (as an invisible HTML comment) to every agent reply. */
-const AGENT_MARKER = '<!-- hoth-agent-reply -->';
+const AGENT_MARKER = '<!-- semantius-copilot-agent-reply -->';
 
 /**
  * The named definition GitHub conversations run — the trip-planner agent,

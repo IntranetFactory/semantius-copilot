@@ -52,7 +52,7 @@ import {
   skillCatalogFromBundle,
   SKILLS_DIR,
   validateAgentBundle,
-} from '@hoth/core';
+} from '@semantius-copilot/core';
 import * as v from 'valibot';
 import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '../channels/github';
 import { lazySessionEnv } from '../lazy-env';
@@ -274,7 +274,7 @@ export function Main({ id }: AgentProps) {
   // exec/write — which then provisions skills + Semantius env (absent→write,
   // no-op on a warm container). getSandbox() is deferred with it: on a cold
   // per-isolate cache it fires a `configure` RPC that wakes the sandbox DO
-  // (seen live 2026-08-02 as `HothSandbox.configure` on a chat-only turn), so
+  // (seen live 2026-08-02 as `SemantiusCopilotSandbox.configure` on a chat-only turn), so
   // it must not run at render.
   const loadBundle = async () => {
     const raw = await STORE.get(bundleKey);

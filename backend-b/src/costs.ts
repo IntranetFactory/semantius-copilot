@@ -2,15 +2,15 @@
  * Today's Cloudflare CONTAINER spend, per session — the data behind the admin
  * console's Costs tab (GET /admin/costs).
  *
- * The join is the `session` label HothSandbox stamps on every container it
+ * The join is the `session` label SemantiusCopilotSandbox stamps on every container it
  * starts (src/cloudflare.ts); the label key, the query and the pricing all live
- * in @hoth/core's cost.js so this file and scripts/cf-costs.mjs cannot drift
+ * in @semantius-copilot/core's cost.js so this file and scripts/cf-costs.mjs cannot drift
  * apart. All this adds is the fetch, the credential check, and the enrichment
  * from KV.
  *
  * TWO CALLERS, one query:
  *   - `fetchContainerCosts` — the admin route, all sessions, KV-enriched.
- *   - `queryContainerCosts` — the raw priced rows, used by HothSandbox's
+ *   - `queryContainerCosts` — the raw priced rows, used by SemantiusCopilotSandbox's
  *     post-stop snapshot (src/cloudflare.ts) to find its own session's row.
  *     The DO picks its row out of the full result rather than filtering
  *     server-side: it is then literally the query already proven in production,
@@ -26,7 +26,7 @@ import {
   CF_GRAPHQL_URL,
   SESSION_LABEL,
   readSession,
-} from '@hoth/core';
+} from '@semantius-copilot/core';
 
 export type CostEnv = {
   STORE: KVNamespace;

@@ -2,7 +2,7 @@
   "name": "semantius-copilot",
   "private": true,
   "version": "0.0.1",
-  "description": "Hoth Trip-Planner POC — proves hard-coded vs dynamic-bundle skill delivery yield identical agent behavior on Flue + Cloudflare Sandbox",
+  "description": "Semantius Copilot — proves hard-coded vs dynamic-bundle skill delivery yield identical agent behavior on Flue + Cloudflare Sandbox",
   "type": "module",
   "scripts": {
     "bundle": "node scripts/bundle.mjs",

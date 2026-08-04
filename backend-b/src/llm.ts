@@ -1,11 +1,11 @@
 /**
  * LLM provider wiring (runs once at module init). LLM_PROVIDER / LLM_MODEL /
  * LLM_BASE_URL come from wrangler vars, LLM_API_KEY from the worker secret
- * (.dev.vars in local dev). See @hoth/core configureLlm.
+ * (.dev.vars in local dev). See @semantius-copilot/core configureLlm.
  *
  * Flue v2 removed the beta registerProvider(name, opts) API in favor of Pi
  * provider objects (setProvider + createProvider). This adapter keeps
- * @hoth/core's configureLlm contract: it is invoked only when the env
+ * @semantius-copilot/core's configureLlm contract: it is invoked only when the env
  * overrides a provider's transport/auth.
  */
 import { env } from 'cloudflare:workers';
@@ -13,7 +13,7 @@ import { setProvider } from '@flue/runtime';
 import { createProvider } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
-import { configureLlm } from '@hoth/core';
+import { configureLlm } from '@semantius-copilot/core';
 
 const vars = env as Record<string, string | undefined>;
 

@@ -45,7 +45,7 @@
  * every message.
  */
 import type { FileStat, SessionEnv } from '@flue/runtime';
-import { SKILLS_DIR } from '@hoth/core';
+import { SKILLS_DIR } from '@semantius-copilot/core';
 
 /** The slice of the agent bundle the virtual view needs. */
 export type SkillFilesBundle = { skills?: Record<string, Record<string, string>> } | null;

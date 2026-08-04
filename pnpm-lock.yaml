@@ -5,8 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@durable-streams/client@0.2.6': a6e7c6b4939e7c46f3f21df639b087be6c415c4c88afd53e56f8f6f426c86787
-  '@earendil-works/pi-ai@0.81.1': e3a8fd81fbaa68d640e0af9dae61bb5e24e9760590c9a8a9f5c70affcce9bdd0
+  '@durable-streams/client@0.2.6': f8b51ed54a0a0385cb7d284f2977b9bd9afc73dd3f828225510f79ea56e7f9a1
+  '@earendil-works/pi-ai@0.81.1': a027569378bcd72fccecbe76b675f64f00537d926ab889e23b73f7a68368830d
   '@flue/runtime@2.0.1': f1bab6ce66d8678f9d4e6c811a140cc2dee6ab0872651e7c1539a762762878f6
 
 importers:
@@ -20,7 +20,7 @@ importers:
         version: 0.12.3
       '@earendil-works/pi-ai':
         specifier: ^0.81.1
-        version: 0.81.1(patch_hash=e3a8fd81fbaa68d640e0af9dae61bb5e24e9760590c9a8a9f5c70affcce9bdd0)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+        version: 0.81.1(patch_hash=a027569378bcd72fccecbe76b675f64f00537d926ab889e23b73f7a68368830d)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
       '@flue/github':
         specifier: 2.0.1
         version: 2.0.1(@flue/runtime@2.0.1(patch_hash=f1bab6ce66d8678f9d4e6c811a140cc2dee6ab0872651e7c1539a762762878f6)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@5.9.3)(ws@8.21.1)(zod@4.4.3))
@@ -30,9 +30,6 @@ importers:
       '@flue/runtime':
         specifier: 2.0.1
         version: 2.0.1(patch_hash=f1bab6ce66d8678f9d4e6c811a140cc2dee6ab0872651e7c1539a762762878f6)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@5.9.3)(ws@8.21.1)(zod@4.4.3)
-      '@hoth/core':
-        specifier: workspace:*
-        version: link:../core
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
@@ -51,6 +48,9 @@ importers:
       '@opentelemetry/sdk-trace-base':
         specifier: ^2.10.0
         version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@semantius-copilot/core':
+        specifier: workspace:*
+        version: link:../core
       agents:
         specifier: ^0.14.2
         version: 0.14.5(@babel/core@7.29.7)(@babel/runtime@7.29.7)(ai@7.0.31(zod@4.4.3))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))(zod@4.4.3)
@@ -94,12 +94,12 @@ importers:
       '@fontsource-variable/geist':
         specifier: ^5.3.0
         version: 5.3.0
-      '@hoth/core':
-        specifier: workspace:*
-        version: link:../core
       '@radix-ui/react-use-controllable-state':
         specifier: ^1.2.4
         version: 1.2.4(@types/react@18.3.31)(react@18.3.1)
+      '@semantius-copilot/core':
+        specifier: workspace:*
+        version: link:../core
       '@streamdown/cjk':
         specifier: ^1.0.3
         version: 1.0.3(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2)(react@18.3.1)(unified@11.0.5)
@@ -6431,7 +6431,7 @@ snapshots:
 
   '@dotenvx/primitives@0.8.0': {}
 
-  '@durable-streams/client@0.2.6(patch_hash=a6e7c6b4939e7c46f3f21df639b087be6c415c4c88afd53e56f8f6f426c86787)':
+  '@durable-streams/client@0.2.6(patch_hash=f8b51ed54a0a0385cb7d284f2977b9bd9afc73dd3f828225510f79ea56e7f9a1)':
     dependencies:
       '@microsoft/fetch-event-source': 2.0.1
       fastq: 1.20.1
@@ -6451,7 +6451,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.81.1(patch_hash=e3a8fd81fbaa68d640e0af9dae61bb5e24e9760590c9a8a9f5c70affcce9bdd0)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.81.1(patch_hash=a027569378bcd72fccecbe76b675f64f00537d926ab889e23b73f7a68368830d)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -6803,7 +6803,7 @@ snapshots:
 
   '@flue/sdk@2.0.1':
     dependencies:
-      '@durable-streams/client': 0.2.6(patch_hash=a6e7c6b4939e7c46f3f21df639b087be6c415c4c88afd53e56f8f6f426c86787)
+      '@durable-streams/client': 0.2.6(patch_hash=f8b51ed54a0a0385cb7d284f2977b9bd9afc73dd3f828225510f79ea56e7f9a1)
 
   '@flue/vite@2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(hono@4.12.30)(typescript@5.9.3)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))(ws@8.21.1)(zod@4.4.3)':
     dependencies:

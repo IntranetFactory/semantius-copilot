@@ -6,7 +6,7 @@ index a7718b47f2622a3d4de09b5871620072cdd980d5..458d3b6c444678cda2a7805cb5310744
      if (compat.supportsUsageInStreaming !== false) {
          params.stream_options = { include_usage: true };
      }
-+    // PATCH (hoth-poc): OpenRouter usage accounting — makes the final usage
++    // PATCH (semantius-copilot): OpenRouter usage accounting — makes the final usage
 +    // chunk carry the BILLED cost (usage.cost, USD); consumed in
 +    // parseChunkUsage below. OpenRouter-only request field.
 +    if (model.baseUrl.includes("openrouter.ai")) {
@@ -19,7 +19,7 @@ index a7718b47f2622a3d4de09b5871620072cdd980d5..458d3b6c444678cda2a7805cb5310744
          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
      };
      calculateCost(model, usage);
-+    // PATCH (hoth-poc): prefer the provider's billed amount (OpenRouter
++    // PATCH (semantius-copilot): prefer the provider's billed amount (OpenRouter
 +    // usage.cost, requested via `usage: { include: true }` above) over the
 +    // catalog estimate for the TOTAL. Component costs stay catalog-derived —
 +    // OpenRouter only reports the total.

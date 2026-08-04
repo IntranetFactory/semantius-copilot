@@ -1,12 +1,15 @@
 # Semantius Copilot
 
-> **Renamed 2026-08-04:** the GitHub repo `IntranetFactory/hoth-poc` is now
-> [`IntranetFactory/semantius-copilot`](https://github.com/IntranetFactory/semantius-copilot)
-> (formerly "Hoth Trip-Planner POC"). Deployed identifiers keep the old prefix — the worker
-> names `hoth-poc-frontend` / `hoth-poc-backend-b`, their workers.dev URLs, and the
-> Braintrust/Arize project name `hoth-poc` — as does the internal `hoth` codename
-> (`@hoth/core`, the `hoth-trip-planner` agent). Renaming those would mean new workers.dev
-> origins, lost Durable Object session state, and GitHub-webhook reconfiguration.
+> **Renamed 2026-08-04:** formerly `IntranetFactory/hoth-poc` ("Hoth Trip-Planner POC"),
+> now [`IntranetFactory/semantius-copilot`](https://github.com/IntranetFactory/semantius-copilot).
+> Every project identifier was renamed with it: the workers (now
+> `semantius-copilot-frontend` / `semantius-copilot-backend-b`, new workers.dev URLs — the
+> old `hoth-poc-*` workers are deleted and their Durable-Object session history is gone),
+> the Braintrust/Arize project (`semantius-copilot`; pre-rename traces remain in the old
+> `hoth-poc` projects), the `@semantius-copilot/core` workspace package, and the GitHub
+> webhook endpoint. KV survived the rename (bound by namespace id), so deployed agent
+> definitions carried over. Only Hoth-the-planet demo content keeps the name: the
+> `hoth-trip-planner` agent and its mock "Hoth Tourism API".
 
 **Multi-agent, multi-tenant dynamic skill delivery** on Flue + Cloudflare Sandbox: a
 whole agent (instructions + model overrides + ALL its skills) is serialized as **one
@@ -27,11 +30,11 @@ See [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) for the original 
 
 | Deployable | URL |
 | ---------- | --- |
-| Frontend — chat (users, Semantius token) | https://hoth-poc-frontend.ma532.workers.dev/chat |
-| Frontend — copilot (users, better-auth cookie) | https://hoth-poc-frontend.ma532.workers.dev/copilot |
-| Frontend — per-agent page, input-free (users, cookie or `#jwt=`) | https://hoth-poc-frontend.ma532.workers.dev/agent/\<name\> — one URL per KV-deployed agent, today [/agent/hoth-trip-planner](https://hoth-poc-frontend.ma532.workers.dev/agent/hoth-trip-planner) and [/agent/semantius-admin](https://hoth-poc-frontend.ma532.workers.dev/agent/semantius-admin) |
-| Frontend — admin console | https://hoth-poc-frontend.ma532.workers.dev/admin |
-| Backend — dynamic bundle (multi-agent) | https://hoth-poc-backend-b.ma532.workers.dev |
+| Frontend — chat (users, Semantius token) | https://semantius-copilot-frontend.ma532.workers.dev/chat |
+| Frontend — copilot (users, better-auth cookie) | https://semantius-copilot-frontend.ma532.workers.dev/copilot |
+| Frontend — per-agent page, input-free (users, cookie or `#jwt=`) | https://semantius-copilot-frontend.ma532.workers.dev/agent/\<name\> — one URL per KV-deployed agent, today [/agent/hoth-trip-planner](https://semantius-copilot-frontend.ma532.workers.dev/agent/hoth-trip-planner) and [/agent/semantius-admin](https://semantius-copilot-frontend.ma532.workers.dev/agent/semantius-admin) |
+| Frontend — admin console | https://semantius-copilot-frontend.ma532.workers.dev/admin |
+| Backend — dynamic bundle (multi-agent) | https://semantius-copilot-backend-b.ma532.workers.dev |
 
 **Credential-in-URL handover.** Every user page also accepts its credential in the URL
 *fragment* (`#…`, never a query string — the fragment is not sent to any server), so a
@@ -88,7 +91,7 @@ with no frontend rebuild.
 
 No fixed path is declared anywhere: Workers assets serves each `<name>.html` at `/<name>`
 via its default `auto-trailing-slash` html_handling, and the one place paths are written
-down in code is `CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (hoth's page
+down in code is `CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (the app's page
 map + credential bootstrap — deliberately OUTSIDE the copyable ai-elements folder).
 `/agent/<name>` is the one path a Worker script serves:
 agents exist at runtime, so those URLs cannot be assets — `frontend/worker/index.ts` (the
@@ -107,7 +110,7 @@ something to advertise.
 
 The chat surface is designed to be **copied into other apps**. The folder has zero
 workspace imports (the one protocol constant, `x-better-auth-cookie`, is inlined in
-`session.ts`, mirroring `core/src/identity.js`); everything hoth-specific — page paths,
+`session.ts`, mirroring `core/src/identity.js`); everything app-specific — page paths,
 localStorage keys, `#jwt=`/`#cookie=` fragment handover — lives in `frontend/src/pages.ts`
 and `App.tsx`, which are NOT part of the copy.
 
@@ -178,7 +181,7 @@ core/        Host-agnostic Flue-core seams (no Cloudflare imports):
              Semantius user identity (identity.js — `<org>:<jwt>` → userinfo, and
              better-auth session cookie → /session + /session/token),
              deterministic skill-check, container-cost query + pricing (cost.js).
-             `@hoth/core/node` adds the bundler library (fs walk, JSONC parse via
+             `@semantius-copilot/core/node` adds the bundler library (fs walk, JSONC parse via
              jsonc-parser).
 backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue agent;
              the named agent definition a session references (`{ agentName }` at ingest,
@@ -412,7 +415,7 @@ credentials:
 Set the admin key as a Cloudflare secret, and locally via `.dev.vars`:
 
 ```bash
-node -e "console.log('hoth_'+require('crypto').randomBytes(24).toString('base64url'))" > .api-token
+node -e "console.log('semantius_'+require('crypto').randomBytes(24).toString('base64url'))" > .api-token
 cd backend-b && printf 'API_TOKEN="%s"\n' "$(cat ../.api-token)" > .dev.vars   # local dev
 wrangler secret put API_TOKEN --config backend-b/wrangler.jsonc                 # deployed (paste the value)
 ```
@@ -837,7 +840,7 @@ Its dimensions are `instanceId` (platform-assigned, **not** derivable from the D
 Object id), `applicationId`, `placementId`, `location`, `region`, `label(name: "…")` and
 the time buckets; `sum` has `cpuTimeSec`, `allocatedMemory`, `allocatedDisk`, `txBytes`.
 There is **no `containerName` dimension** — example queries that use one are wrong. So
-`HothSandbox` (`backend-b/src/cloudflare.ts`) stamps `session=<sessionId>` on every
+`SemantiusCopilotSandbox` (`backend-b/src/cloudflare.ts`) stamps `session=<sessionId>` on every
 container it starts, by merging `labels` into the start options of both `start()` and
 `startAndWaitForPorts()` — the two public paths into the SDK's
 `startContainerIfNotRunning`, which resolves `options?.labels ?? this.labels`. It can't be
@@ -872,7 +875,7 @@ that supplies Agent and Started, so it shows `—` once the session record is go
 
 **`session_sandbox` — the durable snapshot.** The Costs tab is a live read-through to today's
 analytics, so a session's container spend disappears from it once the day rolls over. To keep
-it, `HothSandbox` runs a small scheduled task that merges a `session_sandbox` node onto
+it, `SemantiusCopilotSandbox` runs a small scheduled task that merges a `session_sandbox` node onto
 `session:<id>`:
 
 ```json
@@ -992,7 +995,7 @@ refreshes the record's 24 h TTL, keeping active GitHub conversations browsable).
 the four above: nothing in the agent, the model or the sandbox reads it. It is the durable
 mirror of this session's Cloudflare CONTAINER spend (`cpu_seconds`, `memory_gib_seconds`,
 `disk_gb_seconds`, `egress_bytes`, `cost_total`, plus the window it was measured over),
-written by `HothSandbox.recordSandboxCost()` — a scheduled task armed at container start that
+written by `SemantiusCopilotSandbox.recordSandboxCost()` — a scheduled task armed at container start that
 fires 15 minutes after the container stops — so the figure survives the Costs tab's
 today-only window. Written with
 `mergeExistingSessionRecord`, so it can never resurrect a deleted session — see "Container
@@ -1003,11 +1006,11 @@ costs" for why that matters.
 `backend-b/src/channels/github.ts` (`@flue/github`) connects IntranetFactory/semantius-copilot to
 the `main` agent: `issues.opened` and `issue_comment.created` dispatch one conversation per
 issue; replies are posted via the `comment_on_github_issue` tool and carry a
-`<!-- hoth-agent-reply -->` marker the webhook skips (loop guard). The agent instructions
+`<!-- semantius-copilot-agent-reply -->` marker the webhook skips (loop guard). The agent instructions
 must insist on the tool — otherwise the model answers in plain conversation text and
 nothing appears on GitHub.
 
-- Webhook endpoint: `https://hoth-poc-backend-b.ma532.workers.dev/channels/github/webhook`,
+- Webhook endpoint: `https://semantius-copilot-backend-b.ma532.workers.dev/channels/github/webhook`,
   mounted in `app.ts` **before** the API-key guard (auth is `X-Hub-Signature-256`, not the
   bearer). The explicit early mount is load-bearing.
 - GitHub conversations run the trip-planner agent directly from the no-TTL KV entry
@@ -1067,7 +1070,7 @@ direct OTel data lags up to 10 min). Mapping notes (all in `enrichSpan()`):
 
 ### Braintrust
 
-Both backends export traces to the Braintrust project **`hoth-poc`** via the Flue tooling
+Both backends export traces to the Braintrust project **`semantius-copilot`** via the Flue tooling
 blueprint (`flue add tooling braintrust` — it prints an agent-directed blueprint, it does not
 edit files). Per backend: `braintrust@3.17.0` (pinned) + `src/braintrust.ts` (the
 `observe(...)` bridge, imported first in `app.ts`).
@@ -1075,7 +1078,7 @@ edit files). Per backend: `braintrust@3.17.0` (pinned) + `src/braintrust.ts` (th
 - **Key**: `BRAINTRUST_API_KEY` is a Worker secret (`wrangler secret put`) and in gitignored
   `.dev.vars` — never a wrangler `vars` value. Without the key the bridge is a no-op:
   nothing initializes, the app runs untraced.
-- **Project name**: `BRAINTRUST_PROJECT_NAME=hoth-poc` in each `wrangler.jsonc` `vars`.
+- **Project name**: `BRAINTRUST_PROJECT_NAME=semantius-copilot` in each `wrangler.jsonc` `vars`.
 - **Compat bridge (do not simplify away)**: braintrust 3.17 reads the pre-v2 flat event
   fields (`model`, `input`, `output`, `usage`, `stopReason`, and `tool_call`), while current
   Flue nightlies nest turn payloads under `request`/`response` and put an agent prompt's
@@ -1103,7 +1106,7 @@ Verify: send a chat turn, then check the project logs — llm spans should be na
 
 ### Arize AX (OpenTelemetry)
 
-Both backends also export to the Arize AX project **`hoth-poc`** via Flue's own
+Both backends also export to the Arize AX project **`semantius-copilot`** via Flue's own
 OTel adapter — `@flue/opentelemetry` (pinned to the same runtime version) +
 `src/otel.ts` per backend (imported next to `./braintrust` in `app.ts`). The
 adapter projects runtime observations onto OTel **GenAI semconv** spans
@@ -1114,7 +1117,7 @@ render natively — no client-side mapping.
 
 - **Keys**: `ARIZE_SPACE_ID` + `ARIZE_API_KEY` are Worker secrets
   (`wrangler secret put`, `.dev.vars` locally). No secrets = the bridge is a
-  no-op. `ARIZE_PROJECT_NAME=hoth-poc` is a `wrangler.jsonc` var.
+  no-op. `ARIZE_PROJECT_NAME=semantius-copilot` is a `wrangler.jsonc` var.
 - **Custom fetch exporter (do not "simplify" to a stock one)**: the official
   OTLP exporters transport over `node:http`/XHR, neither of which exists in
   workerd. `ArizeOtlpExporter` serializes with `ProtobufTraceSerializer` and
@@ -1184,7 +1187,7 @@ render natively — no client-side mapping.
   instrumentation's `content: { transform }` hook before real tenant data.
 
 Verify: `node scripts/chat-probe.mjs`, then open the Arize space →
-project `hoth-poc` → the session should appear with the full
+project `semantius-copilot` → the session should appear with the full
 invoke_agent → chat → execute_tool tree. Export failures surface as
 `arize: OTLP export …` warnings in `wrangler tail`. A direct probe of the
 endpoint from Node (same serializer + headers) returned 200 on 2026-07-26.

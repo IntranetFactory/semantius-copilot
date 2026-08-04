@@ -25,7 +25,7 @@ import { sandboxNameForSession, sessionTenantPrefix, SESSION_ID_MAX } from '../c
 import { mintSemantiusToken } from './lib/semantius.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const B_URL = process.env.B_URL ?? 'https://hoth-poc-backend-b.ma532.workers.dev';
+const B_URL = process.env.B_URL ?? 'https://semantius-copilot-backend-b.ma532.workers.dev';
 const API_TOKEN = process.env.API_TOKEN;
 if (!API_TOKEN) {
   console.error('API_TOKEN env var is required (the backend is behind the API-key guard).');

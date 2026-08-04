@@ -10,7 +10,7 @@
  * without a proxy_whitelist still gets `whitelist: []`; expired TTL; deleted
  * session) MEANS DENY ALL — fail-closed.
  *
- * Two egress handlers are registered on HothSandbox, one per credential shape:
+ * Two egress handlers are registered on SemantiusCopilotSandbox, one per credential shape:
  *   - outboundByHost[ECHO_HOST] — ZERO-KNOWLEDGE injection from the session's
  *     `egress_secrets` map (plus its `x-semantius-org`), gated by the policy's
  *     whitelist. The container holds nothing for these hosts, not even a
@@ -31,7 +31,7 @@
  *     with no JWT (channel conversation, expired 24 h TTL) has NO credential
  *     to lend, so a sentinel-bearing request fails closed with 503.
  *
- * HothSandbox also carries two non-egress responsibilities, both about cost
+ * SemantiusCopilotSandbox also carries two non-egress responsibilities, both about cost
  * attribution: it stamps the session id as a container LABEL at start (the only
  * join Cloudflare's billing analytics offers), and 15 minutes after the
  * container stops it mirrors that session's spend onto the session record as
@@ -56,7 +56,7 @@ import {
   SEMANTIUS_JWT_SENTINEL,
   SESSION_LABEL,
   brokerEgress,
-} from '@hoth/core';
+} from '@semantius-copilot/core';
 
 import { queryContainerCosts, type CostEnv } from './costs';
 
@@ -114,12 +114,12 @@ const SNAPSHOT_POLL_SECONDS = 5 * 60;
 const SNAPSHOT_MAX_TRIES = 6;
 
 /** DO storage keys for the snapshot task's own state. */
-const STOPPED_AT_KEY = 'hoth:stoppedAt';
-const SNAPSHOT_ARMED_KEY = 'hoth:snapshotArmed';
-const SNAPSHOT_TRIES_KEY = 'hoth:snapshotTries';
-const LAST_RUN_KEY = 'hoth:snapshotLastRun';
+const STOPPED_AT_KEY = 'semantius-copilot:stoppedAt';
+const SNAPSHOT_ARMED_KEY = 'semantius-copilot:snapshotArmed';
+const SNAPSHOT_TRIES_KEY = 'semantius-copilot:snapshotTries';
+const LAST_RUN_KEY = 'semantius-copilot:snapshotLastRun';
 
-export class HothSandbox extends Sandbox<Env> {
+export class SemantiusCopilotSandbox extends Sandbox<Env> {
   enableInternet = false;
   // Intercept HTTPS egress too (SDK default is false). semantius calls
   // https://<org>.semantius.ai, so without this the catch-all `outbound` swap
@@ -386,7 +386,7 @@ export class HothSandbox extends Sandbox<Env> {
   }
 }
 
-HothSandbox.outboundByHost = {
+SemantiusCopilotSandbox.outboundByHost = {
   [ECHO_HOST]: async (request: Request, env: Env, ctx: { containerId: string }) => {
     const policy = await resolveEgressPolicy(env.STORE, ctx.containerId);
     if (!policy || !isWhitelistedHost(new URL(request.url).hostname, policy.whitelist)) {
@@ -399,7 +399,7 @@ HothSandbox.outboundByHost = {
   },
 };
 
-HothSandbox.outbound = async (request: Request, env: Env, ctx: { containerId: string }) => {
+SemantiusCopilotSandbox.outbound = async (request: Request, env: Env, ctx: { containerId: string }) => {
   const policy = await resolveEgressPolicy(env.STORE, ctx.containerId);
   const jwt =
     policy && typeof policy.context?.semantius_jwt === 'string' && policy.context.semantius_jwt

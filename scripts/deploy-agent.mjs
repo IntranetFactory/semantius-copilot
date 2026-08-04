@@ -37,7 +37,7 @@ if ((all && (names.length > 0 || alias)) || (!all && names.length !== 1) || (asI
 }
 
 const token = process.env.API_TOKEN || readFileSync(join(root, '.api-token'), 'utf8').trim();
-const base = process.env.B_URL ?? 'https://hoth-poc-backend-b.ma532.workers.dev';
+const base = process.env.B_URL ?? 'https://semantius-copilot-backend-b.ma532.workers.dev';
 
 const targets = all
   ? scanAgentsDir(join(root, 'agents')).agents.map((name) => ({ name, key: name }))

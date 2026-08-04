@@ -8,7 +8,7 @@
  * choose (`instanceId` is platform-assigned and NOT derivable from the Durable
  * Object id), and there is no `containerName` dimension despite what some
  * example queries suggest. What it does have is `label(name: "...")` — so
- * HothSandbox stamps `session=<sessionId>` on every instance it starts
+ * SemantiusCopilotSandbox stamps `session=<sessionId>` on every instance it starts
  * (backend-b/src/cloudflare.ts, SESSION_LABEL) and we group by that label here.
  *
  * This file is pure: it builds the query and prices the numbers. The fetch lives
@@ -28,7 +28,7 @@ export const CF_GRAPHQL_URL = 'https://api.cloudflare.com/client/v4/graphql';
 /**
  * The label key every container instance is tagged with, and the ONLY join
  * between Cloudflare's billing analytics and our sessions. Lives here rather
- * than next to the HothSandbox that stamps it, because both the stamper
+ * than next to the SemantiusCopilotSandbox that stamps it, because both the stamper
  * (backend-b/src/cloudflare.ts) and the reader (backend-b/src/costs.ts) need it
  * and the sandbox module imports the reader — a constant in either would make
  * that graph circular.
@@ -82,7 +82,7 @@ export const COST_BASIS =
  */
 export function containerCostQuery({ accountTag, start, end, label = SESSION_LABEL, limit = 1000 }) {
   return {
-    query: `query HothContainerCostBySession($accountTag: String!, $start: Time!, $end: Time!, $label: String!, $limit: Int!) {
+    query: `query SemantiusCopilotContainerCostBySession($accountTag: String!, $start: Time!, $end: Time!, $label: String!, $limit: Int!) {
   viewer {
     accounts(filter: { accountTag: $accountTag }) {
       containersUsageAdaptiveGroups(

@@ -11,7 +11,7 @@
  * Usage:
  *   BRAINTRUST_API_KEY=... node scripts/session-costs.mjs [--hours 24] [--session <id>]
  *   (falls back to BRAINTRUST_API_KEY in backend-b/.dev.vars, the local dev home
- *    of that secret; BRAINTRUST_PROJECT_NAME defaults to hoth-poc)
+ *    of that secret; BRAINTRUST_PROJECT_NAME defaults to semantius-copilot)
  *
  * Costs are pi-ai's model-catalog computation (see README) and span delivery
  * from Workers is best-effort — treat totals as a floor, not an invoice.
@@ -36,7 +36,7 @@ if (!apiKey) {
   console.error('BRAINTRUST_API_KEY not set and not found in backend-b/.dev.vars');
   process.exit(1);
 }
-const projectName = process.env.BRAINTRUST_PROJECT_NAME ?? 'hoth-poc';
+const projectName = process.env.BRAINTRUST_PROJECT_NAME ?? 'semantius-copilot';
 
 function keyFromDevVars() {
   try {

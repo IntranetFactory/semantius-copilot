@@ -17,7 +17,7 @@
  * records which response count produced the stored title.
  */
 import { observe, type LlmMessage } from '@flue/runtime';
-import { mergeExistingSessionRecord, readSession } from '@hoth/core';
+import { mergeExistingSessionRecord, readSession } from '@semantius-copilot/core';
 import { chatCompletionsTarget, type AgentLlm } from './llm';
 
 const TITLE_REFINE_AT = 4;

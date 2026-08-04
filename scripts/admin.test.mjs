@@ -356,7 +356,7 @@ await (async function run() {
   );
   check(
     'sandboxNameForSession passes hyphen-free channel ids through whole',
-    sandboxNameForSession('github:v1:owner:adenin:repo:hoth:issue:12') === 'github:v1:owner:adenin:repo:hoth:issue:12',
+    sandboxNameForSession('github:v1:owner:adenin:repo:demo:issue:12') === 'github:v1:owner:adenin:repo:demo:issue:12',
   );
   check(
     'long org slugs ride verbatim once compacted',
