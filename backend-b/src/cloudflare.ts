@@ -56,6 +56,7 @@ import {
   SEMANTIUS_JWT_SENTINEL,
   SESSION_LABEL,
   brokerEgress,
+  sessionIdForContainer,
 } from '@semantius-copilot/core';
 
 import { queryContainerCosts, type CostEnv } from './costs';
@@ -128,11 +129,16 @@ export class SemantiusCopilotSandbox extends Sandbox<Env> {
   interceptHttps = true;
 
   /**
-   * `sandboxName` IS the session id: every caller reaches us through
-   * `getSandbox(namespace, sessionId)`, which persists the name in DO storage
-   * and reloads it inside blockConcurrencyWhile before any request runs — so it
-   * is populated by the time a container can start. It is `private` in the
-   * SDK's types (a plain field at runtime), hence the cast.
+   * `sandboxName` is the SANDBOX name, not the session id: every caller reaches
+   * us through `getSandbox(namespace, sandboxNameForSession(id))` (config.js),
+   * which drops the user segment — `<org>-<tail>`. The SDK persists the name in
+   * DO storage and reloads it inside blockConcurrencyWhile before any request
+   * runs — so it is populated by the time a container can start. It is `private`
+   * in the SDK's types (a plain field at runtime), hence the cast.
+   *
+   * The label therefore carries the sandbox name too; consumers that need the
+   * full session id (the costs enrichment, writeSnapshot below) resolve it via
+   * the `container:` pointer (sessionIdForContainer).
    *
    * Returns undefined rather than an empty label when it is somehow unset: an
    * unlabeled instance shows up in the costs view's "unlabeled" bucket, which is
@@ -302,7 +308,14 @@ export class SemantiusCopilotSandbox extends Sandbox<Env> {
       return { phase: 'no cloudflare credentials', retry: false };
     }
 
-    const record = await readSession(this.env.STORE, session);
+    // `session` is the sandbox name (the analytics label), not the session id —
+    // the KV record lives under the FULL id. Our own DO id is the container id
+    // every pointer is keyed by, so the resolution needs no namespace lookup.
+    // Fall back to the name itself: channel ids pass through
+    // sandboxNameForSession unchanged and have no pointer requirement.
+    const sessionId =
+      (await sessionIdForContainer(this.env.STORE, this.ctx.id.toString()).catch(() => null)) ?? session;
+    const record = await readSession(this.env.STORE, sessionId);
     if (!record) return { phase: 'session record gone — not resurrecting', retry: false };
 
     const now = new Date();
@@ -313,12 +326,14 @@ export class SemantiusCopilotSandbox extends Sandbox<Env> {
     const end = now.toISOString().replace(/\.\d+Z$/, 'Z');
 
     const folded = await queryContainerCosts(this.env, { start, end });
+    // Row match stays by the LABEL (the sandbox name) — that is what Cloudflare
+    // grouped by; only the KV write targets the full id.
     const row = folded?.rows.find((r) => r.sessionId === session);
     if (!row) {
       return { phase: `no usage ingested yet (${folded?.rows.length ?? 0} sessions in window)`, retry: true };
     }
 
-    await mergeExistingSessionRecord(this.env.STORE, session, {
+    await mergeExistingSessionRecord(this.env.STORE, sessionId, {
       // snake_case to sit alongside session_state, which uses the same style.
       session_sandbox: {
         cpu_seconds: row.cpuSeconds,

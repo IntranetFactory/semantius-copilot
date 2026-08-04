@@ -140,7 +140,10 @@ type CostSums = {
   cost: { cpu: number; memory: number; disk: number; egress: number; total: number };
 };
 type CostRow = CostSums & {
+  /** Cloudflare's grouping label — the SANDBOX name (`<org>-<tail>`), not always the session id. */
   sessionId: string;
+  /** The full session id when the backend resolved it — what the chat page addresses. */
+  fullSessionId?: string;
   agentName?: string;
   version?: string;
   createdAt?: string;
@@ -231,8 +234,8 @@ function CostsView({ apiKey }: { apiKey: string }) {
               {rows.map((row) => (
                 <tr key={row.sessionId}>
                   <td className="costs-id">
-                    <a className="linkbtn" href={chatPageUrl(row.sessionId)}>
-                      {row.sessionId}
+                    <a className="linkbtn" href={chatPageUrl(row.fullSessionId ?? row.sessionId)}>
+                      {row.fullSessionId ?? row.sessionId}
                     </a>
                   </td>
                   <td>{row.agentName ?? '—'}</td>

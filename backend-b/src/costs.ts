@@ -6,7 +6,9 @@
  * starts (src/cloudflare.ts); the label key, the query and the pricing all live
  * in @semantius-copilot/core's cost.js so this file and scripts/cf-costs.mjs cannot drift
  * apart. All this adds is the fetch, the credential check, and the enrichment
- * from KV.
+ * from KV. NOTE the label's value is the sandbox NAME (`<org>-<tail>`), not the
+ * session id — enrichment resolves it back to the id via the `container:`
+ * pointer; see the loop in fetchContainerCosts.
  *
  * TWO CALLERS, one query:
  *   - `fetchContainerCosts` — the admin route, all sessions, KV-enriched.
@@ -26,10 +28,19 @@ import {
   CF_GRAPHQL_URL,
   SESSION_LABEL,
   readSession,
+  sessionIdForContainer,
 } from '@semantius-copilot/core';
 
 export type CostEnv = {
   STORE: KVNamespace;
+  /**
+   * Needed to turn a cost row's label back into a container id (idFromName) so
+   * the `container:` pointer can resolve the FULL session id — the label is the
+   * sandbox NAME (`<org>-<tail>`, config.js sandboxNameForSession), which drops
+   * the user segment and so is not a KV key. Optional: without it enrichment
+   * degrades to label-as-id (correct for channel ids, a miss for minted ones).
+   */
+  Sandbox?: DurableObjectNamespace;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
 };
@@ -39,6 +50,13 @@ const GROUP_LIMIT = 1000;
 export type ContainerCosts = ReturnType<typeof foldContainerCostResponse> & {
   configured: true;
   rows: Array<ReturnType<typeof foldContainerCostResponse>['rows'][number] & {
+    /**
+     * The full session id when it differs from the row's label (`sessionId` is
+     * the sandbox name, which drops the user segment). Present whenever the
+     * `container:` pointer resolved — the id the chat page and the session
+     * browser address the session by.
+     */
+    fullSessionId?: string;
     agentName?: string;
     version?: string;
     createdAt?: string;
@@ -134,6 +152,13 @@ export async function fetchContainerCosts(
   // expired, session deleted) is normal and non-fatal — the cost is still real
   // and still attributable to that id.
   //
+  // TWO-STEP JOIN: the row's `sessionId` is the container's `session` label,
+  // which is the sandbox NAME — `<org>-<tail>`, the user segment dropped
+  // (config.js sandboxNameForSession) — so for minted ids it is NOT the KV key.
+  // Try it verbatim first (channel ids pass through sandboxNameForSession
+  // unchanged), then resolve name -> container id -> `container:` pointer ->
+  // full session id, the reverse index the egress layer already maintains.
+  //
   // llmCost rides along from the same read. NOTE THE MISMATCHED WINDOWS: the
   // container figures are today's UTC day, `session_state.cost_total` is the
   // session's running lifetime total. They are reported side by side and never
@@ -141,14 +166,28 @@ export async function fetchContainerCosts(
   const rows = [];
   let llmTotal = 0;
   for (const row of folded.rows) {
-    const record = (await readSession(env.STORE, row.sessionId).catch(() => null)) as
+    let sessionId = row.sessionId;
+    let record = (await readSession(env.STORE, sessionId).catch(() => null)) as
       | Record<string, unknown>
       | null;
+    if (!record && env.Sandbox) {
+      const containerId = env.Sandbox.idFromName(row.sessionId).toString();
+      const pointed = await sessionIdForContainer(env.STORE, containerId).catch(() => null);
+      if (pointed) {
+        // Keep the resolved id even when the record is gone (deleted session,
+        // pointer outliving it): the id is still the session's real address.
+        sessionId = pointed;
+        record = (await readSession(env.STORE, pointed).catch(() => null)) as
+          | Record<string, unknown>
+          | null;
+      }
+    }
     const state = record?.session_state as { cost_total?: unknown } | undefined;
     const llmCost = typeof state?.cost_total === 'number' ? state.cost_total : undefined;
     if (llmCost !== undefined) llmTotal += llmCost;
     rows.push({
       ...row,
+      ...(sessionId !== row.sessionId ? { fullSessionId: sessionId } : {}),
       ...(typeof record?.agentName === 'string' ? { agentName: record.agentName } : {}),
       ...(typeof record?.version === 'string' ? { version: record.version } : {}),
       ...(typeof record?.createdAt === 'string' ? { createdAt: record.createdAt } : {}),

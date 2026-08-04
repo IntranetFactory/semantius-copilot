@@ -110,6 +110,23 @@ export async function removeContainerPointer(kv, containerId) {
 }
 
 /**
+ * The session id a container belongs to — the pointer read on its own, for
+ * callers that need the id but not the egress slice. Since sandboxNameForSession
+ * (config.js) dropped the user segment from container names, the container-side
+ * `session` label no longer equals the session id, and this pointer is the ONLY
+ * way back from a container/label to the full id: the costs join
+ * (backend-b/src/costs.ts) and the DO's post-stop snapshot both resolve through
+ * here. Null when the pointer is absent or expired.
+ *
+ * @param {{ get(k: string): Promise<string | null> }} kv
+ * @param {string} containerId
+ * @returns {Promise<string | null>}
+ */
+export async function sessionIdForContainer(kv, containerId) {
+  return kv.get(CONTAINER_KEY_PREFIX + containerId);
+}
+
+/**
  * Resolve a container's egress policy: pointer -> session record -> the
  * egress-relevant slice. Null when the pointer or record is absent/expired —
  * DENY ALL. A record without a whitelist field is deny-all too ([]).
@@ -134,7 +151,7 @@ export async function removeContainerPointer(kv, containerId) {
  * @returns {Promise<{ sessionId: string, egressSecrets?: Record<string, string>, semantiusOrg?: string, whitelist: string[], context?: Record<string, unknown> } | null>}
  */
 export async function resolveEgressPolicy(kv, containerId) {
-  const sessionId = await kv.get(CONTAINER_KEY_PREFIX + containerId);
+  const sessionId = await sessionIdForContainer(kv, containerId);
   if (!sessionId) return null; // fail closed
   const record = await readSession(kv, sessionId);
   if (!record) return null; // fail closed

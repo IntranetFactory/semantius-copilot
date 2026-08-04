@@ -92,6 +92,7 @@ export {
   isWhitelistedHost,
   putContainerPointer,
   removeContainerPointer,
+  sessionIdForContainer,
   resolveEgressPolicy,
   ensureEgressPolicy,
   CONTAINER_KEY_PREFIX,

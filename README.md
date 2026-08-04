@@ -502,7 +502,12 @@ Notes that matter:
   be opened from `/copilot`.
 - `JWT_EXCHANGE_API_KEY` is a **secret** (`.dev.vars` locally,
   `wrangler secret put JWT_EXCHANGE_API_KEY` when deployed). Unset → the cookie path
-  answers **503** rather than a misleading 401; bearers keep working.
+  answers **503** rather than a misleading 401; bearers keep working. The value is the
+  SAME shared secret the api.semantius.cloud side validates — its source of truth is
+  `JWT_EXCHANGE_API_KEY` in `semantius-auth/packages/server/.dev.vars` (and that
+  worker's deployed secret). Keep `.dev.vars` here filled with it: deployed secrets
+  cannot be read back, and a worker rename re-seeds secrets from `.dev.vars`, so an
+  empty local value becomes an empty deployed secret (exactly the 503 above).
 
 #### What gets pinned to the session
 
@@ -834,18 +839,31 @@ which `scripts/cf-costs.mjs` (`pnpm costs`) imports too, so the CLI and the UI c
 disagree about the math. Unit tests in `scripts/admin.test.mjs` (`pnpm test`).
 
 **The join is a container label, and it has to be.** Each session owns exactly one sandbox
-(`getSandbox(ns, sessionId)` — the sandbox id *is* the session id), but Cloudflare's
+(`getSandbox(ns, sandboxNameForSession(sessionId))`), but Cloudflare's
 `containersUsageAdaptiveGroups` dataset exposes no dimension carrying a name we choose.
 Its dimensions are `instanceId` (platform-assigned, **not** derivable from the Durable
 Object id), `applicationId`, `placementId`, `location`, `region`, `label(name: "…")` and
 the time buckets; `sum` has `cpuTimeSec`, `allocatedMemory`, `allocatedDisk`, `txBytes`.
 There is **no `containerName` dimension** — example queries that use one are wrong. So
-`SemantiusCopilotSandbox` (`backend-b/src/cloudflare.ts`) stamps `session=<sessionId>` on every
+`SemantiusCopilotSandbox` (`backend-b/src/cloudflare.ts`) stamps `session=<sandboxName>` on every
 container it starts, by merging `labels` into the start options of both `start()` and
 `startAndWaitForPorts()` — the two public paths into the SDK's
 `startContainerIfNotRunning`, which resolves `options?.labels ?? this.labels`. It can't be
-a plain `this.labels` assignment: the session id is only known once the DO has loaded
+a plain `this.labels` assignment: the name is only known once the DO has loaded
 `sandboxName` from storage, which happens after field initialisation.
+
+**The label is the sandbox name, and the sandbox name is NOT the session id.** Since
+tenant-prefixed ids shipped, a minted id is `<org>-<sub>-<tail>` but its container is named
+`<org>-<tail>` (`sandboxNameForSession`, the user segment dropped to fit the SDK's 63-char
+DNS-label ceiling) — so a cost row's label cannot be used as a KV key. Everything that needs
+the full id resolves it through the `container:<containerId>` → sessionId pointer the egress
+layer already maintains (`sessionIdForContainer`, `core/src/egress.js`): the Costs enrichment
+computes `idFromName(label)` and follows the pointer (surfacing the result as
+`fullSessionId`, which the UI links to), and the `session_sandbox` snapshot task resolves
+through its own DO id. Channel conversation ids contain no hyphen, pass through
+`sandboxNameForSession` unchanged, and keep working via the direct read. Getting this wrong
+is what once blanked the Agent/Started/LLM columns: the enrichment read `session:<label>`,
+which no longer existed.
 
 Only containers started **after that shipped** carry the label; anything else lands in the
 view's `(unlabeled)` row rather than being dropped, so the total still adds up.
