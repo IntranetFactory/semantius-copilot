@@ -1,4 +1,12 @@
-# Hoth Trip-Planner POC
+# Semantius Copilot
+
+> **Renamed 2026-08-04:** the GitHub repo `IntranetFactory/hoth-poc` is now
+> [`IntranetFactory/semantius-copilot`](https://github.com/IntranetFactory/semantius-copilot)
+> (formerly "Hoth Trip-Planner POC"). Deployed identifiers keep the old prefix — the worker
+> names `hoth-poc-frontend` / `hoth-poc-backend-b`, their workers.dev URLs, and the
+> Braintrust/Arize project name `hoth-poc` — as does the internal `hoth` codename
+> (`@hoth/core`, the `hoth-trip-planner` agent). Renaming those would mean new workers.dev
+> origins, lost Durable Object session state, and GitHub-webhook reconfiguration.
 
 **Multi-agent, multi-tenant dynamic skill delivery** on Flue + Cloudflare Sandbox: a
 whole agent (instructions + model overrides + ALL its skills) is serialized as **one
@@ -9,11 +17,11 @@ reconstructs it into the sandbox. Which agent a session runs is data, not code.
 
 (The POC originally ran a second backend — "A", the same agent hard-baked into a
 container image — to prove image-baked and dynamically-delivered skills behave
-identically. That thesis was proven — see [`hoth-poc-plan.md`](./hoth-poc-plan.md) and
+identically. That thesis was proven — see [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) and
 git history — and backend A has since been removed; "backend B" naming survives in the
 worker/package names.)
 
-See [`hoth-poc-plan.md`](./hoth-poc-plan.md) for the original design and acceptance criteria.
+See [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) for the original design and acceptance criteria.
 
 ## Deployed
 
@@ -992,7 +1000,7 @@ costs" for why that matters.
 
 ## GitHub channel (backend B)
 
-`backend-b/src/channels/github.ts` (`@flue/github`) connects IntranetFactory/hoth-poc to
+`backend-b/src/channels/github.ts` (`@flue/github`) connects IntranetFactory/semantius-copilot to
 the `main` agent: `issues.opened` and `issue_comment.created` dispatch one conversation per
 issue; replies are posted via the `comment_on_github_issue` tool and carry a
 `<!-- hoth-agent-reply -->` marker the webhook skips (loop guard). The agent instructions
@@ -1254,7 +1262,7 @@ it needs a live better-auth session cookie). (The original A/B thesis —
 image-baked and dynamically-delivered skills produce byte-identical sandboxes and
 identical `activate_skill → read → bash` behavior — was proven while backend A still
 existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are
-recorded in [`hoth-poc-plan.md`](./hoth-poc-plan.md) §7.
+recorded in [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) §7.
 
 ## The `/sessions/:id/skill-check` route
 

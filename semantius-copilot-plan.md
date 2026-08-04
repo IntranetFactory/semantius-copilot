@@ -44,7 +44,7 @@ Flue core (host-agnostic):  bundle → provision skill → discovery → run →
 ## 3. Three projects (separate deployables)
 
 ```
-c:\dev\hoth-poc\                      pnpm workspace; conventional package names
+c:\dev\semantius-copilot\             pnpm workspace; conventional package names
 ├─ agents/      SOURCE OF TRUTH for every agent: agents/<name>/{agent.jsonc (REQUIRED),
 │               INSTRUCTIONS.md (optional, appended), skills/<skill>/…}. Schema:
 │               core/agent.schema.json. Folders without agent.jsonc are skipped.

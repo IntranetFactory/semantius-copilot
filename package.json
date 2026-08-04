@@ -1,5 +1,5 @@
 {
-  "name": "hoth-poc",
+  "name": "semantius-copilot",
   "private": true,
   "version": "0.0.1",
   "description": "Hoth Trip-Planner POC — proves hard-coded vs dynamic-bundle skill delivery yield identical agent behavior on Flue + Cloudflare Sandbox",
