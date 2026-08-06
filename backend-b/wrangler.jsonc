@@ -29,6 +29,28 @@
   "kv_namespaces": [
     { "binding": "STORE", "id": "6799aa42675b47148d246feda057a0e5" }
   ],
+  // Workspace backup archives (add_backup_restore_plan.md): the sandbox SDK's
+  // localBucket backup mode reads this binding off the DO env; the routes,
+  // data browser, and sweep use the same one. Bucket must exist before deploy:
+  //   wrangler r2 bucket create semantius-copilot-backups
+  // Binding absent = feature off everywhere (no crash paths).
+  "r2_buckets": [
+    { "binding": "BACKUP_BUCKET", "bucket_name": "semantius-copilot-backups" }
+  ],
+  // Hourly backup sweep (src/cloudflare.ts default-export `scheduled`):
+  // deletes R2 backups whose session expired at its silent 24 h KV TTL.
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  // Public API hostname (what app.semantius.com's copilot pages call). A
+  // CUSTOM DOMAIN on this worker — not the frontend: attaching it there serves
+  // the frontend's 404 page for every API path and no CORS headers at all.
+  "routes": [
+    { "pattern": "copilot.semantius.com", "custom_domain": true }
+  ],
+  // Adding `routes` flips wrangler's workers_dev default to false — keep the
+  // *.workers.dev URL alive explicitly: the deployed frontend calls it.
+  "workers_dev": true,
   // Workers Logs (dashboard "Logs" tab + wrangler tail): needed to attribute
   // container boots — lazy-env.ts logs which operation triggered a boot.
   "observability": {
@@ -74,6 +96,6 @@
     // from it. MUST contain the frontend Worker's origin, or every chat page
     // loses CORS at deploy time. Add an embedding app's origin here once it
     // runs same-site with this backend (ambient-cookie mode).
-    "ALLOWED_ORIGINS": "https://semantius-copilot-frontend.ma532.workers.dev,http://localhost:5173"
+    "ALLOWED_ORIGINS": "https://semantius-copilot-frontend.ma532.workers.dev,https://app.semantius.com,http://localhost:5173"
   }
 }

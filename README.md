@@ -809,6 +809,14 @@ so the key itself cannot be reversed). `agentdef:<name>` is a deployed definitio
 session-scoped — it gets no date and sorts last. The frontend does not reorder within a
 group, so this ordering is entirely `listCollectionRecords`'.
 
+The **R2 backups** collection lists the workspace backup archives (one per session — see
+"Workspace backup & restore"): rows are labeled with the full session id from each
+archive's `meta.json` (strays without one are grouped separately), dated by `createdAt`.
+The detail view shows the meta facts, whether the owning session is still alive, the
+storage run rate, and a Download button for the squashfs archive (an authenticated fetch —
+a plain link would lack the Authorization header). No `BACKUP_BUCKET` binding = an empty
+collection with a note, never an error.
+
 Non-obvious constraint: Cloudflare cannot list Durable Object instances, so conversations
 are enumerable only via the `session:<id>` KV records (THE session record, written at
 ingest and merged into thereafter) — sessions whose record expired or predates the index
@@ -884,12 +892,15 @@ deducted, so an early-in-month total overstates the invoice; egress is priced at
 NA/EU rate, which is the cheapest, so that one line can understate. Analytics lags a few
 minutes behind live traffic.
 
-**Two money columns, two different windows, never summed.** `Container $ (today)` is the
+**Three money columns, three different windows, never summed.** `Container $ (today)` is the
 UTC-day figure above; `LLM $ (session)` is `session_state.cost_total` off THE session record
-— the session's running LIFETIME total. They sit side by side because adding a day figure to
-a lifetime figure produces a number that means nothing. LLM cost comes from the same KV read
-that supplies Agent and Started, so it shows `—` once the session record is gone.
-`pnpm costs` does not show it (no KV binding from Node); `pnpm sessions` is the LLM-cost CLI.
+— the session's running LIFETIME total; `Backup $/mo` (with `Backup MB` beside it) is the R2
+storage RUN RATE for the session's current workspace archive, off the same record's
+`session_backup` node (see "Workspace backup & restore"). They sit side by side because
+adding a day figure to a lifetime figure to a monthly rate produces a number that means
+nothing. LLM and backup figures come from the same KV read that supplies Agent and Started,
+so they show `—` once the session record is gone.
+`pnpm costs` does not show them (no KV binding from Node); `pnpm sessions` is the LLM-cost CLI.
 
 **`session_sandbox` — the durable snapshot.** The Costs tab is a live read-through to today's
 analytics, so a session's container spend disappears from it once the day rolls over. To keep
@@ -938,11 +949,12 @@ records every run's outcome — a swallowed error with no trace is indistinguish
 "never fired", which is precisely the hole the first debugging round fell into.
 
 Why it uses `mergeExistingSessionRecord` and never plain `mergeSessionRecord`: **`DELETE
-/sessions/:id` does not stop the container.** It is three KV deletes; the container runs on
-until `sleepAfter` (10 min) expires. So this callback routinely fires for sessions that were
-deliberately deleted, and a create-when-absent merge would resurrect them *and* re-arm their
-24 h TTL. No record, no write. The acceptance suite deletes every session it creates, so this
-is the common path, not an edge case.
+/sessions/:id` does not stop the container.** It is three KV deletes plus a best-effort
+delete of the session's R2 workspace backup; the container runs on until `sleepAfter`
+(10 min) expires. So this callback routinely fires for sessions that were deliberately
+deleted, and a create-when-absent merge would resurrect them *and* re-arm their 24 h TTL.
+No record, no write. The acceptance suite deletes every session it creates, so this is the
+common path, not an edge case.
 
 Idempotent by construction: the window is the session's whole life, so a container that
 starts and stops repeatedly just recomputes a more complete total and overwrites the node.
@@ -958,6 +970,61 @@ measured. LLM cost per session is a separate thing entirely and already tracked
 dataset's real dimensions and sum fields, and `--raw` dumps the unfolded response. The
 fallback would be to group by `instanceId` and resolve instance → session out of band
 (`wrangler containers instances`), which is why the label approach is preferred.
+
+## Workspace backup & restore (R2)
+
+The container disk is ephemeral — reset to the image at `sleepAfter` (10 min idle) or
+eviction — so everything an agent writes under `/workspace` (`semantius/specs`,
+`semantius/blueprints`, `customizations.yaml`, …) used to die with it. Backups close that
+gap (design: `add_backup_restore_plan.md`):
+
+- **Persist** — at the end of every response whose submission actually touched the
+  container (touched-registry in `backend-b/src/backups.ts`, marked by
+  `provisionWorkspace`; chat-only turns never boot a container just to archive it), the
+  agent's `useResponseFinish` fire-and-forgets `persistWorkspaceBackup`: the sandbox SDK
+  builds a squashfs archive of `/workspace` (excludes `.agents`, `.tmp_admin`,
+  `.tmp_deploy`, `.restored`) into the `BACKUP_BUCKET` R2 bucket, the `session_backup`
+  node lands on THE session record, and the previous archive is deleted — exactly ONE
+  backup per session, `meta.name` = the full session id (the join every consumer uses).
+- **Restore** — on the next container-touching submission, `provisionWorkspace` restores
+  the archive BEFORE skill provisioning, gated by the `/workspace/.restored` marker so a
+  warm container is never re-extracted over (restore is an `unsquashfs -f` merge; the
+  marker is touched even when there is nothing to restore, and excluded from archives).
+- **Transport** — the SDK's `localBucket: true` mode: the sandbox DO streams bytes over
+  its own control channel and uses the R2 binding directly. No presigned URLs, no R2
+  access keys, no container egress — nothing new for the egress whitelist or the
+  Dockerfile CA story. (The SDK comments label the mode "local dev"; the code path has no
+  environment check and runs identically deployed — verified against the exact-pinned
+  0.12.3. Re-verify on any SDK bump.) The channel is slow (~0.6 MB/s) and restore can
+  buffer the archive in DO memory, so archives must stay small — the excludes keep them
+  KB–MB and `size_bytes` is surfaced everywhere so growth is visible.
+- **Deletion is tied to the session lifecycle three ways** (the "R2 deleted when the
+  session ends" requirement): supersede-delete at each persist; `DELETE /sessions/:id`
+  removes the backup with the record; and an hourly cron sweep (`triggers.crons` in
+  wrangler.jsonc → the `scheduled` handler exported from `backend-b/src/cloudflare.ts`)
+  deletes backups whose session record expired at its silent 24 h TTL. Sweep rules
+  (`core/src/backup.js`, each gated on a 1 h grace): session record gone; superseded
+  orphan (record points at a different backup id); SDK-ttl elapsed; nameless/malformed/
+  meta-less strays. Channel-session backups are never RE-gated (their ids fail the
+  minted-id shape but have real records).
+- **Feature gate** — no `BACKUP_BUCKET` binding = everything off, zero behavior change,
+  `configured: false` with a reason on the admin surfaces.
+
+Admin oracles (API-key guard; the exec-bearing actions boot the container — that is the
+point):
+
+```bash
+GET    /admin/backups                      # list archives (id, session, size, createdAt)
+DELETE /admin/backups/<backupId>           # manual delete
+GET    /admin/backups/<backupId>/archive   # download the squashfs
+POST   /admin/backups/sweep                # run the cron body now -> {scanned, deleted, kept}
+POST   /admin/sessions/<id>/backup         # body {action: "backup" | "restore" | "status"}
+```
+
+`action:"backup"` runs the exact turn-end persist inline and returns its outcome;
+`action:"restore"` clears the marker first so the replay is deterministic on a warm
+container. One-time setup, BEFORE the first deploy with the binding:
+`wrangler r2 bucket create semantius-copilot-backups`.
 
 ## Per-session data channels (session_context, payload, session_data, session_state)
 
@@ -1018,6 +1085,14 @@ fires 15 minutes after the container stops — so the figure survives the Costs 
 today-only window. Written with
 `mergeExistingSessionRecord`, so it can never resurrect a deleted session — see "Container
 costs" for why that matters.
+
+**`session_backup` — infra-written, updated at each workspace-touching response.** The
+durable record of the session's R2 workspace backup (see "Workspace backup & restore"):
+`backup_id`, `size_bytes`, `backup_count`, `last_backup_at`, `storage_monthly_usd` (the
+R2 storage run rate — the Costs tab's `Backup $/mo` column). Written by
+`persistWorkspaceBackup` (`backend-b/src/backups.ts`) with `mergeExistingSessionRecord`,
+so it never resurrects a deleted session; if the session vanishes mid-persist, the fresh
+archive is deleted on the spot rather than orphaned.
 
 ## GitHub channel (backend B)
 
@@ -1278,12 +1353,22 @@ swapped for their JWT at egress. Same credential requirement as the identity pos
 
 ## Verified results
 
-All 72 acceptance checks pass against the deployed Workers (the `[cookie]` block skipped —
+All 85 acceptance checks pass against the deployed Workers (the `[cookie]` block skipped —
 it needs a live better-auth session cookie). (The original A/B thesis —
 image-baked and dynamically-delivered skills produce byte-identical sandboxes and
 identical `activate_skill → read → bash` behavior — was proven while backend A still
 existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are
 recorded in [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) §7.
+
+**Workspace backup restore-over-sleep, proven live 2026-08-05:** a real LLM turn wrote
+`/workspace/semantius/proof.txt`; the turn-end persist archived it to R2 unprompted; the
+container idled out at exactly `sleepAfter` (10 min, `stoppedAt` on the DO); a second turn
+on the same session — cold container, marker absent — restored the archive during lazy
+provisioning and `cat` returned the exact content. The same run also demonstrated the
+documented KV-no-CAS window: `DELETE /sessions/:id` read a stale replica (the fire-and-forget
+persist had merged a NEWER `backup_id` seconds earlier), deleted the superseded id, and left
+the fresh archive orphaned — which is exactly the case sweep rule (b)/(a) exists for; the
+hourly cron (or `POST /admin/backups/sweep`, or `DELETE /admin/backups/:id`) removes it.
 
 ## The `/sessions/:id/skill-check` route
 

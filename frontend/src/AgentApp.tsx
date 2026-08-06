@@ -96,15 +96,23 @@ export function AgentApp() {
     setSessionsRefresh((n) => n + 1);
   }
 
-  // Refetch the list a beat after each response settles: the backend generates
-  // the session title fire-and-forget at response finish, so it lands in KV
-  // shortly AFTER the stream closes — an immediate refetch would miss it.
-  const settleTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Refetch the list after each response settles: the backend generates the
+  // session title fire-and-forget at response finish (an LLM call + a KV
+  // write), so it lands shortly AFTER the stream closes. Two passes, because
+  // the first title routinely loses the 3 s race (title-model latency + KV
+  // read lag) and nothing else refreshes a one-turn session's sidebar — the
+  // late pass is what actually picks it up.
+  const settleTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   function onResponseSettled() {
-    clearTimeout(settleTimer.current);
-    settleTimer.current = setTimeout(() => setSessionsRefresh((n) => n + 1), 3000);
+    for (const timer of settleTimers.current) clearTimeout(timer);
+    settleTimers.current = [3000, 15000].map((ms) => setTimeout(() => setSessionsRefresh((n) => n + 1), ms));
   }
-  useEffect(() => () => clearTimeout(settleTimer.current), []);
+  useEffect(
+    () => () => {
+      for (const timer of settleTimers.current) clearTimeout(timer);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (agentName) document.title = agentName;

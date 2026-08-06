@@ -37,11 +37,21 @@ import {
 } from '../core/src/config.js';
 import {
   CONTAINER_RATES,
+  R2_RATES,
+  backupOpsUsd,
+  backupStorageMonthlyUsd,
   containerCostQuery,
   foldContainerCostResponse,
   priceContainerUsage,
   utcDayWindow,
 } from '../core/src/cost.js';
+import {
+  BACKUP_PREFIX,
+  backupKeys,
+  deleteBackup,
+  listBackups,
+  sweepOrphanedBackups,
+} from '../core/src/backup.js';
 import {
   egressSecretForHost,
   ensureEgressPolicy,
@@ -202,7 +212,7 @@ await (async function run() {
 
   // --- collections descriptor --------------------------------------------
   const cols = adminCollections('STORE');
-  check('adminCollections exposes kv/sessions', cols.map((c) => c.id).join(',') === 'kv,sessions');
+  check('adminCollections exposes kv/sessions/backups', cols.map((c) => c.id).join(',') === 'kv,sessions,backups');
   check('adminCollections labels kv with namespace', cols[0].label.includes('STORE'));
 
   // --- generic record listing --------------------------------------------
@@ -463,6 +473,148 @@ await (async () => {
   const query = containerCostQuery({ accountTag: 'acct', start: window.start, end: window.end });
   check('the query groups by the session LABEL (no containerName dimension exists)', query.query.includes('label(name: $label)'));
   check('the query defaults to the `session` label', query.variables.label === 'session');
+})();
+
+// --- workspace backups (core/src/backup.js + the backups collection) ---------
+// Pure logic over an in-memory R2: listing/pagination, stray tolerance, the
+// sweep's session-lifecycle rules, and the per-session cost estimators.
+await (async () => {
+  console.log('\n== workspace backups ==');
+
+  /**
+   * In-memory R2 mimicking the surface backup.js touches: paginated list
+   * (page size 2, to force multi-page), get -> { text() }, delete. Values are
+   * { body, uploaded? }.
+   */
+  function fakeR2(initial = {}) {
+    const map = new Map(Object.entries(initial));
+    const PAGE = 2;
+    return {
+      _map: map,
+      async list(options = {}) {
+        const { prefix = '', cursor } = options;
+        const all = [...map.keys()].filter((k) => k.startsWith(prefix)).sort();
+        const start = cursor ? Number(cursor) : 0;
+        const slice = all.slice(start, start + PAGE);
+        const next = start + PAGE;
+        const truncated = next < all.length;
+        return {
+          objects: slice.map((key) => {
+            const v = map.get(key);
+            return { key, size: (v.body ?? '').length, ...(v.uploaded ? { uploaded: v.uploaded } : {}) };
+          }),
+          truncated,
+          ...(truncated ? { cursor: String(next) } : {}),
+        };
+      },
+      async get(key) {
+        const v = map.get(key);
+        return v === undefined ? null : { text: async () => v.body };
+      },
+      async delete(key) {
+        map.delete(key);
+      },
+    };
+  }
+
+  const NOW = Date.parse('2026-08-05T00:00:00.000Z');
+  const OLD = '2026-08-01T00:00:00.000Z'; // 4 days before NOW — far past the 1 h grace
+  const YOUNG = '2026-08-04T23:50:00.000Z'; // 10 min before NOW — inside the grace
+  const meta = (id, name, extra = {}) =>
+    JSON.stringify({ id, dir: '/workspace', name, sizeBytes: 4096, ttl: 30 * 24 * 3600, createdAt: OLD, ...extra });
+  const seed = (id, body, uploaded = OLD) => ({
+    [`${BACKUP_PREFIX}${id}/data.sqsh`]: { body: 'SQSH', uploaded },
+    ...(body === null ? {} : { [`${BACKUP_PREFIX}${id}/meta.json`]: { body, uploaded } }),
+  });
+
+  check(
+    'backupKeys derives both object keys',
+    backupKeys('b1').archive === 'backups/b1/data.sqsh' && backupKeys('b1').meta === 'backups/b1/meta.json',
+  );
+
+  // --- listBackups: pagination, tolerance, ordering ------------------------
+  const lr2 = fakeR2({
+    ...seed('b-old', meta('b-old', 'sess-1')),
+    ...seed('b-new', meta('b-new', 'sess-2', { createdAt: '2026-08-03T00:00:00.000Z' })),
+    ...seed('b-stray', null), // archive without meta.json
+    ...seed('b-broken', 'not json at all'),
+    'unrelated/key.txt': { body: 'ignore me' },
+  });
+  const listed = await listBackups(lr2);
+  check('listBackups walks every page and skips non-backup keys', listed.length === 4, `got ${listed.length}`);
+  check('listBackups is newest-first by createdAt', listed[0]?.id === 'b-new', listed.map((b) => b.id).join(','));
+  check('listBackups surfaces meta fields', listed.find((b) => b.id === 'b-old')?.name === 'sess-1' && listed.find((b) => b.id === 'b-old')?.sizeBytes === 4096);
+  check('a meta-less archive is flagged, not skipped', listed.find((b) => b.id === 'b-stray')?.metaMissing === true);
+  check('an unparseable meta is flagged, not fatal', listed.find((b) => b.id === 'b-broken')?.malformed === true);
+  check('strays fall back to the archive object size', listed.find((b) => b.id === 'b-stray')?.sizeBytes === 4);
+
+  await deleteBackup(lr2, 'b-old');
+  check(
+    'deleteBackup removes both objects',
+    !lr2._map.has('backups/b-old/data.sqsh') && !lr2._map.has('backups/b-old/meta.json'),
+  );
+
+  // --- the backups collection ---------------------------------------------
+  const ckv = fakeKv({ 'session:sess-2': JSON.stringify({ id: 'sess-2', session_backup: { backup_id: 'b-new' } }) });
+  const cdeps = { kv: ckv, r2: lr2 };
+  const clist = await listCollectionRecords('backups', cdeps);
+  check('listCollectionRecords(backups) labels rows with the session id', clist.records.find((r) => r.id === 'b-new')?.label === 'sess-2');
+  check('listCollectionRecords(backups) exposes createdAt as sublabel', clist.records.find((r) => r.id === 'b-new')?.sublabel === '2026-08-03T00:00:00.000Z');
+  check('listCollectionRecords(backups) groups strays', clist.records.find((r) => r.id === 'b-stray')?.group === 'strays');
+  const unconfigured = await listCollectionRecords('backups', { kv: ckv });
+  check('listCollectionRecords(backups) without the binding reports off, not error', unconfigured.records.length === 0 && typeof unconfigured.note === 'string');
+  const cdetail = await readCollectionRecord('backups', 'b-new', cdeps);
+  check('readCollectionRecord(backups) returns meta + session existence', cdetail?.kind === 'backup' && cdetail?.sessionId === 'sess-2' && cdetail?.sessionExists === true);
+  check('readCollectionRecord(backups) prices the stored size', cdetail?.storageMonthlyUsd === backupStorageMonthlyUsd(4096));
+  check('readCollectionRecord(backups) missing id -> null', (await readCollectionRecord('backups', 'nope', cdeps)) === null);
+  check('readCollectionRecord(backups) without the binding -> null', (await readCollectionRecord('backups', 'b-new', { kv: ckv })) === null);
+
+  // --- sweep: the session-lifecycle rules ----------------------------------
+  const skv = fakeKv({
+    'session:sess-live': JSON.stringify({ id: 'sess-live', session_backup: { backup_id: 'b-live' } }),
+    'session:sess-ttl': JSON.stringify({ id: 'sess-ttl', session_backup: { backup_id: 'b-ttl' } }),
+    'session:sess-bad': 'not json',
+    'session:github:v1:owner:adenin:repo:demo:issue:12': JSON.stringify({
+      id: 'github:v1:owner:adenin:repo:demo:issue:12',
+      session_backup: { backup_id: 'b-chan' },
+    }),
+  });
+  const sr2 = fakeR2({
+    ...seed('b-live', meta('b-live', 'sess-live')), // kept: record exists, current id
+    ...seed('b-super', meta('b-super', 'sess-live')), // deleted: record points at b-live (rule b)
+    ...seed('b-gone', meta('b-gone', 'sess-gone')), // deleted: no record (rule a)
+    ...seed('b-young', meta('b-young', 'sess-young', { createdAt: YOUNG })), // kept: inside grace
+    ...seed('b-ttl', meta('b-ttl', 'sess-ttl', { ttl: 3600 })), // deleted: SDK ttl elapsed (rule c)
+    ...seed('b-noname', meta('b-noname', null)), // deleted: nameless stray (rule c)
+    ...seed('b-broken2', 'not json'), // deleted: malformed meta (rule c)
+    ...seed('b-stray2', null), // deleted: archive without meta (rule c/d)
+    ...seed('b-badrec', meta('b-badrec', 'sess-bad')), // kept: unreadable record — conservative
+    ...seed('b-chan', meta('b-chan', 'github:v1:owner:adenin:repo:demo:issue:12')), // kept: channel id, no RE gate
+  });
+  const swept = await sweepOrphanedBackups(sr2, skv, { now: NOW });
+  check('sweep scans every backup', swept.scanned === 10, `scanned ${swept.scanned}`);
+  check('sweep deletes exactly the over-rules set', swept.deleted === 6, `deleted ${swept.deleted}`);
+  check('sweep keeps the rest', swept.kept === 4, `kept ${swept.kept}`);
+  check('sweep keeps the live current backup', sr2._map.has('backups/b-live/data.sqsh'));
+  check('sweep keeps a young orphan (grace)', sr2._map.has('backups/b-young/data.sqsh'));
+  check('sweep keeps backups of unreadable records (conservative)', sr2._map.has('backups/b-badrec/data.sqsh'));
+  check('sweep keeps channel-session backups (no session-id RE gate)', sr2._map.has('backups/b-chan/data.sqsh'));
+  check('sweep removes the superseded orphan', !sr2._map.has('backups/b-super/data.sqsh'));
+  check('sweep removes session-gone backups', !sr2._map.has('backups/b-gone/data.sqsh') && !sr2._map.has('backups/b-gone/meta.json'));
+  check('sweep removes ttl-elapsed backups even when current', !sr2._map.has('backups/b-ttl/data.sqsh'));
+  check('sweep removes nameless/malformed/meta-less strays', !sr2._map.has('backups/b-noname/data.sqsh') && !sr2._map.has('backups/b-broken2/data.sqsh') && !sr2._map.has('backups/b-stray2/data.sqsh'));
+
+  // --- cost estimators ------------------------------------------------------
+  check('1 GB stores at $0.015/mo', backupStorageMonthlyUsd(1e9) === 0.015, String(backupStorageMonthlyUsd(1e9)));
+  check('absent size prices as zero, not NaN', backupStorageMonthlyUsd(null) === 0 && backupStorageMonthlyUsd(undefined) === 0);
+  const ops10 = backupOpsUsd(10);
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  check(
+    'ops estimate: 2 Class A + 2 Class B per backup at list price',
+    near(ops10, 10 * 2 * (R2_RATES.classAPerMillion / 1e6) + 10 * 2 * (R2_RATES.classBPerMillion / 1e6)),
+    String(ops10),
+  );
+  check('absent count prices as zero, not NaN', backupOpsUsd(null) === 0);
 })();
 
 // --- better-auth session cookie (core/src/identity.js) ---------------------

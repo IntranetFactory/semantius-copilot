@@ -59,6 +59,7 @@ import {
   sessionIdForContainer,
 } from '@semantius-copilot/core';
 
+import { sweepExpiredBackups, type BackupEnv } from './backups';
 import { queryContainerCosts, type CostEnv } from './costs';
 
 export { ContainerProxy };
@@ -66,9 +67,11 @@ export { ContainerProxy };
 /**
  * The Cloudflare analytics credentials are here for the post-stop cost snapshot
  * below — the DO reads them straight off its own env, same values the admin
- * route uses.
+ * route uses. BACKUP_BUCKET rides along because the SDK's localBucket backup
+ * path reads `this.env.BACKUP_BUCKET` on the sandbox DO itself (bindings are
+ * worker-wide, so the same binding serves the DO, the routes, and the cron).
  */
-type Env = CostEnv;
+type Env = CostEnv & { BACKUP_BUCKET?: R2Bucket };
 
 /** Container start options we care about — @cloudflare/containers' ContainerStartConfigOptions. */
 type StartOptions = { labels?: Record<string, string>; [key: string]: unknown };
@@ -430,4 +433,26 @@ SemantiusCopilotSandbox.outbound = async (request: Request, env: Env, ctx: { con
     secret: jwt,
     ...(jwt ? { jwt: { token: jwt, hosts: SEMANTIUS_HOSTS } } : {}),
   });
+};
+
+/**
+ * Non-HTTP Worker handlers. The @flue/vite entry spreads this default export
+ * into the Worker's own (`export default { ...cloudflareHandlers, fetch }`) —
+ * its designed extension point; `fetch` must NOT appear here (the entry
+ * throws — HTTP belongs to app.ts).
+ *
+ * `scheduled` is the hourly backup sweep (wrangler.jsonc `triggers.crons`):
+ * sessions expire silently at their 24 h KV TTL, and this is the mechanism
+ * that deletes their R2 backups (add_backup_restore_plan.md requirement 2) —
+ * the loud paths (supersede, DELETE /sessions/:id) already delete inline.
+ */
+export default {
+  async scheduled(_controller: ScheduledController, env: BackupEnv, _ctx: ExecutionContext): Promise<void> {
+    try {
+      await sweepExpiredBackups(env);
+    } catch (err) {
+      // Best-effort like every mirror here — a failed sweep retries next hour.
+      console.log(`backup: scheduled sweep failed: ${String(err).slice(0, 300)}`);
+    }
+  },
 };

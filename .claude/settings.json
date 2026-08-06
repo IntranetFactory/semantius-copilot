@@ -15,7 +15,10 @@
       "Bash(node --input-type=module -e \"import v from 'file:///c/dev/semantius-copilot/backend-b/node_modules/@earendil-works/pi-ai/dist/providers/data/openrouter.json' with {type:'json'}; const ids=Object.values\\(v\\).map\\(m=>m.id\\); console.log\\(ids.length\\); console.log\\(ids.filter\\(i=>i.includes\\('deepseek'\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(node -e \"const v=require\\('c:/dev/semantius-copilot/backend-b/node_modules/@earendil-works/pi-ai/dist/providers/data/openrouter.json'\\); const ids=Object.values\\(v\\).map\\(m=>m.id\\); console.log\\('total', ids.length\\); console.log\\(ids.filter\\(i=>i.includes\\('deepseek'\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(git -C \"c:/dev/semantius-copilot\" grep -n \"flue+runtime@2.0.0-nightly\" -- pnpm-lock.yaml)",
-      "Bash(pnpm --filter frontend build)"
+      "Bash(pnpm --filter frontend build)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "PowerShell(npm view @cloudflare/sandbox versions --json)",
+      "PowerShell(npm view @cloudflare/sandbox version time --json 2>$null)"
     ],
     "additionalDirectories": [
       "C:\\Users\\MARTIN~1\\AppData\\Local\\Temp\\claude\\pi-ai-patch\\dist\\api"

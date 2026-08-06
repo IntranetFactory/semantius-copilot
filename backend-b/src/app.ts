@@ -94,13 +94,27 @@ import {
   COST_BASIS,
   CONTAINER_RATES,
   utcDayWindow,
+  BACKUP_COST_BASIS,
+  R2_RATES,
+  backupKeys,
+  deleteBackup,
+  listBackups,
 } from '@semantius-copilot/core';
+import {
+  persistWorkspaceBackup,
+  restoreWorkspaceBackup,
+  sweepExpiredBackups,
+  RESTORE_MARKER,
+  type BackupSandbox,
+} from './backups';
 import { channel } from './channels/github';
 import { fetchContainerCosts } from './costs';
 
 type Env = {
   Sandbox: DurableObjectNamespace;
   STORE: KVNamespace;
+  /** Workspace backup archives (add_backup_restore_plan.md). Absent = backups off. */
+  BACKUP_BUCKET?: R2Bucket;
   API_TOKEN: string;
   /** Cloudflare account tag — a var (not a secret); needed to query analytics. */
   CLOUDFLARE_ACCOUNT_ID?: string;
@@ -196,7 +210,7 @@ app.use('/admin/*', apiKeyGuard());
 // -> record tree. Never mutates. `deps` injects the KV binding into the
 // host-agnostic core resolver. (Flue v2 removed the workflow-run registry, so
 // KV and the session index are the only backing stores left.)
-const adminDeps = (c: { env: Env }) => ({ kv: c.env.STORE });
+const adminDeps = (c: { env: Env }) => ({ kv: c.env.STORE, r2: c.env.BACKUP_BUCKET });
 app.get('/admin/collections', (c) => c.json({ backend: 'b', collections: adminCollections('STORE') }));
 app.get('/admin/collections/:cid/records', async (c) => {
   const result = await listCollectionRecords(c.req.param('cid'), adminDeps(c));
@@ -227,7 +241,110 @@ app.get('/admin/costs', async (c) => {
   } catch (err) {
     return c.json({ error: String(err instanceof Error ? err.message : err), ...window }, 502);
   }
-  return c.json({ ...window, currency: 'USD', rates: CONTAINER_RATES, basis: COST_BASIS, ...costs });
+  return c.json({
+    ...window,
+    currency: 'USD',
+    rates: CONTAINER_RATES,
+    basis: COST_BASIS,
+    r2Rates: R2_RATES,
+    backupBasis: BACKUP_COST_BASIS,
+    ...costs,
+  });
+});
+
+// --- Workspace backups (R2) ------------------------------------------------
+// The R2 side of add_backup_restore_plan.md, all under the /admin/* API-key
+// guard. GET lists the bucket (the same rows the data browser's `backups`
+// collection shows); DELETE is the manual lever; /archive streams the squashfs
+// for download; /sweep runs the cron body on demand (the deterministic oracle
+// for the hourly trigger). Backup ids are SDK-minted UUIDs — checked here so
+// junk ids 400 instead of producing confusing 404s.
+const BACKUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+app.get('/admin/backups', async (c) => {
+  if (!c.env.BACKUP_BUCKET) {
+    return c.json({ configured: false, reason: 'BACKUP_BUCKET R2 binding not configured — workspace backups are off' });
+  }
+  return c.json({ configured: true, backups: await listBackups(c.env.BACKUP_BUCKET) });
+});
+
+app.post('/admin/backups/sweep', async (c) => c.json(await sweepExpiredBackups(c.env)));
+
+app.delete('/admin/backups/:id', async (c) => {
+  const id = c.req.param('id');
+  if (!c.env.BACKUP_BUCKET) return c.json({ error: 'BACKUP_BUCKET R2 binding not configured' }, 503);
+  if (!BACKUP_ID_RE.test(id)) return c.json({ error: 'invalid backup id' }, 400);
+  await deleteBackup(c.env.BACKUP_BUCKET, id);
+  return c.json({ ok: true, id });
+});
+
+app.get('/admin/backups/:id/archive', async (c) => {
+  const id = c.req.param('id');
+  if (!c.env.BACKUP_BUCKET) return c.json({ error: 'BACKUP_BUCKET R2 binding not configured' }, 503);
+  if (!BACKUP_ID_RE.test(id)) return c.json({ error: 'invalid backup id' }, 400);
+  const obj = await c.env.BACKUP_BUCKET.get(backupKeys(id).archive);
+  if (!obj) return c.json({ error: 'not found' }, 404);
+  return new Response(obj.body, {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'content-length': String(obj.size),
+      'content-disposition': `attachment; filename="${id}.sqsh"`,
+    },
+  });
+});
+
+// Per-session backup oracles, mirroring the /sandbox sibling: everything the
+// acceptance suite (and an operator) needs to exercise the backup lifecycle
+// without an LLM turn. `backup` runs the exact turn-end persist inline and
+// returns its outcome; `restore` clears the marker first so the replay is
+// deterministic on a warm container; `status` reports marker + record node.
+// The exec-bearing actions boot the container — that is the point.
+app.post('/admin/sessions/:id/backup', async (c) => {
+  const id = c.req.param('id');
+  if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
+  const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
+  const action = typeof body.action === 'string' ? body.action : 'status';
+  if (!['backup', 'restore', 'status'].includes(action)) {
+    return c.json({ error: 'action must be backup | restore | status' }, 422);
+  }
+
+  // Same binding resolution as the skill-check route: the bundle's baseImage
+  // picks the namespace, and both getSandbox and idFromName must derive from it.
+  const raw = await c.env.STORE.get(`agent:${id}`);
+  const binding = raw ? resolveSandboxBinding((JSON.parse(raw) as { baseImage: string }).baseImage) : 'Sandbox';
+  const namespace = (c.env as unknown as Record<string, DurableObjectNamespace>)[binding];
+
+  if (action === 'backup') {
+    return c.json(await sandboxRpc(() => persistWorkspaceBackup({ env: c.env, namespace, sessionId: id })));
+  }
+
+  const sandbox = getSandbox(namespace, sandboxNameForSession(id)) as unknown as BackupSandbox;
+  if (action === 'restore') {
+    return c.json(
+      await sandboxRpc(async () => {
+        await sandbox.exec(`rm -f '${RESTORE_MARKER}'`);
+        const record = await readSession(c.env.STORE, id);
+        await restoreWorkspaceBackup(sandbox, c.env, record);
+        const probe = await sandbox.exec(`[ -e '${RESTORE_MARKER}' ] && echo marker:present || echo marker:absent`);
+        return {
+          configured: !!c.env.BACKUP_BUCKET,
+          backupId: (record?.session_backup as { backup_id?: unknown } | undefined)?.backup_id ?? null,
+          marker: (probe.stdout ?? '').includes('marker:present'),
+        };
+      }),
+    );
+  }
+  return c.json(
+    await sandboxRpc(async () => {
+      const record = await readSession(c.env.STORE, id);
+      const probe = await sandbox.exec(`[ -e '${RESTORE_MARKER}' ] && echo marker:present || echo marker:absent`);
+      return {
+        configured: !!c.env.BACKUP_BUCKET,
+        marker: (probe.stdout ?? '').includes('marker:present'),
+        session_backup: record?.session_backup ?? null,
+      };
+    }),
+  );
 });
 
 // The per-session container-cost SNAPSHOT (`session_sandbox`), which SemantiusCopilotSandbox
@@ -606,12 +723,26 @@ app.post('/sessions/:id/skill-check', apiKeyGuard(), async (c) => {
 app.delete('/sessions/:id', apiKeyGuard(), async (c) => {
   const id = c.req.param('id');
   if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
+  // Read BEFORE the deletes: the R2 backup id lives on the record this route
+  // is about to remove.
+  const record = await readSession(c.env.STORE, id);
+  const backupId = (record?.session_backup as { backup_id?: unknown } | undefined)?.backup_id;
   const containerId = c.env.Sandbox.idFromName(sandboxNameForSession(id)).toString();
   // Pointer first: egress fails closed immediately, even if a later delete fails.
   await removeContainerPointer(c.env.STORE, containerId);
   await c.env.STORE.delete(`agent:${id}`);
   await removeSessionIndex(c.env.STORE, id);
-  return c.json({ ok: true });
+  // The session's R2 backup goes with it — best-effort; a miss is caught by
+  // the hourly sweep (rule a: record gone).
+  let backupDeleted = false;
+  if (c.env.BACKUP_BUCKET && typeof backupId === 'string' && backupId) {
+    await deleteBackup(c.env.BACKUP_BUCKET, backupId)
+      .then(() => {
+        backupDeleted = true;
+      })
+      .catch(() => {});
+  }
+  return c.json({ ok: true, ...(backupDeleted ? { backupDeleted } : {}) });
 });
 
 // Ownership gate for the chat surface. `userTokenGuard` (registered with it

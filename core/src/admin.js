@@ -17,6 +17,8 @@
  * @property {(options?: { cursor?: string, prefix?: string }) => Promise<{ keys: Array<{ name: string, expiration?: number, metadata?: unknown }>, list_complete: boolean, cursor?: string }>} list
  * @property {(key: string) => Promise<string | null>} get
  */
+import { backupKeys, listBackups } from './backup.js';
+import { backupStorageMonthlyUsd } from './cost.js';
 
 /** The stable prefixes this app writes, with human labels for the browser. */
 export const KV_GROUPS = {
@@ -253,14 +255,16 @@ export async function mergeExistingSessionRecord(kv, id, patch) {
 
 // ---------------------------------------------------------------------------
 // Generic collection model — powers the frontend's entities -> records ->
-// record tree. Every backing store (KV, the session index) is presented as a
-// "collection" of "records" so the browser is generic. Cloudflare specifics
-// are injected via `deps` so this file stays host-agnostic. (Flue v2 removed
-// the beta workflow-run registry, so the former `runs` collection is gone —
-// chat conversations were never in it; they live under Agent sessions.)
+// record tree. Every backing store (KV, the session index, the backup bucket)
+// is presented as a "collection" of "records" so the browser is generic.
+// Cloudflare specifics are injected via `deps` so this file stays
+// host-agnostic. (Flue v2 removed the beta workflow-run registry, so the
+// former `runs` collection is gone — chat conversations were never in it;
+// they live under Agent sessions.)
 //
 // @typedef {Object} AdminDeps
 // @property {KvLike} kv
+// @property {import('./backup.js').R2Like} [r2]  BACKUP_BUCKET; absent = backups feature off
 // ---------------------------------------------------------------------------
 
 /**
@@ -295,6 +299,7 @@ export function adminCollections(kvName) {
   return [
     { id: 'kv', label: `KV · ${kvName}`, kind: 'kv', description: 'Raw key/value entries (agent bundles, egress policies, session index).' },
     { id: 'sessions', label: 'Agent sessions', kind: 'sessions', description: 'One record per conversation id (from the session index).' },
+    { id: 'backups', label: 'R2 backups · BACKUP_BUCKET', kind: 'backups', description: 'Workspace backup archives (one per session, superseded each turn; swept when the session ends).' },
   ];
 }
 
@@ -343,6 +348,22 @@ export async function listCollectionRecords(collectionId, deps) {
       note: sessions.length === 0 ? 'No sessions indexed yet — start one on the chat page (/).' : undefined,
     };
   }
+  if (collectionId === 'backups') {
+    if (!deps.r2) return { records: [], note: 'BACKUP_BUCKET R2 binding not configured — workspace backups are off.' };
+    const backups = await listBackups(deps.r2);
+    return {
+      records: backups.map((b) => ({
+        id: b.id,
+        // meta.name is the full session id (persistWorkspaceBackup's contract);
+        // strays without one show their backup id, flagged in the group column.
+        label: b.name ?? b.id,
+        sublabel: b.createdAt ?? b.uploaded ?? undefined,
+        group: b.metaMissing || b.malformed ? 'strays' : undefined,
+        meta: { sizeBytes: b.sizeBytes },
+      })),
+      note: backups.length === 0 ? 'No backups yet — they appear after the first workspace-touching agent turn.' : undefined,
+    };
+  }
   return null; // unknown collection
 }
 
@@ -358,6 +379,28 @@ export async function readCollectionRecord(collectionId, recordId, deps) {
   if (collectionId === 'sessions') {
     const session = await readSession(deps.kv, recordId);
     return session ? { kind: 'session', id: recordId, session } : null;
+  }
+  if (collectionId === 'backups') {
+    if (!deps.r2) return null;
+    const metaObj = await deps.r2.get(backupKeys(recordId).meta);
+    if (!metaObj) return null;
+    let meta = null;
+    try {
+      meta = JSON.parse(await metaObj.text());
+    } catch {
+      meta = null;
+    }
+    const sessionId = typeof meta?.name === 'string' && meta.name ? meta.name : null;
+    const sessionExists = sessionId ? (await deps.kv.get(SESSION_KEY_PREFIX + sessionId)) !== null : false;
+    return {
+      kind: 'backup',
+      id: recordId,
+      backup: meta,
+      sessionId,
+      sessionExists,
+      storageMonthlyUsd: backupStorageMonthlyUsd(meta?.sizeBytes),
+      keys: backupKeys(recordId),
+    };
   }
   return null;
 }

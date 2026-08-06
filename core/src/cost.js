@@ -233,3 +233,67 @@ export function foldContainerCostResponse(payload, limit = 1000) {
   const totals = sumContainerCosts([...rows, ...(unlabeled ? [unlabeled] : [])]);
   return { rows, unlabeled, totals, truncated: groups.length >= limit };
 }
+
+// ---------------------------------------------------------------------------
+// R2 workspace-backup cost (add_backup_restore_plan.md requirement 1).
+//
+// Unlike containers there is no analytics query here: each session's backup
+// footprint is known exactly from its own `session_backup` record node
+// (size_bytes captured from meta.json at persist time, backup_count counted
+// by the persist hook), so the estimate is pure arithmetic over the session
+// record — no GraphQL, no label join.
+// ---------------------------------------------------------------------------
+
+/**
+ * R2 list prices, Workers Paid plan, as published 2026-08-05 at
+ * https://developers.cloudflare.com/r2/pricing/ (Standard storage class —
+ * the class R2 buckets use unless configured otherwise). Deletes are free.
+ */
+export const R2_RATES = {
+  /** USD per GB-month of stored data. */
+  storageGBMonth: 0.015,
+  /** USD per million Class A operations (writes: PutObject, CreateMultipartUpload, list). */
+  classAPerMillion: 4.5,
+  /** USD per million Class B operations (reads: GetObject, HeadObject). */
+  classBPerMillion: 0.36,
+};
+
+/** Free allowance included each month (Standard class). NOT deducted — see basis. */
+export const R2_INCLUDED_MONTHLY = {
+  storageGBMonths: 10,
+  classA: 1_000_000,
+  classB: 10_000_000,
+};
+
+export const BACKUP_COST_BASIS =
+  'Run-rate ESTIMATE at R2 list price from the session\'s last backup: storage $/mo is ' +
+  'size_bytes at $0.015/GB-month; ops are ~2 Class A + 2 Class B per backup. The monthly ' +
+  'included allowance (10 GB-mo, 1M Class A, 10M Class B) is NOT deducted, and deletes are ' +
+  'free. Not a billed figure — R2 bills storage on account-wide daily averages.';
+
+/**
+ * Monthly storage run-rate for one session's current backup.
+ * @param {number | null | undefined} sizeBytes
+ * @param {typeof R2_RATES} [rates]
+ * @returns {number} USD per month
+ */
+export function backupStorageMonthlyUsd(sizeBytes, rates = R2_RATES) {
+  const bytes = Number(sizeBytes ?? 0) || 0;
+  return round((bytes / GB) * rates.storageGBMonth);
+}
+
+/**
+ * Cumulative operations cost estimate for a session's backups so far. Each
+ * persist costs ~2 Class A (archive + meta put) and ~2 Class B (the SDK's
+ * size-verify head + our meta read); restores add reads at the same order of
+ * magnitude — all far below a cent at POC cardinality, priced anyway so the
+ * Costs tab never shows a false zero-cost claim.
+ *
+ * @param {number | null | undefined} backupCount
+ * @param {typeof R2_RATES} [rates]
+ * @returns {number} USD
+ */
+export function backupOpsUsd(backupCount, rates = R2_RATES) {
+  const n = Number(backupCount ?? 0) || 0;
+  return round(n * 2 * (rates.classAPerMillion / 1e6) + n * 2 * (rates.classBPerMillion / 1e6));
+}

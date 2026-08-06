@@ -7,7 +7,11 @@
  * without clicking through the frontend: send a turn here, then check the
  * Braintrust `semantius-copilot` logs / Arize `semantius-copilot` project for the trace.
  *
- *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}']
+ *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}'] [--session=<id>]
+ *
+ * --session=<id> resumes an EXISTING session instead of ingesting a new one —
+ * the tool for cross-turn persistence checks (workspace backup/restore across
+ * a container sleep needs a write turn and a later read turn on one session).
  *
  * Talks the same wire protocol as the frontend FlueClient (raw fetch, like
  * acceptance.mjs): name-based ingest ({ agentName } — the trip-planner
@@ -60,8 +64,10 @@ async function postJson(url, body) {
 
 const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf8'));
 console.log(`minted semantius token for org ${semantiusToken.slice(0, semantiusToken.indexOf(':'))}`);
-let sessionId;
-try {
+let sessionId = args.find((arg) => arg.startsWith('--session='))?.slice('--session='.length);
+if (sessionId) {
+  console.log(`resuming session ${sessionId}`);
+} else try {
   // No credential in the body any more: the bearer IS the user's token, and the
   // backend pins the identity it verifies onto the session as its owner — and
   // mints the session id from it (`<org>-<sub>-<random>`), so the id is the

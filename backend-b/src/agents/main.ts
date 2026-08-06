@@ -54,6 +54,14 @@ import {
   validateAgentBundle,
 } from '@semantius-copilot/core';
 import * as v from 'valibot';
+import {
+  drainWorkspaceTouched,
+  markWorkspaceTouched,
+  persistWorkspaceBackup,
+  restoreWorkspaceBackup,
+  type BackupEnv,
+  type BackupSandbox,
+} from '../backups';
 import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '../channels/github';
 import { lazySessionEnv } from '../lazy-env';
 import { agentModelSpecifier } from '../llm';
@@ -232,6 +240,11 @@ export function Main({ id }: AgentProps) {
   const [agentData, setAgentData] = usePersistentState<Record<string, unknown>>('agentData', {});
   let agentDataNow = agentData;
 
+  // Hoisted above useResponseFinish: the finish callback closes over it for
+  // the workspace-backup persist (declaration-before-use; the render below
+  // reuses the same value for the lazy sandbox env).
+  const namespace = (env as unknown as Record<string, DurableObjectNamespace>)[active?.binding ?? 'Sandbox'];
+
   const [, setSessionState] = usePersistentState<SessionState>('sessionState', ZERO_SESSION_STATE);
   useResponseFinish(({ response }) => {
     const { usage } = response;
@@ -263,12 +276,18 @@ export function Main({ id }: AgentProps) {
     // Sidebar title (session record `title`): void, fire-and-forget — the
     // callback stays synchronous and the response is never delayed.
     maybeGenerateTitle(STORE, id, drainTitleTranscript(id), active, next.responses_count);
+    // Workspace backup (fire-and-forget, same posture): only when THIS
+    // submission actually touched the container — chat-only turns never boot
+    // one just to archive it. persistWorkspaceBackup never throws; the catch
+    // is belt-and-braces.
+    if (drainWorkspaceTouched(id)) {
+      persistWorkspaceBackup({ env: env as unknown as BackupEnv, namespace, sessionId: id }).catch(() => {});
+    }
     return {
       session_state: next,
       ...(specifier.startsWith('openrouter/') ? { usage, model: specifier } : {}),
     };
   });
-  const namespace = (env as unknown as Record<string, DurableObjectNamespace>)[active?.binding ?? 'Sandbox'];
   // Lazy boot (see lazy-env.ts): the wrapper serves discovery + skills-tree
   // reads from the KV bundle and only boots the container at the first
   // exec/write — which then provisions skills + Semantius env (absent→write,
@@ -281,14 +300,19 @@ export function Main({ id }: AgentProps) {
     return raw ? (validateAgentBundle(raw) as { skills?: Record<string, Record<string, string>> }) : null;
   };
   const provisionWorkspace = async () => {
+    markWorkspaceTouched(id);
     const sandbox = getSandbox(namespace, sandboxNameForSession(id));
+    const record = await readSession(STORE, id);
+    // Workspace restore FIRST: the session's backed-up files must be on disk
+    // before the agent's first read. Its marker probe is now the exec that
+    // creates the container session the later setEnvVars needs; `.agents` is
+    // excluded from archives, so the skills sentinel below is unaffected.
+    await restoreWorkspaceBackup(sandbox as unknown as BackupSandbox, env as unknown as BackupEnv, record);
     const raw = await STORE.get(bundleKey);
     if (raw) await provisionAgentSkills(sandbox, validateAgentBundle(raw));
     // Same env heal as before: a cold container starts from the image's baked
     // sentinel, so re-point the CLI at THIS session's org (chat sessions
-    // always have one; channel conversations no-op). Order matters: the
-    // skills exec above created the container session that setEnvVars needs.
-    const record = await readSession(STORE, id);
+    // always have one; channel conversations no-op).
     const org = (record?.session_context as { semantius_org?: unknown } | undefined)?.semantius_org;
     await provisionSemantiusEnv(sandbox, typeof org === 'string' ? org : undefined);
   };

@@ -84,7 +84,22 @@ export {
   sumContainerCosts,
   foldContainerCostResponse,
   utcDayWindow,
+  R2_RATES,
+  R2_INCLUDED_MONTHLY,
+  BACKUP_COST_BASIS,
+  backupStorageMonthlyUsd,
+  backupOpsUsd,
 } from './cost.js';
+export {
+  BACKUP_PREFIX,
+  BACKUP_EXCLUDES,
+  BACKUP_TTL_SECONDS,
+  BACKUP_SWEEP_GRACE_MS,
+  backupKeys,
+  listBackups,
+  deleteBackup,
+  sweepOrphanedBackups,
+} from './backup.js';
 export {
   injectAndForward,
   brokerEgress,

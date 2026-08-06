@@ -648,6 +648,114 @@ async function main() {
     console.log('NOTE  [credentials] skipped — dist-bundle/semantius-admin.agent.json missing (run pnpm bundle)');
   }
 
+  // --- Workspace backups: persist / supersede / restore / delete-with-session
+  // The R2 lifecycle of add_backup_restore_plan.md, driven through the
+  // deterministic /admin oracles (no LLM turn). Gated on the deployed backend
+  // reporting the BACKUP_BUCKET binding configured — skipped with a NOTE
+  // otherwise, like the cookie block.
+  const backupsProbe = await get(B_URL, '/admin/backups');
+  if (backupsProbe.status === 200 && backupsProbe.json?.configured === true) {
+    const bkNoKey = await uget(B_URL, '/admin/backups');
+    check('backup', 'a user token cannot list backups (401)', bkNoKey.status === 401, `status ${bkNoKey.status}`);
+
+    const bkIngest = await createSession(B_URL, { agentName: bundle.agentName });
+    const bkId = bkIngest.id;
+    check('backup', 'session for the backup block ingests (200)', bkIngest.status === 200, `status ${bkIngest.status}`);
+
+    // First persist: runs the exact turn-end path inline (boots the container).
+    const bk1 = await post(B_URL, `/admin/sessions/${bkId}/backup`, { action: 'backup' });
+    const bk1Id = bk1.json?.result?.backupId;
+    check(
+      'backup',
+      'forced backup persists (status persisted, backup id returned)',
+      bk1.status === 200 && bk1.json?.ok === true && bk1.json?.result?.status === 'persisted' && typeof bk1Id === 'string',
+      JSON.stringify(bk1.json).slice(0, 200),
+    );
+
+    // The durable per-session node (requirement 1): size, count, run rate.
+    const bkRecord = await get(B_URL, `/admin/collections/kv/record?id=session:${bkId}`);
+    const bkNode = bkRecord.json?.json?.session_backup;
+    check(
+      'backup',
+      'session record carries session_backup (id, count 1, size, $/mo)',
+      bkNode?.backup_id === bk1Id && bkNode?.backup_count === 1 &&
+        typeof bkNode?.size_bytes === 'number' && typeof bkNode?.storage_monthly_usd === 'number',
+      JSON.stringify(bkNode ?? null).slice(0, 160),
+    );
+
+    const bkList1 = await get(B_URL, '/admin/backups');
+    check(
+      'backup',
+      'the bucket lists the backup, named with the FULL session id',
+      bkList1.json?.backups?.some((b) => b.id === bk1Id && b.name === bkId),
+      `${bkList1.json?.backups?.length} backups`,
+    );
+
+    // Second persist supersedes the first — exactly one backup per session.
+    const bk2 = await post(B_URL, `/admin/sessions/${bkId}/backup`, { action: 'backup' });
+    const bk2Id = bk2.json?.result?.backupId;
+    const bkList2 = await get(B_URL, '/admin/backups');
+    check(
+      'backup',
+      'a second backup supersedes the first (new id in the list, old id gone)',
+      typeof bk2Id === 'string' && bk2Id !== bk1Id &&
+        bkList2.json?.backups?.some((b) => b.id === bk2Id) &&
+        !bkList2.json?.backups?.some((b) => b.id === bk1Id),
+      `first ${String(bk1Id).slice(0, 8)} second ${String(bk2Id).slice(0, 8)}`,
+    );
+    check('backup', 'backup_count increments', bk2.json?.result?.backupCount === 2, JSON.stringify(bk2.json?.result).slice(0, 120));
+
+    // Deterministic restore replay (clears the marker first) + status oracle.
+    const bkRestore = await post(B_URL, `/admin/sessions/${bkId}/backup`, { action: 'restore' });
+    check(
+      'backup',
+      'restore replay runs and re-arms the marker',
+      bkRestore.status === 200 && bkRestore.json?.ok === true && bkRestore.json?.result?.marker === true &&
+        bkRestore.json?.result?.backupId === bk2Id,
+      JSON.stringify(bkRestore.json).slice(0, 160),
+    );
+    const bkStatus = await post(B_URL, `/admin/sessions/${bkId}/backup`, { action: 'status' });
+    check(
+      'backup',
+      'status reports marker + the record node',
+      bkStatus.json?.ok === true && bkStatus.json?.result?.marker === true && bkStatus.json?.result?.session_backup?.backup_id === bk2Id,
+      JSON.stringify(bkStatus.json?.result).slice(0, 160),
+    );
+
+    // The archive is downloadable (raw fetch — the body is binary squashfs).
+    const bkArchive = await fetch(`${B_URL}/admin/backups/${bk2Id}/archive`, { headers: { ...AUTH } });
+    const bkBytes = (await bkArchive.arrayBuffer()).byteLength;
+    check(
+      'backup',
+      'the squashfs archive downloads (200, octet-stream, non-empty)',
+      bkArchive.status === 200 && bkArchive.headers.get('content-type') === 'application/octet-stream' && bkBytes > 0,
+      `status ${bkArchive.status}, ${bkBytes} bytes`,
+    );
+
+    // Requirement 2's loud path: DELETE /sessions/:id takes the backup with it.
+    await del(B_URL, bkId);
+    const bkList3 = await get(B_URL, '/admin/backups');
+    check(
+      'backup',
+      'DELETE /sessions/:id deletes the session\'s backup from R2',
+      !bkList3.json?.backups?.some((b) => b.id === bk2Id),
+      `${bkList3.json?.backups?.length} backups remain`,
+    );
+
+    // The sweep oracle (the cron body, run inline): shape only — other live
+    // sessions may legitimately keep their backups.
+    const bkSweep = await post(B_URL, '/admin/backups/sweep', {});
+    check(
+      'backup',
+      'the sweep runs and reports counts',
+      bkSweep.status === 200 && typeof bkSweep.json?.scanned === 'number' &&
+        typeof bkSweep.json?.deleted === 'number' && typeof bkSweep.json?.kept === 'number',
+      JSON.stringify(bkSweep.json).slice(0, 120),
+    );
+  } else {
+    console.log('NOTE  [backup] skipped — BACKUP_BUCKET not configured on the deployed backend');
+  }
+
   // --- Hostile bundles rejected at the deploy trust boundary (plan §13) ---
   // Validation moved with the bundle bytes: ingest only takes a name, so the
   // deploy route is where a hostile definition must be stopped. The key

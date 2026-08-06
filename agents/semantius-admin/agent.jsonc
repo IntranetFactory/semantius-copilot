@@ -6,6 +6,7 @@
   "model": "deepseek/deepseek-v4-flash-0731", // "xiaomi/mimo-v2.5-pro",
   "proxy_whitelist": [
     "*.semantius.ai",
+    "*.semantius.io",
     "www.semantius.com"
   ],
   // Shown by the chat UI while a conversation is empty (UI-only, never reaches

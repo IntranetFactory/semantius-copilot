@@ -62,9 +62,17 @@ export type ContainerCosts = ReturnType<typeof foldContainerCostResponse> & {
     createdAt?: string;
     /** session_state.cost_total — the session's LIFETIME LLM spend, not today's. */
     llmCost?: number;
+    /** session_backup.size_bytes — the session's current R2 backup archive. */
+    backupSizeBytes?: number;
+    /** session_backup.backup_count — persists so far (each supersedes the last). */
+    backupCount?: number;
+    /** session_backup.storage_monthly_usd — R2 storage run-rate estimate. */
+    backupMonthlyUsd?: number;
   }>;
   /** Sum of the rows' llmCost. Deliberately not added to the container total. */
   llmTotal: number;
+  /** Sum of the rows' backupMonthlyUsd — a $/month run rate, never summed with the others. */
+  backupMonthlyTotal: number;
 };
 
 export type ContainerCostsResult = ContainerCosts | { configured: false; reason: string };
@@ -165,6 +173,7 @@ export async function fetchContainerCosts(
   // summed — see COST_BASIS and the column headers.
   const rows = [];
   let llmTotal = 0;
+  let backupMonthlyTotal = 0;
   for (const row of folded.rows) {
     let sessionId = row.sessionId;
     let record = (await readSession(env.STORE, sessionId).catch(() => null)) as
@@ -185,6 +194,17 @@ export async function fetchContainerCosts(
     const state = record?.session_state as { cost_total?: unknown } | undefined;
     const llmCost = typeof state?.cost_total === 'number' ? state.cost_total : undefined;
     if (llmCost !== undefined) llmTotal += llmCost;
+    // The R2 backup figures ride the same record read (session_backup is
+    // written by the turn-end persist, backend-b/src/backups.ts). A $/month
+    // run rate, not spend-to-date — third window, never summed with the rest.
+    const backup = record?.session_backup as
+      | { size_bytes?: unknown; backup_count?: unknown; storage_monthly_usd?: unknown }
+      | undefined;
+    const backupSizeBytes = typeof backup?.size_bytes === 'number' ? backup.size_bytes : undefined;
+    const backupCount = typeof backup?.backup_count === 'number' ? backup.backup_count : undefined;
+    const backupMonthlyUsd =
+      typeof backup?.storage_monthly_usd === 'number' ? backup.storage_monthly_usd : undefined;
+    if (backupMonthlyUsd !== undefined) backupMonthlyTotal += backupMonthlyUsd;
     rows.push({
       ...row,
       ...(sessionId !== row.sessionId ? { fullSessionId: sessionId } : {}),
@@ -192,8 +212,17 @@ export async function fetchContainerCosts(
       ...(typeof record?.version === 'string' ? { version: record.version } : {}),
       ...(typeof record?.createdAt === 'string' ? { createdAt: record.createdAt } : {}),
       ...(llmCost !== undefined ? { llmCost } : {}),
+      ...(backupSizeBytes !== undefined ? { backupSizeBytes } : {}),
+      ...(backupCount !== undefined ? { backupCount } : {}),
+      ...(backupMonthlyUsd !== undefined ? { backupMonthlyUsd } : {}),
     });
   }
 
-  return { ...folded, rows, llmTotal: Math.round(llmTotal * 1e8) / 1e8, configured: true };
+  return {
+    ...folded,
+    rows,
+    llmTotal: Math.round(llmTotal * 1e8) / 1e8,
+    backupMonthlyTotal: Math.round(backupMonthlyTotal * 1e8) / 1e8,
+    configured: true,
+  };
 }

@@ -149,6 +149,12 @@ type CostRow = CostSums & {
   createdAt?: string;
   /** Session LIFETIME LLM spend (session_state.cost_total) — a different window to the rest. */
   llmCost?: number;
+  /** Current R2 backup archive size (session_backup.size_bytes). */
+  backupSizeBytes?: number;
+  /** Backups persisted so far (each supersedes the previous). */
+  backupCount?: number;
+  /** R2 storage run rate for that archive, $/month — a THIRD window. */
+  backupMonthlyUsd?: number;
 };
 type Costs = {
   date: string;
@@ -156,12 +162,14 @@ type Costs = {
   end: string;
   currency: string;
   basis: string;
+  backupBasis?: string;
   configured: boolean;
   reason?: string;
   rows?: CostRow[];
   unlabeled?: CostSums | null;
   totals?: CostSums;
   llmTotal?: number;
+  backupMonthlyTotal?: number;
   truncated?: boolean;
 };
 
@@ -225,9 +233,11 @@ function CostsView({ apiKey }: { apiKey: string }) {
                 <th className="numcol">GiB·s</th>
                 <th className="numcol">GB·s disk</th>
                 <th className="numcol">Egress</th>
-                {/* Two money columns, two different windows — never summed. */}
+                {/* Three money columns, three different windows — never summed. */}
                 <th className="numcol">Container $ (today)</th>
                 <th className="numcol">LLM $ (session)</th>
+                <th className="numcol">Backup MB</th>
+                <th className="numcol">Backup $/mo</th>
               </tr>
             </thead>
             <tbody>
@@ -246,6 +256,8 @@ function CostsView({ apiKey }: { apiKey: string }) {
                   <td className="numcol">{megabytes(row.egressBytes)}</td>
                   <td className="numcol">{usd(row.cost.total)}</td>
                   <td className="numcol">{row.llmCost === undefined ? '—' : usd(row.llmCost)}</td>
+                  <td className="numcol">{row.backupSizeBytes === undefined ? '—' : megabytes(row.backupSizeBytes)}</td>
+                  <td className="numcol">{row.backupMonthlyUsd === undefined ? '—' : usd(row.backupMonthlyUsd)}</td>
                 </tr>
               ))}
               {/* Containers started before the session label shipped (or by
@@ -262,11 +274,13 @@ function CostsView({ apiKey }: { apiKey: string }) {
                   <td className="numcol">{megabytes(costs.unlabeled.egressBytes)}</td>
                   <td className="numcol">{usd(costs.unlabeled.cost.total)}</td>
                   <td className="numcol">—</td>
+                  <td className="numcol">—</td>
+                  <td className="numcol">—</td>
                 </tr>
               ) : null}
               {rows.length === 0 && !costs.unlabeled ? (
                 <tr>
-                  <td colSpan={9} className="status">
+                  <td colSpan={11} className="status">
                     No container usage recorded today. (Analytics lags a few minutes.)
                   </td>
                 </tr>
@@ -282,6 +296,17 @@ function CostsView({ apiKey }: { apiKey: string }) {
                   <td className="numcol">{megabytes(costs.totals.egressBytes)}</td>
                   <td className="numcol">{usd(costs.totals.cost.total)}</td>
                   <td className="numcol">{costs.llmTotal === undefined ? '—' : usd(costs.llmTotal)}</td>
+                  <td className="numcol">
+                    {(() => {
+                      const bytes = rows.reduce((sum, r) => sum + (r.backupSizeBytes ?? 0), 0);
+                      return bytes > 0 ? megabytes(bytes) : '—';
+                    })()}
+                  </td>
+                  <td className="numcol">
+                    {costs.backupMonthlyTotal === undefined || costs.backupMonthlyTotal === 0
+                      ? '—'
+                      : usd(costs.backupMonthlyTotal)}
+                  </td>
                 </tr>
               </tfoot>
             ) : null}
@@ -291,9 +316,11 @@ function CostsView({ apiKey }: { apiKey: string }) {
 
       {costs?.basis ? (
         <p className="status">
-          {costs.basis} The two money columns cover DIFFERENT periods — container cost is today&rsquo;s UTC
-          day, LLM cost is the session&rsquo;s running lifetime total (<code>session_state.cost_total</code>)
-          — so they are shown side by side and never added together.
+          {costs.basis} The money columns cover DIFFERENT periods — container cost is today&rsquo;s UTC
+          day, LLM cost is the session&rsquo;s running lifetime total (<code>session_state.cost_total</code>),
+          and Backup $/mo is a storage run-rate estimate for the session&rsquo;s current R2 archive
+          (<code>session_backup</code>) — so they are shown side by side and never added together.
+          {costs.backupBasis ? ` ${costs.backupBasis}` : ''}
         </p>
       ) : null}
     </section>
@@ -473,9 +500,20 @@ function RecordsList({
   );
 }
 
+type BackupDetailShape = {
+  kind: 'backup';
+  id: string;
+  backup: Record<string, unknown> | null;
+  sessionId: string | null;
+  sessionExists: boolean;
+  storageMonthlyUsd: number;
+  keys: { archive: string; meta: string };
+};
+
 type Detail =
   | { kind: 'kv'; key: string; value: string; size: number; json: unknown }
   | { kind: 'session'; id: string; session: Record<string, unknown> }
+  | BackupDetailShape
   | Record<string, unknown>;
 
 function RecordDetail({
@@ -559,9 +597,98 @@ function RecordDetail({
         <KvValue value={(detail as { value: string }).value} json={(detail as { json: unknown }).json} />
       ) : isSession ? (
         <SessionDetail apiKey={apiKey} session={(detail as { session: Record<string, unknown> }).session} sessionId={record.id} />
+      ) : detail.kind === 'backup' ? (
+        <BackupView base={base} apiKey={apiKey} detail={detail as BackupDetailShape} />
       ) : (
         <pre className="value">{JSON.stringify(detail, null, 2)}</pre>
       )}
+    </div>
+  );
+}
+
+/**
+ * One R2 workspace backup: the meta.json facts, whether its session is still
+ * alive, the storage run rate, and an authenticated download of the squashfs
+ * archive (a plain <a href> would lack the Authorization header, so the
+ * download goes fetch -> blob -> object URL).
+ */
+function BackupView({ base, apiKey, detail }: { base: string; apiKey: string; detail: BackupDetailShape }) {
+  const [error, setError] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const meta = detail.backup ?? {};
+  const sizeBytes = typeof meta.sizeBytes === 'number' ? meta.sizeBytes : undefined;
+  const createdAt = typeof meta.createdAt === 'string' ? meta.createdAt : undefined;
+
+  const download = () => {
+    setDownloading(true);
+    setError('');
+    fetch(`${base}/admin/backups/${encodeURIComponent(detail.id)}/archive`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${detail.id}.sqsh`;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((err) => setError(String(err instanceof Error ? err.message : err)))
+      .finally(() => setDownloading(false));
+  };
+
+  return (
+    <div>
+      <div className="controls">
+        <button onClick={download} disabled={downloading}>
+          {downloading ? 'Downloading…' : 'Download archive'}
+        </button>
+        {detail.sessionId ? (
+          <a className="linkbtn" href={chatPageUrl(detail.sessionId)}>
+            Open session in chat ›
+          </a>
+        ) : null}
+      </div>
+      {error ? <p className="status status-error">{error}</p> : null}
+      <div className="keylist">
+        <table className="costs">
+          <tbody>
+            <tr>
+              <td>Session</td>
+              <td>
+                {detail.sessionId ?? '—'}
+                {detail.sessionId ? (detail.sessionExists ? ' (live)' : ' (session gone — sweep candidate)') : ''}
+              </td>
+            </tr>
+            <tr>
+              <td>Created</td>
+              <td>{createdAt ? formatWhen(createdAt) : '—'}</td>
+            </tr>
+            <tr>
+              <td>Archive size</td>
+              <td>{sizeBytes === undefined ? '—' : megabytes(sizeBytes)}</td>
+            </tr>
+            <tr>
+              <td>Storage run rate</td>
+              <td>{usd(detail.storageMonthlyUsd)}/month</td>
+            </tr>
+            <tr>
+              <td>Directory</td>
+              <td>{typeof meta.dir === 'string' ? meta.dir : '—'}</td>
+            </tr>
+            <tr>
+              <td>R2 keys</td>
+              <td>
+                <code>{detail.keys.archive}</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
