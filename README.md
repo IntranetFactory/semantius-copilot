@@ -1026,6 +1026,83 @@ POST   /admin/sessions/<id>/backup         # body {action: "backup" | "restore" 
 container. One-time setup, BEFORE the first deploy with the binding:
 `wrangler r2 bucket create semantius-copilot-backups`.
 
+## Workspace files (upload & download)
+
+Users can put files into a session's `/workspace` and get them back out. Two
+user-facing routes on backend B (`backend-b/src/app.ts`, helpers in
+`backend-b/src/workspace.ts`):
+
+```bash
+POST /workspace/<sessionId>/files?filename=<urlencoded>   # raw body -> {ok, name, size, renamed}
+GET  /workspace/<sessionId>/<name>                        # the file bytes, as an attachment
+```
+
+Both sit behind the user credential (Semantius bearer or better-auth cookie —
+same `userTokenGuard` as chat) plus the `/agents/main/*` ownership contract:
+400 malformed id, 401 unknown session, 403 someone else's. The csrf guard is
+mounted on `/workspace/*` too; CLI callers just need a non-form-like
+Content-Type on the upload:
+
+```bash
+curl -X POST "$BASE/workspace/$SID/files?filename=report.pdf" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/octet-stream" --data-binary @report.pdf
+curl -OJ "$BASE/workspace/$SID/report.pdf" -H "authorization: Bearer $TOKEN"
+```
+
+Semantics:
+
+- **Flat names only.** Path separators, `.`/`..`, control chars, >128 chars →
+  422/400. Unicode is fine (URL-encoded in, RFC 5987 out).
+- **Collision-safe.** `report.pdf` → `report (1).pdf` → … ; the response's
+  `name` is what actually landed, and the composer inserts that.
+- **Size caps.** Upload 10 MB, download 25 MB (`workspace.ts`) — transfers are
+  base64 strings over the sandbox DO's control channel (~0.6 MB/s; the SDK's
+  streaming file APIs throw on the default HTTP transport), so both ends
+  buffer the whole file.
+- **Backup interplay.** Both routes run `restoreWorkspaceBackup` first (a cold
+  container's workspace lives only in R2 — without this, uploads would miss
+  name collisions with archived files and downloads would 404), and the upload
+  fires `persistWorkspaceBackup` afterwards via `waitUntil` (the turn-end
+  backup only covers submissions that touched the container, so an
+  out-of-turn upload persists itself). No `BACKUP_BUCKET` = today's ephemeral
+  behavior, never an error.
+- **Download posture.** Always `application/octet-stream` +
+  `content-disposition: attachment` + `x-content-type-options: nosniff` —
+  user/agent-controlled bytes on the backend origin must never render inline
+  (uploaded HTML would otherwise be stored XSS).
+
+In the UI, the composer's **+** button
+(`frontend/src/components/ai-elements/workspace-upload.tsx`, mounted in
+`agent-chat.tsx`) uploads via `uploadWorkspaceFile` (`session.ts`) and inserts
+the final name into the prompt input with a leading and trailing space. In
+draft mode (no session yet) the upload creates the session on the spot —
+without remounting the composer — and the first message send reuses that same
+session (one shared create promise in `agent-chat-container.tsx` dedupes the
+two paths). `workspaceFileUrl()` in `session.ts` builds download URLs; fetch
+them with `authFetchInit(auth)`.
+
+**Agent-emitted download links.** Every chat-channel system prompt gets a
+static block appended (`WORKSPACE_LINK_INSTRUCTIONS` in
+`backend-b/src/agents/main.ts`) telling the agent to hand files to the user as
+
+```
+[display name](/workspace/{sessionId}/file-name)
+```
+
+with the LITERAL `{sessionId}` placeholder — static text keeps the prompt
+prefix identical across sessions, so provider-side prefix caching keeps
+working. The chat renderer closes the loop
+(`frontend/src/components/ai-elements/workspace-link.tsx`, wired as a
+streamdown `components.a` override in `agent-chat.tsx`): it substitutes the
+real session id from context and downloads via authenticated fetch + blob
+(a plain `<a href>` to the cross-origin backend would carry no credential).
+The block is NOT appended on the GitHub channel — issue-derived conversation
+ids fail the `/workspace` route's session-id check. Trade-off, accepted: the
+`components.a` override replaces streamdown's built-in anchor for all links,
+so external links render as plain new-tab anchors without the link-safety
+confirm modal.
+
 ## Per-session data channels (session_context, payload, session_data, session_state)
 
 Four per-session data channels, split by who may see and who may write them. All four

@@ -194,6 +194,30 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
   };
 }
 
+/**
+ * Appended to every chat-channel system prompt (never the GitHub channel —
+ * issue-derived conversation ids fail the /workspace route's session-id
+ * check). STATIC on purpose: the literal {sessionId} placeholder keeps the
+ * prompt prefix identical across sessions, so provider-side prefix caching
+ * keeps working; the chat client substitutes the real id at render time and
+ * performs the authenticated download.
+ */
+const WORKSPACE_LINK_INSTRUCTIONS = `
+
+## Handing files to the user
+
+Your /workspace is user-visible: files the user uploads appear at its top
+level, and you can hand files back as download links. Save the file at the
+TOP level of /workspace (the download route serves flat names only, max
+25 MB), then link it in your reply exactly as:
+
+[display name](/workspace/{sessionId}/file-name)
+
+Write the literal placeholder {sessionId} — the chat client replaces it with
+the real session id. Percent-encode spaces and parentheses in the file-name
+segment (e.g. report (1).pdf -> report%20%281%29.pdf). Files inside
+subdirectories cannot be linked — copy them to the top level first.`;
+
 export function Main({ id }: AgentProps) {
   const { STORE } = env as unknown as Env;
 
@@ -434,7 +458,7 @@ export function Main({ id }: AgentProps) {
     );
   }
 
-  return instructions + suffix;
+  return instructions + WORKSPACE_LINK_INSTRUCTIONS + suffix;
 }
 
 // The generic multi-agent host: durable identity `main` (generated DO class

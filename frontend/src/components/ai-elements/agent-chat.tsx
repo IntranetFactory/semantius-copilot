@@ -33,11 +33,14 @@ import {
   type PromptInputMessage,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputTools,
 } from './prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './reasoning';
 import { seedFromMeta, useAgentMeta, withAgentSeed, type ChatAuth } from './session';
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from './tool';
 import { WelcomeCard } from './welcome';
+import { chatMarkdownComponents, WorkspaceLinkContext } from './workspace-link';
+import { WorkspaceUploadButton } from './workspace-upload';
 
 type AgentMessage = ReturnType<typeof useFlueAgent>['messages'][number];
 type AgentPart = AgentMessage['parts'][number];
@@ -55,6 +58,8 @@ export function AgentChat({
   auth,
   agentName,
   baseUrl,
+  sessionId,
+  onEnsureSession,
   initialMessage,
   onDraftSend,
   draftPending,
@@ -73,6 +78,12 @@ export function AgentChat({
   agentName: string;
   /** Backend origin the meta is loaded from (defaults to session.ts BACKEND). */
   baseUrl?: string;
+  /** The session whose /workspace the composer's upload button targets. */
+  sessionId?: string;
+  /** Draft-mode fallback for the upload button: answers a session id, creating
+   * the session on first use (the container dedupes it with the first-send
+   * create). Without it a draft composer's upload button is disabled. */
+  onEnsureSession?: () => Promise<string>;
   /** The text whose submit created this session — sent exactly once after the
    * live mount, so the user's first message is never lost in the handoff. */
   initialMessage?: string;
@@ -90,6 +101,10 @@ export function AgentChat({
   placeholder?: string;
 }) {
   const [input, setInput] = useState('');
+  const [uploadError, setUploadError] = useState<string>();
+  // What the markdown link override needs to resolve and download
+  // /workspace/{sessionId}/<file> links from agent replies.
+  const linkCtx = useMemo(() => ({ auth, sessionId, baseUrl }), [auth, sessionId, baseUrl]);
   // The agent's live definition meta: welcome card + turn-1 seed. Draft
   // submits are blocked until it is here (the very first send of a session
   // must carry the seed), so the key-flip remount below always finds it in
@@ -202,6 +217,9 @@ export function AgentChat({
 
   return (
     <TooltipProvider>
+      {/* Reaches the markdown link override (chatMarkdownComponents) through
+          streamdown — props can't (MessageResponse's memo ignores them). */}
+      <WorkspaceLinkContext.Provider value={linkCtx}>
       <div className={cn('mt-2 flex h-[60vh] flex-col overflow-hidden rounded-lg border bg-background text-foreground', className)}>
         <Conversation>
           <ConversationContent>
@@ -246,6 +264,7 @@ export function AgentChat({
               <Spinner /> Working…
             </div>
           ) : null}
+          {uploadError ? <div className="mb-2 text-destructive text-sm">upload failed — {uploadError}</div> : null}
           <PromptInput onSubmit={handleSubmit}>
             <PromptInputBody>
               <PromptInputTextarea
@@ -255,6 +274,18 @@ export function AgentChat({
               />
             </PromptInputBody>
             <PromptInputFooter>
+              <PromptInputTools>
+                <WorkspaceUploadButton
+                  auth={auth}
+                  sessionId={sessionId}
+                  onEnsureSession={onEnsureSession}
+                  baseUrl={baseUrl}
+                  // Requirement: the landed name goes into the composer with a
+                  // leading AND trailing space, so it can be typed around.
+                  onUploaded={(name) => setInput((prev) => `${prev} ${name} `)}
+                  onError={setUploadError}
+                />
+              </PromptInputTools>
               {/* No status text — the submit icon reflects agent.status via
                   toChatStatus: ready ↵ / submitted ⟳ / streaming ⏹ / error ✕.
                   While generating the button is enabled and onStop wires the
@@ -269,6 +300,7 @@ export function AgentChat({
           </PromptInput>
         </div>
       </div>
+      </WorkspaceLinkContext.Provider>
     </TooltipProvider>
   );
 }
@@ -303,7 +335,8 @@ function MessageView({ message }: { message: AgentMessage }) {
 function PartView({ part }: { part: AgentPart }) {
   switch (part.type) {
     case 'text':
-      return <MessageResponse>{part.text}</MessageResponse>;
+      // components: workspace download links + plain anchors (workspace-link.tsx).
+      return <MessageResponse components={chatMarkdownComponents}>{part.text}</MessageResponse>;
     case 'dynamic-tool':
       return (
         // Auto-open on error so the failure is visible without a click.

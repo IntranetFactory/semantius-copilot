@@ -204,6 +204,45 @@ export async function createAgentSession(
   return payload as SessionCreateInfo;
 }
 
+/** What `POST /workspace/:sessionId/files` answers on success. */
+export type WorkspaceUploadInfo = { name: string; size: number; renamed?: boolean };
+
+/**
+ * Upload one file into the session's /workspace. Raw-body POST with the
+ * filename in the query param — deliberately NOT multipart/form-like:
+ * application/octet-stream makes the browser preflight the call, which is
+ * exactly what lets it through the backend's csrf guard on /workspace/*.
+ * Answers the FINAL name — the server renames on collision
+ * (`x.pdf` -> `x (1).pdf`), and the caller must use what came back.
+ */
+export async function uploadWorkspaceFile(
+  auth: ChatAuth,
+  sessionId: string,
+  file: File,
+  baseUrl: string = BACKEND.baseUrl,
+): Promise<WorkspaceUploadInfo> {
+  const init = authFetchInit(auth);
+  const url = `${baseUrl}/workspace/${encodeURIComponent(sessionId)}/files?filename=${encodeURIComponent(file.name)}`;
+  const response = await fetch(url, {
+    ...init,
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream', ...authHeaders(auth) },
+    body: file,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`${response.status}: ${payload?.error ?? 'upload failed'}`);
+  if (typeof payload?.name !== 'string' || !payload.name) {
+    throw new Error(`upload returned no name: ${JSON.stringify(payload).slice(0, 120)}`);
+  }
+  return payload as WorkspaceUploadInfo;
+}
+
+/** Download URL for a workspace file. The route needs the caller's credential
+ * (same guard as chat), so fetch it with `authFetchInit(auth)` + blob — a
+ * plain <a href> only works for ambient-cookie setups. */
+export const workspaceFileUrl = (sessionId: string, name: string, baseUrl: string = BACKEND.baseUrl): string =>
+  `${baseUrl}/workspace/${encodeURIComponent(sessionId)}/${encodeURIComponent(name)}`;
+
 /**
  * Conversation-scoped client (v2: no deployment-wide client, no name/id).
  *

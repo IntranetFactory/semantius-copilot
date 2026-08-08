@@ -109,6 +109,16 @@ import {
 } from './backups';
 import { channel } from './channels/github';
 import { fetchContainerCosts } from './costs';
+import {
+  base64ToBytes,
+  bytesToBase64,
+  DOWNLOAD_MAX_BYTES,
+  sanitizeFilename,
+  UPLOAD_MAX_BYTES,
+  uniqueWorkspaceName,
+  WORKSPACE_DIR,
+  type WorkspaceSandbox,
+} from './workspace';
 
 type Env = {
   Sandbox: DurableObjectNamespace;
@@ -191,6 +201,14 @@ app.use(
 const csrfGuard = csrf({ origin: (origin, c) => allowedOrigins(c.env as Env).includes(origin) });
 app.use('/sessions/agent', csrfGuard);
 app.use('/agents/main/*', csrfGuard);
+// The workspace file surface is cookie-reachable too. Its upload route reads
+// the raw body regardless of Content-Type, so without this mount a hostile
+// page could fire a no-preflight text/plain POST riding the victim's ambient
+// cookie. The legitimate clients are unaffected: the browser uploader sends
+// application/octet-stream (not form-like -> preflighted -> passes), GETs are
+// safe methods, and bearer-auth curl callers just need any non-form-like
+// Content-Type (documented in README).
+app.use('/workspace/*', csrfGuard);
 
 // GitHub webhook (POST /channels/github/webhook). Mounted BEFORE the API
 // key guard: GitHub can't send our bearer — the channel authenticates each
@@ -743,6 +761,120 @@ app.delete('/sessions/:id', apiKeyGuard(), async (c) => {
       .catch(() => {});
   }
   return c.json({ ok: true, ...(backupDeleted ? { backupDeleted } : {}) });
+});
+
+// ---------------------------------------------------------------------------
+// Workspace file surface: upload/download files in a session's /workspace.
+// User credential + session ownership — the exact /agents/main/* gate contract
+// (400 malformed id, 401 unknown/unowned, 403 someone else's) minus the JWT
+// refresh, which stays the chat gate's job. Both routes go through the file
+// API with base64 strings, the only binary-safe shape on the SDK's default
+// HTTP transport (streaming variants throw there — see workspace.ts).
+// ---------------------------------------------------------------------------
+app.use('/workspace/:sessionId/*', userTokenGuard(), async (c, next) => {
+  const verified = c.get('semantiusUser');
+  const id = c.req.param('sessionId');
+  if (!isValidSessionId(id)) return c.json({ error: 'invalid session id' }, 400);
+  const record = await readSession(c.env.STORE, id);
+  const owner = ((record?.session_context ?? {}) as Record<string, unknown>).user as
+    | { sub?: unknown; org?: unknown }
+    | undefined;
+  if (!owner || typeof owner.sub !== 'string') {
+    return c.json({ error: 'no such chat session — create it first, then open it by id' }, 401);
+  }
+  if (owner.sub !== verified.user.sub || owner.org !== verified.user.org) {
+    return c.json({ error: 'this session belongs to a different Semantius user' }, 403);
+  }
+  await next();
+});
+
+/** The skill-check route's sandbox resolution, shared by the workspace pair:
+ * stored bundle -> image-matched DO binding, absent (expired `agent:` key,
+ * 24 h TTL) -> the default binding, same fallback as the backup routes. */
+const sandboxForWorkspace = async (c: { env: Env; req: { param(name: string): string } }) => {
+  const id = c.req.param('sessionId');
+  const raw = await c.env.STORE.get(`agent:${id}`);
+  const binding = raw ? resolveSandboxBinding((JSON.parse(raw) as { baseImage: string }).baseImage) : 'Sandbox';
+  const namespace = (c.env as unknown as Record<string, DurableObjectNamespace>)[binding];
+  const sandbox = getSandbox(namespace, sandboxNameForSession(id));
+  return { id, namespace, sandbox: sandbox as unknown as WorkspaceSandbox, backupSandbox: sandbox as unknown as BackupSandbox };
+};
+
+// Upload: raw body (application/octet-stream), filename in the query param —
+// no multipart parsing, headers stay latin-1-clean for Unicode names, and the
+// non-form-like Content-Type is what makes the csrf mount above a no-op for
+// legitimate browser calls. POST, not PUT: the server may rename on collision,
+// so placement is not idempotent. Responds with the FINAL name.
+app.post('/workspace/:sessionId/files', async (c) => {
+  const requested = sanitizeFilename(c.req.query('filename') ?? '');
+  if (!requested) {
+    return c.json({ error: 'filename query param required: flat name, no path separators, max 128 chars' }, 422);
+  }
+  // Fast-fail on the declared size, then trust only the actual buffer.
+  const declared = Number(c.req.header('content-length'));
+  if (Number.isFinite(declared) && declared > UPLOAD_MAX_BYTES) {
+    return c.json({ error: `file too large (max ${UPLOAD_MAX_BYTES} bytes)` }, 413);
+  }
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
+  if (bytes.length === 0) return c.json({ error: 'empty body' }, 422);
+  if (bytes.length > UPLOAD_MAX_BYTES) {
+    return c.json({ error: `file too large (max ${UPLOAD_MAX_BYTES} bytes)` }, 413);
+  }
+
+  const { id, namespace, sandbox, backupSandbox } = await sandboxForWorkspace(c);
+  // Reconcile with the R2 backup BEFORE the uniqueness check: on a cold
+  // container exists() would miss every backed-up file, and the next turn's
+  // unsquashfs -f merge would then overwrite a fresh upload that shares a
+  // name with an archived one. Marker-guarded, never throws.
+  const record = await readSession(c.env.STORE, id);
+  await restoreWorkspaceBackup(backupSandbox, c.env, record);
+
+  const name = await uniqueWorkspaceName(sandbox, requested);
+  await sandbox.writeFile(`${WORKSPACE_DIR}/${name}`, bytesToBase64(bytes), { encoding: 'base64' });
+
+  // Durability: the container disk dies at sleepAfter, and the turn-end
+  // backup only covers submissions that touched the container — an
+  // out-of-turn upload must persist itself. Fire-and-forget; never throws.
+  c.executionCtx.waitUntil(persistWorkspaceBackup({ env: c.env, namespace, sessionId: id }));
+
+  return c.json({ ok: true, name, size: bytes.length, renamed: name !== requested });
+});
+
+// Download: GET /workspace/:sessionId/:name (flat names only — nested paths
+// are a follow-up). Always attachment + octet-stream + nosniff: these are
+// user- and agent-controlled bytes served from the backend origin, so inline
+// rendering (HTML/SVG) would be stored XSS.
+app.get('/workspace/:sessionId/:name', async (c) => {
+  const name = sanitizeFilename(c.req.param('name'));
+  if (!name) return c.json({ error: 'invalid file name' }, 400);
+
+  const { id, sandbox, backupSandbox } = await sandboxForWorkspace(c);
+  // Cold container: the file may live only in the R2 backup.
+  const record = await readSession(c.env.STORE, id);
+  await restoreWorkspaceBackup(backupSandbox, c.env, record);
+
+  const path = `${WORKSPACE_DIR}/${name}`;
+  if (!(await sandbox.exists(path)).exists) return c.json({ error: 'not found' }, 404);
+
+  // Size gate BEFORE the buffered base64 read (it materializes in DO and
+  // Worker memory). The one shell touch on this surface: single-quoted with
+  // embedded quotes escaped, same posture as the backup marker execs.
+  const stat = await sandbox.exec(`stat -c %s '${path.replace(/'/g, `'\\''`)}'`);
+  const size = Number((stat.stdout ?? '').trim());
+  if (Number.isFinite(size) && size > DOWNLOAD_MAX_BYTES) {
+    return c.json({ error: `file too large to download (max ${DOWNLOAD_MAX_BYTES} bytes)` }, 413);
+  }
+
+  const result = await sandbox.readFile(path, { encoding: 'base64' });
+  const bytes = result.encoding === 'base64' ? base64ToBytes(result.content) : new TextEncoder().encode(result.content);
+  return new Response(bytes, {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'content-length': String(bytes.length),
+      'x-content-type-options': 'nosniff',
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+    },
+  });
 });
 
 // Ownership gate for the chat surface. `userTokenGuard` (registered with it

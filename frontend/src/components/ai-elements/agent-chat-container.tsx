@@ -22,9 +22,12 @@
  * Session lifecycle: without `sessionId` the container mounts as a zero-cost
  * DRAFT — no request, nothing provisioned. The first submit creates the
  * session (`POST /sessions/agent`), the internal key flip remounts AgentChat
- * live, and the message is delivered exactly once. With `sessionId`, the
- * container attaches to that existing conversation instead (whether it is
- * yours to open is the server's call — a stranger's id answers 403).
+ * live, and the message is delivered exactly once. A draft UPLOAD (the
+ * composer's + button) also creates the session — without flipping, so the
+ * composer keeps its text — and the first submit then reuses that same
+ * session. With `sessionId`, the container attaches to that existing
+ * conversation instead (whether it is yours to open is the server's call — a
+ * stranger's id answers 403).
  *
  * KEY CONTRACT for hosts: `agentName` and `sessionId` are fixed for the life
  * of one instance — to navigate (new draft, open another session, switch
@@ -123,16 +126,47 @@ export function AgentChatContainer({
   const urlFor = useMemo(() => (id: string) => conversationUrl(id, baseUrl), [baseUrl]);
   const client = useConversationClient(auth, liveId, urlFor);
 
+  // ONE create per draft, whoever asks first: the first submit AND the
+  // composer's upload button both need a session, and a draft upload followed
+  // by the first message must land in the SAME session (otherwise the upload
+  // is orphaned in a session nobody ever opens). The shared promise is the
+  // dedup — concurrent callers await the same create, and a failed create
+  // clears the slot so the next attempt retries.
+  const pendingCreate = useRef<Promise<SessionCreateInfo>>();
+  function ensureSessionInfo(): Promise<SessionCreateInfo> {
+    if (!pendingCreate.current) {
+      pendingCreate.current = createAgentSession(auth, agentName, baseUrl).then(
+        (info) => {
+          if (alive.current) onSessionCreated?.(info.sessionId, info);
+          return info;
+        },
+        (err) => {
+          pendingCreate.current = undefined;
+          throw err;
+        },
+      );
+    }
+    return pendingCreate.current;
+  }
+
+  /** Upload-button path: a session id, created on first use. Deliberately NO
+   * key flip — the draft instance stays mounted, so the composer text (and
+   * the filename the upload is about to insert) survives. The flip happens on
+   * the first SEND, which reuses this same session via the shared promise. */
+  async function ensureUploadSession(): Promise<string> {
+    if (liveId) return liveId;
+    return (await ensureSessionInfo()).sessionId;
+  }
+
   async function createAndSend(text: string) {
     if (creating) return; // belt; braces = AgentChat locks the composer
     setCreating(true);
     setCreateError(undefined);
     try {
-      const info = await createAgentSession(auth, agentName, baseUrl);
+      const info = await ensureSessionInfo();
       if (!alive.current) return;
       setPendingMessage(text);
       setCreatedId(info.sessionId);
-      onSessionCreated?.(info.sessionId, info);
     } catch (err) {
       if (alive.current) {
         setCreateError(String(err));
@@ -168,6 +202,8 @@ export function AgentChatContainer({
         auth={auth}
         agentName={agentName}
         baseUrl={baseUrl}
+        sessionId={liveId}
+        onEnsureSession={ensureUploadSession}
         initialMessage={pendingMessage}
         onDraftSend={createAndSend}
         draftPending={creating}
