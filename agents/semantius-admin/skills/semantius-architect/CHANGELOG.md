@@ -8,6 +8,17 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Unreleased: catalog-surface elicitation moved to Stage 13; `description` / `license` become publish-only
+
+2026-07-23. Stage 1 asked the user for buyer-facing marketing copy (`tagline`, `description`), a `license`, and a `module_kind` before a single entity existed — yet the `hiring-starter` reference description literally enumerates the entity list ("postings, candidates, applications, interviews, and offers"), which cannot be written well before Stage 3, and `module_kind`'s defaults are defined by §3 role composition, which doesn't exist yet either. Separately, `description` and `license` are catalog-publication metadata that internal-only blueprints never need.
+
+1. **Stage 1 slims to identification input.** It captures the system, the domain category, the verbatim `initial_request`, `system_name`, and a rough one-line scope statement — working input that constrains the Stage 3 entity proposal and seeds the later `tagline` draft. No marketing-copy elicitation in Stage 1.
+2. **Stage 13 gains "Finalize the catalog surface".** `tagline` (still required — it feeds `modules.description`) is drafted from the Stage 1 scope line against the final entity list; `module_kind` (still required) is proposed as a derived default from §3 role composition (mostly `master` → `master`, mostly `embedded_master` → `starter`, else `domain`) instead of cold-asked.
+3. **`description` and `license` are publish-only.** A single Stage 13 publish question gates them: headed for the catalog → elicit both (`license` defaults `MIT`); internal-only → omit both keys entirely (no empty stubs, no lone key — the pre-save gate and audit checklist enforce the pair). Downstream was already tolerant: the analyst carries these keys "verbatim from blueprint or null when blueprint omitted", and the modeler parses `tagline` / `description` / `license` / `module_kind` as optional carry-only keys.
+4. **Mode D extraction updated.** Step D1 also extracts `description` / `license` when present; their presence means the prior file was publish-ready, so the rebuilt pass defaults the publish question to "publishing" with the extracted values as the draft.
+
+**Minor**: a frontmatter-key presence change (two previously-required keys become conditional) plus a stage-content reshuffle; no section renumbering, no column change, and downstream skills already handle absence, so non-breaking. Unlike the presentation-only entries below, this one DOES change the artifact shape and warrants the `5.2 → 5.3` bump at release. **Version bump deferred to the maintainer** per this file's convention.
+
 ## Unreleased: canonical entity order (entity_type tier, then A->Z)
 
 2026-07-04. Entity sequence in the blueprint had no formal rule (entities were listed in authoring/discovery order), so it never reliably matched what `semantius-analyst` carried into the spec or what `semantius-optimizer` reverse-engineers from live state (a cosmetic but real round-trip drift on `it-ops-starter`). The blueprint now declares the same canonical order the analyst and optimizer use.

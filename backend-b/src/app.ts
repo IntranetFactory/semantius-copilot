@@ -84,6 +84,9 @@ import {
   putContainerPointer,
   removeContainerPointer,
   ensureEgressPolicy,
+  extractSessionCookie,
+  fetchCopilotSettings,
+  SEMANTIUS_SESSION_BASE_URL,
   SESSION_CONTEXT_MAX_BYTES,
   resolveSandboxBinding,
   validateAgentBundle,
@@ -132,11 +135,13 @@ type Env = {
   CLOUDFLARE_API_TOKEN?: string;
   /**
    * Server-to-server key for POST /session/token — trades a better-auth session
-   * cookie for the Semantius JWT the sandbox acts with. Secret; absent = the
-   * cookie half of the chat gate answers 503 (bearers keep working).
+   * cookie for the Semantius JWT the sandbox acts with — and for POST
+   * /session/copilot, which reads the org's copilot settings at session
+   * creation. Secret; absent = the cookie half of the chat gate answers 503
+   * (bearers keep working).
    */
   JWT_EXCHANGE_API_KEY?: string;
-  /** Host serving /session and /session/token. A var; defaults to api.semantius.cloud. */
+  /** Host serving /session, /session/token and /session/copilot. A var; defaults to api.semantius.cloud. */
   SEMANTIUS_SESSION_BASE_URL?: string;
   /**
    * Comma-separated exact origins allowed to make CREDENTIALED browser calls
@@ -595,6 +600,47 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   } = sessionContext ?? {};
   sessionContext = { ...clientContext, user, semantius_jwt: jwt, semantius_org: org, semantius_user: user.sub };
 
+  // The ORG's copilot settings (POST /session/copilot), read ONCE — here — and
+  // persisted on the record below. Two things come out of it:
+  //
+  //   copilotEnabled: false   the org does not have copilot. Refuse to create
+  //                           the session at all; this is the org-level switch.
+  //   the firewall            `copilotFirewallEnabled: false` means the org runs
+  //                           unfirewalled, which becomes the `*` entry; when it
+  //                           is on, the org's allow list is stored as-is and
+  //                           UNIONED with the agent's proxy_whitelist at egress
+  //                           (resolveEgressPolicy). Merging at read time is why
+  //                           this is stored under its own key: the per-message
+  //                           self-heal rewrites the agent half from the bundle.
+  //
+  // Only the cookie path can ask: /session/copilot authenticates the USER by
+  // their session cookie (plus our exchange key), and a bearer caller has none
+  // to send. Bearer sessions — `pnpm mint-token`, the acceptance suite — keep
+  // their previous behavior: no org gate, no org allow list, the agent's
+  // proxy_whitelist alone. If the endpoint ever accepts a JWT, this is the one
+  // place that has to learn about it.
+  const cookie = extractSessionCookie({ get: (name: string) => c.req.header(name) ?? null });
+  let orgWhitelist: string[] = [];
+  let copilot: { enabled: true; firewallEnabled: boolean; fetchedAt: string } | undefined;
+  if (cookie) {
+    if (!c.env.JWT_EXCHANGE_API_KEY) {
+      return c.json({ error: 'server not configured: JWT_EXCHANGE_API_KEY is unset' }, 503);
+    }
+    const settings = await fetchCopilotSettings(cookie, {
+      baseUrl: c.env.SEMANTIUS_SESSION_BASE_URL || SEMANTIUS_SESSION_BASE_URL,
+      exchangeKey: c.env.JWT_EXCHANGE_API_KEY,
+    });
+    // 502, not 401: the caller's credential was already accepted by the guard —
+    // what failed is our own upstream hop, and telling the user to re-auth would
+    // send them chasing the wrong thing.
+    if (!settings.ok) return c.json({ error: `copilot settings unavailable: ${settings.error}` }, 502);
+    if (!settings.enabled) {
+      return c.json({ error: `copilot is not enabled for organization "${org}"` }, 403);
+    }
+    orgWhitelist = settings.firewallEnabled ? settings.allowlist : ['*'];
+    copilot = { enabled: true, firewallEnabled: settings.firewallEnabled, fetchedAt: new Date().toISOString() };
+  }
+
   // The id is MINTED HERE, from the identity just verified — `<org>-<sub>-<32
   // hex>` (core/src/config.js). The client no longer supplies one: it used to
   // generate the whole id in the browser, which made the tenant prefix
@@ -649,6 +695,12 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   // No `skills` on the record (derivable from agentdef:<agentName>@version).
   // No tenant field beside session_context either: the tenant IS
   // session_context.semantius_org, so there is exactly one place to look.
+  //
+  // `whitelist` and `org_whitelist` stay two fields, never one merged list: the
+  // per-message self-heal (ensureEgressPolicy) rewrites the agent half from the
+  // bundle and has no cookie to re-read the org half with, so a merged field
+  // would silently narrow back to the agent's list on the next turn.
+  // resolveEgressPolicy unions them at read time instead.
   await mergeSessionRecord(c.env.STORE, id, {
     backend: 'b',
     agentName: bundle.agentName,
@@ -656,6 +708,8 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
     containerId,
     createdAt: new Date().toISOString(),
     whitelist: bundle.proxyWhitelist ?? [],
+    org_whitelist: orgWhitelist,
+    ...(copilot ? { copilot } : {}),
     session_context: sessionContext,
   });
   await putContainerPointer(c.env.STORE, containerId, id);

@@ -126,12 +126,25 @@ try {
     ['missing instructions', (b) => ({ ...b, instructions: '' })],
     ['bad modelBaseUrl', (b) => ({ ...b, modelBaseUrl: 'ftp://nope' })],
     ['proxyWhitelist not an array', (b) => ({ ...b, proxyWhitelist: '*.semantius.ai' })],
-    ['proxyWhitelist bad glob', (b) => ({ ...b, proxyWhitelist: ['evil/*', 'ok.com'] })],
+    // `evil/*` is a LEGAL entry now (a URL pattern) — what stays illegal is an
+    // entry that could never be one glob: whitespace, control characters, an
+    // over-long value, or more entries than the cap.
+    ['proxyWhitelist glob with whitespace', (b) => ({ ...b, proxyWhitelist: ['evil .com', 'ok.com'] })],
+    ['proxyWhitelist glob with a quote', (b) => ({ ...b, proxyWhitelist: ['"ok.com"'] })],
+    ['proxyWhitelist glob too long', (b) => ({ ...b, proxyWhitelist: [`${'a'.repeat(250)}.example.com`] })],
     ['proxyWhitelist too many hosts', (b) => ({ ...b, proxyWhitelist: Array.from({ length: 33 }, (_, i) => `h${i}.com`) })],
   ]) {
     let rejected = false;
     try { validateAgentBundle(mutate(structuredClone(bundle))); } catch (err) { rejected = err instanceof BundleValidationError; }
     check(`hostile bundle rejected: ${label}`, rejected);
+  }
+
+  // 4b. …and the richer allow-list grammar the org's list also speaks is
+  //     ACCEPTED on the agent side, so one entry format works in both places.
+  for (const entry of ['abc.com', '*.abc.com', 'api.*.acme.io', 'https://xxx/abc.com/*', 'x.com/abc/*', '*']) {
+    let ok = true;
+    try { validateAgentBundle({ ...structuredClone(bundle), proxyWhitelist: [entry] }); } catch { ok = false; }
+    check(`proxyWhitelist accepts ${entry}`, ok);
   }
 
   // 5. clean base: skills dir starts empty (absent)

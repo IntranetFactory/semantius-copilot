@@ -5,8 +5,9 @@ import { cn } from "@/lib/utils";
 import type { ComponentProps } from "react";
 
 /** One clickable starter prompt on the welcome card. The text sent (or
- * prefilled, when `prefill` is true) is `prompt ?? display`. */
-export type WelcomePrompt = { display: string; prompt?: string; prefill?: boolean };
+ * prefilled, when `prefill` is true) is `prompt ?? display`. An optional `hint`
+ * is surfaced as a dismissible tip above the composer when it is clicked. */
+export type WelcomePrompt = { display: string; prompt?: string; prefill?: boolean; hint?: string };
 export type WelcomeSection = { title: string; subtitle?: string; prompts: WelcomePrompt[] };
 /** Per-agent welcome card (agent.jsonc `welcome`) — shown by the chat UI while
  * a conversation is empty. UI-only: never part of the AgentSeed. */
@@ -18,6 +19,10 @@ export type WelcomeCardProps = ComponentProps<"div"> & {
   onSend: (text: string) => void;
   /** Put text into the composer for editing (prompt with `prefill: true`). */
   onPrefill: (text: string) => void;
+  /** A clicked prompt's `hint`, to show above the composer. `key` is the
+   * prompt's `display` — the host scopes it (this card has no agent name, and
+   * must not: nothing app-specific travels with this folder). */
+  onHint?: (hint: string, key: string) => void;
 };
 
 /**
@@ -31,10 +36,15 @@ export const WelcomeCard = ({
   welcome,
   onSend,
   onPrefill,
+  onHint,
   ...props
 }: WelcomeCardProps) => {
   const handleClick = (prompt: WelcomePrompt) => {
     const text = prompt.prompt ?? prompt.display;
+    // Hint FIRST: a non-prefill click sends, and a send from a draft remounts
+    // this whole surface (the container's key flip). Raising the hint in the
+    // same batched event lets the host — which survives that remount — hold it.
+    if (prompt.hint) onHint?.(prompt.hint, prompt.display);
     if (prompt.prefill) onPrefill(text);
     else onSend(text);
   };

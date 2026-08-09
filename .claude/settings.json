@@ -18,7 +18,8 @@
       "Bash(pnpm --filter frontend build)",
       "WebFetch(domain:developers.cloudflare.com)",
       "PowerShell(npm view @cloudflare/sandbox versions --json)",
-      "PowerShell(npm view @cloudflare/sandbox version time --json 2>$null)"
+      "PowerShell(npm view @cloudflare/sandbox version time --json 2>$null)",
+      "PowerShell(pnpm bundle 2>&1)"
     ],
     "additionalDirectories": [
       "C:\\Users\\MARTIN~1\\AppData\\Local\\Temp\\claude\\pi-ai-patch\\dist\\api"

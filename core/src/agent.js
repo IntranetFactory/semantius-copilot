@@ -14,7 +14,8 @@
  * @property {string} instructions merged agent.jsonc instructions + INSTRUCTIONS.md
  * @property {string} [model]      normalized provider/model specifier
  * @property {string} [modelBaseUrl] OpenAI-compatible endpoint override
- * @property {string[]} [proxyWhitelist] egress allow list (host globs); DENY-ALL when absent/empty
+ * @property {string[]} [proxyWhitelist] egress allow list (host/URL globs), unioned at
+ *   egress with the org's own list; DENY-ALL when both are absent/empty
  * @property {AgentWelcome} [welcome] welcome card shown by the chat UI while a conversation is empty
  * @property {Record<string, Record<string, string>>} skills skillName -> (rel-path -> utf-8 content)
  */
@@ -23,12 +24,13 @@
  * Welcome card config: UI-only, rendered by the chat frontend in place of the
  * empty-conversation state. Clicking a prompt sends `prompt ?? display` as the
  * user's message — immediately unless `prefill` is true, which only puts the
- * text into the composer for editing.
+ * text into the composer for editing. A prompt's optional `hint` is shown as a
+ * dismissible tip above the composer when that prompt is clicked.
  *
  * @typedef {Object} AgentWelcome
  * @property {string} title
  * @property {string} [subtitle]
- * @property {Array<{ title: string, subtitle?: string, prompts: Array<{ display: string, prompt?: string, prefill?: boolean }> }>} [sections]
+ * @property {Array<{ title: string, subtitle?: string, prompts: Array<{ display: string, prompt?: string, prefill?: boolean, hint?: string }> }>} [sections]
  */
 
 import {
@@ -56,13 +58,29 @@ export const WELCOME_LIMITS = {
   maxSubtitleChars: 500,
   maxDisplayChars: 200,
   maxPromptChars: 4096,
+  maxHintChars: 500,
 };
 
-/** Exact host or `*.suffix` wildcard, lowercase (see isWhitelistedHost). */
-const WHITELIST_HOST_RE = /^(\*\.)?[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
+/**
+ * One allow-list entry: a hostname or a URL, with `*` allowed anywhere and any
+ * number of times (`abc.com`, `*.abc.com`, `api.*.acme.io`,
+ * `https://xxx/abc.com/*`, `x.com/abc/*`, or a bare `*` for "everything").
+ *
+ * The same grammar the ORG's copilotFirewallAllowlist uses, deliberately: the
+ * two lists are unioned at the egress seam (resolveEgressPolicy), so one
+ * matcher — matchesEgressPattern in egress.js — has to read both, and an author
+ * should not have to know which list an entry came from. Every entry that was
+ * valid under the old exact-host/`*.suffix` rule still is, and still matches
+ * exactly what it matched before.
+ *
+ * Shape only: printable ASCII minus whitespace, quotes, and backslash (a URL
+ * pattern legitimately carries `:/?#[]@!$&'()+,;=%~`). What an entry MEANS is
+ * decided at egress, not here.
+ */
+const WHITELIST_PATTERN_RE = /^[A-Za-z0-9*._~:/?#[\]@!$&'()+,;=%-]+$/;
 
 /**
- * Validate a proxy_whitelist / proxyWhitelist value: an array of host globs.
+ * Validate a proxy_whitelist / proxyWhitelist value: an array of egress globs.
  * DENY-ALL SEMANTICS live at the egress seam — this only checks shape.
  *
  * @param {unknown} raw
@@ -70,13 +88,15 @@ const WHITELIST_HOST_RE = /^(\*\.)?[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
  * @returns {string[]}
  */
 function validateWhitelist(raw, label) {
-  if (!Array.isArray(raw)) throw new BundleValidationError(`${label} must be an array of host globs`);
+  if (!Array.isArray(raw)) throw new BundleValidationError(`${label} must be an array of host/URL globs`);
   if (raw.length > AGENT_LIMITS.maxWhitelistHosts) {
     throw new BundleValidationError(`${label}: too many hosts (${raw.length} > ${AGENT_LIMITS.maxWhitelistHosts})`);
   }
   for (const host of raw) {
-    if (typeof host !== 'string' || host.length === 0 || host.length > 255 || !WHITELIST_HOST_RE.test(host)) {
-      throw new BundleValidationError(`${label}: invalid host glob: ${String(host)} (exact host or *.suffix, lowercase)`);
+    if (typeof host !== 'string' || host.length === 0 || host.length > 255 || !WHITELIST_PATTERN_RE.test(host)) {
+      throw new BundleValidationError(
+        `${label}: invalid glob: ${String(host)} (a hostname or URL, '*' allowed anywhere, no whitespace)`,
+      );
     }
   }
   return raw;
@@ -91,7 +111,7 @@ function validateWhitelist(raw, label) {
  * @returns {AgentWelcome}
  */
 function validateWelcome(raw, label) {
-  const { maxTitleChars, maxSubtitleChars, maxDisplayChars, maxPromptChars } = WELCOME_LIMITS;
+  const { maxTitleChars, maxSubtitleChars, maxDisplayChars, maxPromptChars, maxHintChars } = WELCOME_LIMITS;
   const checkString = (value, name, max, required) => {
     if (value === undefined && !required) return;
     if (typeof value !== 'string' || value.length === 0 || value.length > max) {
@@ -125,9 +145,10 @@ function validateWelcome(raw, label) {
         throw new BundleValidationError(`${label}: section "${section.title}" must have a non-empty prompts array`);
       }
       for (const rawPrompt of section.prompts) {
-        const prompt = checkObject(rawPrompt, 'prompt', ['display', 'prompt', 'prefill']);
+        const prompt = checkObject(rawPrompt, 'prompt', ['display', 'prompt', 'prefill', 'hint']);
         checkString(prompt.display, 'prompt display', maxDisplayChars, true);
         checkString(prompt.prompt, 'prompt text', maxPromptChars, false);
+        checkString(prompt.hint, 'prompt hint', maxHintChars, false);
         if (prompt.prefill !== undefined && typeof prompt.prefill !== 'boolean') {
           throw new BundleValidationError(`${label}: prompt prefill must be a boolean when present`);
         }

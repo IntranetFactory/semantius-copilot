@@ -20,6 +20,9 @@ export const API_KEY_STORAGE = 'semantius-copilot-api-key';
 export const TOKEN_STORAGE = 'semantius-copilot-jwt';
 /** The user's better-auth session cookie VALUE — COPILOT page only. */
 export const COOKIE_STORAGE = 'semantius-copilot-better-auth-cookie';
+/** Welcome-prompt hint ids the user has closed (JSON string array) — every
+ * chat page. Read/written only by hint-dismissal.ts. */
+export const HINTS_STORAGE = 'semantius-copilot-dismissed-hints';
 
 export const CHAT_PAGE = '/chat';
 export const AGENT_PAGE_PREFIX = '/agent';

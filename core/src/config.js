@@ -24,19 +24,27 @@ export const ECHO_HOST = 'postman-echo.com';
 export const SEMANTIUS_JWT_SENTINEL = '__sak__';
 
 /**
- * Semantius API hosts eligible for session-context JWT injection at egress
- * (see brokerEgress `policy.jwt`). Mirrors the semantius-admin agent's
- * proxy_whitelist: the JWT must never ride to non-Semantius hosts, so the
- * injection is scoped to these patterns independently of the (per-agent)
- * egress whitelist.
+ * Semantius API hosts eligible for session-context JWT injection at egress, and
+ * the scope of the sentinel->JWT swap (brokerEgress `policy.jwt` and
+ * `policy.secretHosts`). Mirrors the semantius-admin agent's proxy_whitelist.
+ *
+ * The JWT must never ride to non-Semantius hosts, so this list is deliberately
+ * INDEPENDENT of the egress allow list — and that independence became
+ * load-bearing once an ORG could contribute `*` to the allow list (a firewall
+ * turned off). Where the sandbox may talk and where its credential may travel
+ * are different questions; only this constant answers the second one.
  */
 export const SEMANTIUS_HOSTS = ['*.semantius.ai', 'www.semantius.com'];
 
-// The egress whitelist is PER AGENT since the proxy_whitelist refactor:
-// agent.jsonc `proxy_whitelist` -> bundle `proxyWhitelist` -> the `whitelist`
-// field of THE session record, resolved at egress via the container pointer
-// (resolveEgressPolicy). An agent without the property gets DENY-ALL egress.
-// See core/agent.schema.json and core/src/egress.js.
+// The egress allow list has TWO sources, unioned at read time by
+// resolveEgressPolicy:
+//   agent.jsonc `proxy_whitelist` -> bundle `proxyWhitelist` -> the `whitelist`
+//     field of THE session record (rewritten from the bundle every message);
+//   the org's copilot settings (POST /session/copilot at session creation) ->
+//     the `org_whitelist` field (written once; `['*']` when the org's firewall
+//     is off).
+// Both are resolved at egress via the container pointer. Neither present means
+// DENY-ALL egress. See core/agent.schema.json and core/src/egress.js.
 
 /** Default LLM settings; override per-worker with the LLM_PROVIDER /
  * LLM_MODEL / LLM_BASE_URL vars and the LLM_API_KEY secret. Provider

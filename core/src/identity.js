@@ -28,7 +28,13 @@
  * The bearer sent upstream is the BARE jwt: the `<org>:` prefix is this POC's
  * transport convention, never part of the credential. Callers persist the two
  * halves separately for the same reason (see the ingest route).
+ *
+ * A THIRD server-to-server call sits beside the exchange but is not part of
+ * authentication: `POST /session/copilot` (fetchCopilotSettings) reads the
+ * ORG's copilot settings — may this org use copilot at all, and what egress does
+ * it permit. It runs once at session creation, not on the auth path.
  */
+import { sanitizeAllowlist } from './egress.js';
 
 /** A Semantius org slug — the subdomain label, so DNS-label shaped. */
 export const SEMANTIUS_ORG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -182,6 +188,9 @@ export function semantiusSessionUrl(baseUrl = SEMANTIUS_SESSION_BASE_URL) {
 }
 export function semantiusSessionTokenUrl(baseUrl = SEMANTIUS_SESSION_BASE_URL) {
   return `${String(baseUrl).replace(/\/+$/, '')}/session/token`;
+}
+export function semantiusSessionCopilotUrl(baseUrl = SEMANTIUS_SESSION_BASE_URL) {
+  return `${String(baseUrl).replace(/\/+$/, '')}/session/copilot`;
 }
 
 /**
@@ -344,4 +353,77 @@ export async function verifySemantiusCookie(value, options, fetchImpl = fetch) {
   }
 
   return { ok: true, org, jwt, user: { org, ...projectClaims(claims), verifiedAt: new Date().toISOString() } };
+}
+
+/**
+ * Read the COPILOT SETTINGS of the organization a session is currently active
+ * in: `POST /session/copilot`, the same server-to-server shape as the token
+ * exchange above (`x-jwt-exchange-api-key` + the cookie in the body), answering
+ * the copilot columns of that org.
+ *
+ *   copilotEnabled            may this org use copilot at all? False is a hard
+ *                             stop — the caller refuses to create a session.
+ *   copilotFirewallEnabled    false means the org runs UNFIRewalled; the caller
+ *                             turns that into the `*` allow-list entry.
+ *   copilotFirewallAllowlist  the org's egress allow list, merged (union) with
+ *                             the agent's own proxy_whitelist at the egress
+ *                             seam. Hostnames or URLs, `*` anywhere — see
+ *                             matchesEgressPattern in egress.js.
+ *
+ * Called ONCE PER SESSION, at creation (backend-b/src/app.ts), and the answer is
+ * persisted on the session record. Not per request and not cached: unlike the
+ * exchanged JWT this is not a credential that expires, and re-reading it on
+ * every chat message would put a second upstream round-trip on the hot path for
+ * a value that only changes when an admin changes it.
+ *
+ * BOTH BOOLEANS DEFAULT TO THE RESTRICTIVE READING. A body that omits or
+ * mistypes `copilotEnabled` is not enabled, and one that omits
+ * `copilotFirewallEnabled` is firewalled — a malformed answer must never be the
+ * thing that opens egress up.
+ *
+ * Never throws, same as verifySemantiusCookie: every failure is a verdict.
+ *
+ * @param {unknown} value the raw session cookie value
+ * @param {{ baseUrl?: string, exchangeKey: string }} options
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<
+ *   | { ok: true, enabled: boolean, firewallEnabled: boolean, allowlist: string[] }
+ *   | { ok: false, error: string, status?: number }
+ * >}
+ */
+export async function fetchCopilotSettings(value, options, fetchImpl = fetch) {
+  const { baseUrl = SEMANTIUS_SESSION_BASE_URL, exchangeKey } = options ?? {};
+  if (typeof value !== 'string' || !SESSION_COOKIE_RE.test(value)) {
+    return { ok: false, error: 'malformed better-auth session cookie' };
+  }
+  if (typeof exchangeKey !== 'string' || !exchangeKey) {
+    return { ok: false, error: 'copilot settings unavailable: no JWT exchange key bound server-side' };
+  }
+
+  const url = semantiusSessionCopilotUrl(baseUrl);
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'x-jwt-exchange-api-key': exchangeKey },
+      body: JSON.stringify({ sessionCookie: value }),
+    });
+  } catch (err) {
+    return { ok: false, error: `copilot settings unreachable at ${url}: ${String(err).slice(0, 200)}` };
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    return { ok: false, status: response.status, error: `session/copilot ${response.status} from ${url}: ${detail.slice(0, 200)}` };
+  }
+
+  const body = await response.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return { ok: false, error: `copilot settings at ${url} returned no JSON object` };
+  }
+  return {
+    ok: true,
+    enabled: body.copilotEnabled === true,
+    firewallEnabled: body.copilotFirewallEnabled !== false,
+    allowlist: sanitizeAllowlist(body.copilotFirewallAllowlist),
+  };
 }

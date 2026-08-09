@@ -25,6 +25,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from './conversation';
+import { HintTip } from './hint';
 import { Message, MessageContent, MessageResponse } from './message';
 import {
   PromptInput,
@@ -64,6 +65,9 @@ export function AgentChat({
   onDraftSend,
   draftPending,
   onResponseSettled,
+  hint,
+  onHint,
+  onDismissHint,
   className,
   placeholder,
 }: {
@@ -95,6 +99,16 @@ export function AgentChat({
   /** Fires once each time a run settles (busy → idle) — e.g. for hosts to
    * refresh a session list whose server-side metadata trails the response. */
   onResponseSettled?: () => void;
+  /** The tip to show above the composer, or undefined for none. Held by the
+   * HOST, not here: a draft's welcome-card send remounts this component (the
+   * container's 'draft' → sessionId key flip), which would drop the tip the
+   * very click that raised it. */
+  hint?: string;
+  /** A clicked welcome prompt's `hint` (`key` = its `display`) — the host
+   * decides whether it was already dismissed and puts it back in via `hint`. */
+  onHint?: (hint: string, key: string) => void;
+  /** The tip's ✕. */
+  onDismissHint?: () => void;
   /** Merged into the conversation frame (e.g. to override the default height). */
   className?: string;
   /** Composer placeholder text. */
@@ -130,6 +144,18 @@ export function AgentChat({
     void agent.sendMessage(initialMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount
   }, []);
+
+  // The transcript is the `display: 'visible'` messages only. Flue also streams
+  // framework-authored system messages classified `diagnostic` (the resources /
+  // instructions / environment narration signals — "New skill available: …") and
+  // `hidden` (stream_interrupted/continued plumbing). Those are written FOR THE
+  // MODEL — it reads them as a <signal> block in a user turn — and belong in an
+  // activity panel, not in the chat bubble. Rendering them verbatim put a raw
+  // skill catalog at the end of an answer.
+  const messages = useMemo(
+    () => agent.messages.filter((message) => message.display === 'visible'),
+    [agent.messages],
+  );
 
   const chatStatus: ChatStatus = draft ? (draftPending ? 'submitted' : 'ready') : toChatStatus(agent.status);
   const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
@@ -201,7 +227,7 @@ export function AgentChat({
   // The strip also covers the handoff gap where the echo bubble is the only
   // content: status can blip through 'ready' between the live mount and the
   // initial send, and the chat must not look idle mid-handoff. Error drops it.
-  const showBusy = busy || (!!echo && agent.messages.length === 0 && chatStatus !== 'error');
+  const showBusy = busy || (!!echo && messages.length === 0 && chatStatus !== 'error');
 
   // A draft whose agent cannot be loaded is not a chat: a bad/expired
   // credential or an unknown agent name renders the error ALONE — no
@@ -223,7 +249,7 @@ export function AgentChat({
       <div className={cn('mt-2 flex h-[60vh] flex-col overflow-hidden rounded-lg border bg-background text-foreground', className)}>
         <Conversation>
           <ConversationContent>
-            {agent.messages.length === 0 ? (
+            {messages.length === 0 ? (
               echo ? (
                 <Message from="user">
                   <MessageContent>
@@ -239,6 +265,7 @@ export function AgentChat({
                   welcome={welcome}
                   onSend={draft ? draftSend : (text) => void agent.sendMessage(text)}
                   onPrefill={setInput}
+                  onHint={onHint}
                 />
               ) : (
                 <ConversationEmptyState
@@ -248,13 +275,17 @@ export function AgentChat({
                 />
               )
             ) : (
-              agent.messages.map((message) => <MessageView key={message.id} message={message} />)
+              messages.map((message) => <MessageView key={message.id} message={message} />)
             )}
           </ConversationContent>
           <ConversationScrollButton />
         </Conversation>
 
         <div className="border-t p-3">
+          {/* The clicked prompt's tip, above the transient strips: it outlives
+              them (it stays until dismissed, including once the welcome card
+              itself is gone), so the moving parts stay nearest the input. */}
+          {hint ? <HintTip onDismiss={onDismissHint}>{hint}</HintTip> : null}
           {/* Busy strip: visible for the whole run (submitted AND streaming), not
               just before the first token — during streaming the agent can spend
               long stretches in server-side tool calls with nothing new rendering,

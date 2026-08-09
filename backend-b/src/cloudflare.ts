@@ -4,11 +4,19 @@
  * Egress policy is PER SESSION, resolved in two hops: the handlers below
  * receive only ctx.containerId (idFromName is one-way), so they follow the
  * `container:<containerId> -> sessionId` pointer to THE session record
- * (`session:<sessionId>` — its egress_secrets/whitelist/session_context
- * fields) — see resolveEgressPolicy. Both handlers resolve per invocation (no caching
- * — isolate-global registry, plan §9.2a). NO POINTER OR RECORD (agent
- * without a proxy_whitelist still gets `whitelist: []`; expired TTL; deleted
- * session) MEANS DENY ALL — fail-closed.
+ * (`session:<sessionId>` — its egress_secrets/whitelist/org_whitelist/
+ * session_context fields) — see resolveEgressPolicy. Both handlers resolve per
+ * invocation (no caching — isolate-global registry, plan §9.2a). NO POINTER OR
+ * RECORD (agent without a proxy_whitelist still gets `whitelist: []`; expired
+ * TTL; deleted session) MEANS DENY ALL — fail-closed.
+ *
+ * The allow list the handlers gate on is the UNION of two sources, merged by
+ * resolveEgressPolicy: the AGENT's `proxy_whitelist` and the ORG's copilot
+ * allow list (`org_whitelist`, read from POST /session/copilot when the session
+ * was created). An org running with its copilot firewall off contributes `*`,
+ * so the union can legitimately match everything — which is why the JWT's own
+ * scope is a separate, narrow list (secretHosts / SEMANTIUS_HOSTS) rather than
+ * "whatever is reachable".
  *
  * Two egress handlers are registered on SemantiusCopilotSandbox, one per credential shape:
  *   - outboundByHost[ECHO_HOST] — ZERO-KNOWLEDGE injection from the session's
@@ -23,13 +31,14 @@
  *     (brokerEgress), gated by the same whitelist. The credential is the
  *     SESSION USER'S JWT (`session_context.semantius_jwt`, put there by the
  *     verified `<org>:<jwt>` token at ingest), never a shared org key: a
- *     whitelisted request has any SEMANTIUS_JWT_SENTINEL header swapped for
- *     that JWT, and requests to SEMANTIUS_HOSTS additionally get
- *     `Authorization: Bearer <jwt>` outright. A whitelisted request with no
- *     sentinel is forwarded as-is; anything to a non-whitelisted host is
- *     rejected — even carrying the sentinel (exfiltration guard). A session
- *     with no JWT (channel conversation, expired 24 h TTL) has NO credential
- *     to lend, so a sentinel-bearing request fails closed with 503.
+ *     whitelisted request TO A SEMANTIUS HOST has any SEMANTIUS_JWT_SENTINEL
+ *     header swapped for that JWT, and gets `Authorization: Bearer <jwt>`
+ *     outright. A whitelisted request with no sentinel is forwarded as-is;
+ *     anything to a non-whitelisted host is rejected — even carrying the
+ *     sentinel (exfiltration guard) — and so is a sentinel aimed at a host that
+ *     is reachable but outside SEMANTIUS_HOSTS. A session with no JWT (channel
+ *     conversation, expired 24 h TTL) has NO credential to lend, so a
+ *     sentinel-bearing request fails closed with 503.
  *
  * SemantiusCopilotSandbox also carries two non-egress responsibilities, both about cost
  * attribution: it stamps the session id as a container LABEL at start (the only
@@ -48,7 +57,7 @@ import { Sandbox, ContainerProxy } from '@cloudflare/sandbox';
 import {
   ECHO_HOST,
   injectAndForward,
-  isWhitelistedHost,
+  isAllowedEgressUrl,
   mergeExistingSessionRecord,
   readSession,
   resolveEgressPolicy,
@@ -407,8 +416,8 @@ export class SemantiusCopilotSandbox extends Sandbox<Env> {
 SemantiusCopilotSandbox.outboundByHost = {
   [ECHO_HOST]: async (request: Request, env: Env, ctx: { containerId: string }) => {
     const policy = await resolveEgressPolicy(env.STORE, ctx.containerId);
-    if (!policy || !isWhitelistedHost(new URL(request.url).hostname, policy.whitelist)) {
-      return new Response(JSON.stringify({ error: 'egress denied: host not in agent proxy_whitelist' }), {
+    if (!policy || !isAllowedEgressUrl(request.url, policy.whitelist)) {
+      return new Response(JSON.stringify({ error: 'egress denied: host not in the effective allow list' }), {
         status: 403,
         headers: { 'content-type': 'application/json' },
       });
@@ -424,6 +433,10 @@ SemantiusCopilotSandbox.outbound = async (request: Request, env: Env, ctx: { con
       ? policy.context.semantius_jwt
       : undefined;
   return brokerEgress(request, {
+    // The union of the agent's proxy_whitelist and the org's copilot allow list
+    // (resolveEgressPolicy). It can legitimately be ['*'] — an org running with
+    // its copilot firewall off — which is exactly why secretHosts below is a
+    // separate, narrow scope.
     whitelist: policy?.whitelist ?? [],
     // The sentinel the container carries as SEMANTIUS_JWT resolves to THIS
     // session's user JWT — there is no shared-key fallback: a session with no
@@ -431,6 +444,10 @@ SemantiusCopilotSandbox.outbound = async (request: Request, env: Env, ctx: { con
     // closed (503) instead of silently borrowing org-wide access.
     sentinel: SEMANTIUS_JWT_SENTINEL,
     secret: jwt,
+    // WHERE that credential may travel, independent of where the sandbox may
+    // talk. Widening egress must never widen the JWT's reach: a sentinel aimed
+    // at a merely-reachable host is a 403, not a swap.
+    secretHosts: SEMANTIUS_HOSTS,
     ...(jwt ? { jwt: { token: jwt, hosts: SEMANTIUS_HOSTS } } : {}),
   });
 };

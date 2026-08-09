@@ -458,6 +458,16 @@ async function main() {
       Array.isArray(ctxRecord.json?.json?.whitelist),
     JSON.stringify(ctxRecord.json?.json ?? ctxRecord.json).slice(0, 140),
   );
+  // A BEARER-created session gets no org contribution: POST /session/copilot
+  // authenticates by session cookie and a bearer caller has none to send, so the
+  // agent's proxy_whitelist stands alone. The field must still be an empty
+  // array, never absent-and-guessed or silently `['*']`.
+  check(
+    'context',
+    'a bearer-created session gets an EMPTY org allow list (never a wildcard)',
+    JSON.stringify(ctxRecord.json?.json?.org_whitelist ?? []) === '[]' && ctxRecord.json?.json?.copilot === undefined,
+    JSON.stringify(ctxRecord.json?.json?.org_whitelist),
+  );
   // No server-generated credential of any shape on a fresh record: the old
   // single `bearer` field is gone, and `egress_secrets` stays absent until
   // the secret-retrieval layer (TODO in app.ts's ingest route) populates it.
@@ -602,6 +612,38 @@ async function main() {
       'the ownership gate still applies to a cookie-created session',
       bearerOnCookieSession.status === 200 || bearerOnCookieSession.status === 403,
       `status ${bearerOnCookieSession.status} (200 only if the token and the cookie are the same user)`,
+    );
+
+    // The ORG's copilot settings (POST /session/copilot) are read once, HERE,
+    // at creation — the only path that can, since the endpoint authenticates by
+    // session cookie. Two fields land on the record and both must be present on
+    // a cookie session, or the org half of the egress policy silently vanishes:
+    //   copilot        the settings snapshot (a session only exists if enabled)
+    //   org_whitelist  the org's contribution, `['*']` when its firewall is off
+    // They stay SEPARATE from `whitelist` (the agent's list) because the
+    // per-message self-heal rewrites that one from the bundle; the union happens
+    // at read time in resolveEgressPolicy.
+    const copilotRecord = await get(B_URL, `/admin/collections/kv/record?id=session:${cookieIngest.id}`);
+    const copilotStored = copilotRecord.json?.json ?? {};
+    check(
+      'cookie',
+      'a cookie-created session records the org copilot settings',
+      copilotStored.copilot?.enabled === true && typeof copilotStored.copilot?.firewallEnabled === 'boolean',
+      JSON.stringify(copilotStored.copilot ?? null),
+    );
+    check(
+      'cookie',
+      'the org allow list is stored beside the agent one, not merged into it',
+      Array.isArray(copilotStored.org_whitelist) && Array.isArray(copilotStored.whitelist),
+      `org_whitelist=${JSON.stringify(copilotStored.org_whitelist)} whitelist=${JSON.stringify(copilotStored.whitelist)}`,
+    );
+    check(
+      'cookie',
+      'a firewall-off org contributes exactly ["*"], a firewalled one never does',
+      copilotStored.copilot?.firewallEnabled === false
+        ? JSON.stringify(copilotStored.org_whitelist) === '["*"]'
+        : !(copilotStored.org_whitelist ?? []).includes('*'),
+      `firewallEnabled=${copilotStored.copilot?.firewallEnabled} org_whitelist=${JSON.stringify(copilotStored.org_whitelist)}`,
     );
 
     await del(B_URL, cookieIngest.id);

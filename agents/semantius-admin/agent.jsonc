@@ -5,13 +5,18 @@
   // window — this agent needs well over 300k).
   "model": "deepseek/deepseek-v4-flash-0731", // "xiaomi/mimo-v2.5-pro",
   "proxy_whitelist": [
+    "registry.npmjs.org",  // for  dependencies
+    "registry.npmjs.org",  // for  dependencies
     "*.semantius.ai",
     "*.semantius.io",
     "www.semantius.com"
   ],
   // Shown by the chat UI while a conversation is empty (UI-only, never reaches
   // the model). Clicking a prompt sends `prompt ?? display` immediately, unless
-  // `prefill: true` — then it only fills the composer for editing.
+  // `prefill: true` — then it only fills the composer for editing. A prompt's
+  // optional `hint` shows as a dismissible tip above the composer when it is
+  // clicked; closing it is remembered per agent + `display` in the browser, so
+  // re-wording a `display` gives its tip one more airing.
   "welcome": {
     "title": "Welcome to the Semantius Agent",
     "subtitle": "I help you with everything on your Semantius data platform: working with your data, running analytics, managing the data model, and designing, building, and deploying whole business systems.",
@@ -23,7 +28,8 @@
           {
             "display": "Design a data model for a new business system",
             "prompt": "I want to design a new business system on Semantius. Interview me about the domain, then propose a semantic blueprint with entities, fields, relationships, and permissions.",
-            "prefill": true
+            "prefill": true,
+            "hint": "A few sentences about your domain is enough to start — name the things you track and who works with them, and I'll interview you for the rest."
           },
           { "display": "Audit my existing data model" },
           { "display": "What can you build for me?" }

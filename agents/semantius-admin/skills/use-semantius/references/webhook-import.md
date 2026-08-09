@@ -2,6 +2,8 @@
 
 When importing many records from a CSV, Excel, or TXT file, use the webhook-based import rather than calling `create_*` tools one record at a time.
 
+> **Agent-driven import of a local CSV file?** Prefer the `semantius-importer` skill: it introspects the file's schema (`utils/get_csvschema`), creates or reuses the entity, and bulk-loads in batches via `postgrestRequest`. This reference covers the signed-webhook path — external systems pushing rows to a receiver endpoint, and imports that should flow through webhook receiver logs.
+
 ---
 
 ## Choose Your Approach

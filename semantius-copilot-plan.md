@@ -75,10 +75,14 @@ are added to schema + `validateAgentConfig` together):
   as-is, else `openrouter/` is prepended. Missing → the backend's env default (§ LLM).
 - `model_base_url` — optional http(s) URL; per-agent transport override (auth stays the
   worker-wide `LLM_API_KEY`).
-- `proxy_whitelist` — optional array of egress host globs (exact host or `*.suffix`
-  subdomain wildcard, ≤32 entries). **DENY-ALL WHEN ABSENT**: an agent without it can make
-  no outbound request from its sandbox at all (§7). There is no global whitelist anymore —
-  the former `DOMAIN_WHITELIST` constant is gone.
+- `proxy_whitelist` — optional array of egress globs: a hostname or a URL, `*` allowed
+  anywhere (`abc.com`, `*.suffix`, `api.*.acme.io`, `https://x/abc/*`), ≤32 entries.
+  **DENY-ALL WHEN ABSENT**: an agent without it can make no outbound request from its
+  sandbox at all (§7), *unless its org contributes one* — since the copilot-settings
+  endpoint landed, this list is unioned at egress with the ORG's own allow list
+  (`POST /session/copilot` → the session record's `org_whitelist`; an org running with its
+  copilot firewall off contributes `*`). There is no global whitelist anymore — the former
+  `DOMAIN_WHITELIST` constant is gone.
 
 Skills live in `agents/<name>/skills/<skill>/` (0..16; each needs a `SKILL.md` whose
 frontmatter `name` matches the skill dir name). `hoth-trip-planner` has one skill,
@@ -228,6 +232,14 @@ agent reached the container: image-baked + build-time meta (A) vs runtime-recons
   single-agent backend, so its list is baked at build time from the generated meta into
   `cloudflare.ts`. The old global `DOMAIN_WHITELIST` is removed; `brokerEgress` takes the resolved
   per-agent list.
+- **Org egress allow list (later addition):** the per-agent list is no longer the only source. At
+  session creation the ingest route reads the org's copilot settings (`POST /session/copilot`, cookie
+  path only) and stores them as `org_whitelist` on the session record; `resolveEgressPolicy` returns
+  the UNION of that and the agent's `whitelist`. Kept as two fields because the per-message self-heal
+  rewrites the agent half from the bundle and cannot re-read the org half. `copilotEnabled: false`
+  refuses session creation outright (403). Because a firewall-off org contributes `*`, the
+  sentinel→JWT swap gained its own narrow scope (`secretHosts` = `SEMANTIUS_HOSTS`): reachability and
+  credential scope are now separate questions.
 - `interceptHttps` is **default `true`** (echo host is HTTPS) — no opt-in needed.
 - **Egress deny-by-default:** set **`enableInternet: false`** **and** **`allowedHosts = [echo host]`**
   (an allowlist becomes deny-by-default). `enableInternet:false` leaves only ports 80/443/DNS open and

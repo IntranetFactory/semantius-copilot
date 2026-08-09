@@ -79,8 +79,8 @@ Understanding which layer you're working with determines which tools to use:
 **Writing shell scripts or chaining CLI commands?**
 → Read `references/cli-usage.md`
 
-**Importing a CSV or Excel file?**
-→ Read `references/webhook-import.md`
+**Importing a CSV file?**
+→ The `semantius-importer` skill is the front door: it introspects the file (`utils/get_csvschema`), creates or reuses the entity, and bulk-loads in batches. `references/webhook-import.md` covers the signed-webhook path (external systems pushing rows).
 
 **Sending a transactional email?**
 → Layer 2 utility, use `crud sendEmail`, see `references/crud-tools.md` § "sendEmail"

@@ -222,7 +222,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "instructions": "…",                // agent.jsonc instructions + INSTRUCTIONS.md (appended)
   "model": "openrouter/…",            // optional, pre-normalized (see LLM configuration)
   "modelBaseUrl": "https://…",        // optional, from model_base_url
-  "proxyWhitelist": ["postman-echo.com"],  // optional — DENY-ALL egress when absent
+  "proxyWhitelist": ["postman-echo.com"],  // optional — hosts/URLs, `*` anywhere; unioned with the org's list at egress
   "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
 }
@@ -297,6 +297,24 @@ when discovery sees the files — which with the bundle view it reliably does �
 every submission of such a session then
 failed with a generic `internal_error` (root-caused via `wrangler tail`
 2026-07-26; backend B was undriveable until the patch).
+
+**Keep SKILL.md descriptions under 1024 chars.** The mounted definition carries
+the sliced text, and Flue's `resources` narration signal (below) prints THAT
+copy — a longer description shows up chopped mid-word wherever the mount is
+what the model reads. Check with
+`parseSkillFrontmatter(...).description.length` per skill; as of 2026-08-08
+`semantius-admin`, `-analyst`, `-architect`, `-modeler` and `-optimizer` still
+exceed it (1049–1499).
+
+**Framework narration is not chat.** When a render's declared skill/tool/agent
+set differs from the last-narrated one — e.g. deploying a definition with a new
+skill mid-session — Flue appends a `resources` signal ("New skill available: …
+All available skills: …", `renderResourceSignalBody` in the runtime). It is
+written for the MODEL (delivered as a `<signal>` block in a user turn) and is
+classified `role:'system'`, `purpose:'advisory'`, `display:'diagnostic'`. The
+chat surface therefore renders only `display: 'visible'` messages
+(`agent-chat.tsx`); the admin data browser's `ConversationView` deliberately
+shows all of them — that IS the diagnostics panel.
 
 Observability: the backend logs every llm span to Braintrust (exact system
 prompt in span metadata `flue.system_prompt`, messages as the span input) and
@@ -477,6 +495,20 @@ x-jwt-exchange-api-key: <JWT_EXCHANGE_API_KEY>
 → 200 {"token":"<jwt>"}
 ```
 
+A **third** call on the same host is not part of authentication and runs only when a
+session is created (`POST /sessions/agent`, not on the auth path):
+
+```
+POST /session/copilot                  ← the ORG's copilot settings, once per session
+x-jwt-exchange-api-key: <JWT_EXCHANGE_API_KEY>
+{"sessionCookie":"<value>"}
+→ 200 {"copilotEnabled":true,"copilotFirewallEnabled":true,"copilotFirewallAllowlist":["example.com"]}
+```
+
+`copilotEnabled: false` makes session creation answer **403**; the firewall fields become
+the session's `org_whitelist`, unioned with the agent's list at egress. Full semantics in
+[Egress](#egress-agent-proxy_whitelist--org-allow-list) below.
+
 Notes that matter:
 
 - **`user` already is the projected claim set** this repo keeps (`org`, `sub`, `name`,
@@ -592,42 +624,149 @@ The chat UI shows a per-agent welcome card while a conversation is empty, config
 the optional `welcome` key in `agent.jsonc` (validated in `core/src/agent.js`
 `validateWelcome`, mirrored in `core/agent.schema.json`): a `title`, optional
 `subtitle`, and `sections[]` (each with `title`, optional `subtitle`, and `prompts[]`).
-Each prompt has a `display` label, an optional fuller `prompt`, and an optional
-`prefill` flag. Semantics, implemented in ONE place —
+Each prompt has a `display` label, an optional fuller `prompt`, an optional `prefill`
+flag, and an optional `hint`. Semantics, implemented in ONE place —
 `frontend/src/components/ai-elements/welcome.tsx` (`WelcomeCard`), rendered by the
 shared `AgentChat` so `/chat`, `/copilot` and `/agent/<name>` cannot drift:
 
 - Clicking a prompt uses `prompt ?? display` as the text.
 - `prefill` absent/`false`: the text is **sent immediately** as the user's message.
 - `prefill: true`: the text only **fills the composer** for editing before sending.
+- `hint` set: clicking also shows that text in a **dismissible amber tip above the
+  composer** (`HintTip`, `hint.tsx`). The tip outlives the welcome card — it stays
+  through the conversation until the user closes it with the ✕.
+
+**Where a closed tip is remembered.** The ✕ persists a dismissal under the id
+`` `<agentName>:<display>` `` — the prompt's required, user-visible `display` is its
+natural key, so there is no extra config field and no hash to maintain (re-wording a
+`display` therefore gives its tip one more airing, and two prompts sharing a `display`
+share one dismissal). Storage is deliberately **injected**, not chosen by the chat
+surface: `ai-elements/hint.tsx` exports only the two-method `HintStore` interface, and
+this app passes `localHintStore` (`frontend/src/hint-dismissal.ts`, a JSON string array
+under `semantius-copilot-dismissed-hints`) into `AgentChatContainer` from `AgentApp` and
+`ChatPage`. That keeps the folder's app-agnostic contract (no localStorage keys travel
+with it — see `session.ts`/`pages.ts`) and makes **moving dismissals to a server-side API
+a rewrite of `hint-dismissal.ts` alone** — no component or prop changes. Without a
+`hintStore` the tips still work, closing only for the life of the mount.
+
+The tip's state lives in `AgentChatContainer`, not `AgentChat`: a draft's non-`prefill`
+welcome click both raises the tip and sends, and that send flips the `'draft'` → session
+id key that **remounts** `AgentChat` — state held there would die on the click that set it.
 
 Layout: sections in a 2-column grid (1 column on narrow screens) with **no cap on the
 number of sections or prompts** — the UI never truncates; only string lengths are
-validated (title/display ≤200 chars, subtitle ≤500, prompt ≤4096, `WELCOME_LIMITS`).
+validated (title/display ≤200 chars, subtitle ≤500, hint ≤500, prompt ≤4096,
+`WELCOME_LIMITS`).
 The field is UI-only: it rides the bundle (and its version hash) and reaches the UI via
 `GET /agents/:name/meta`, but never reaches the model — `AgentChat` strips it before
 attaching the seed to a send (`seedFromMeta`), so it is deliberately NOT part of the
 `AgentSeed`. An agent without `welcome` gets the generic empty state.
 
-## Egress (per-agent proxy_whitelist)
+## Egress (agent `proxy_whitelist` ∪ org allow list)
 
-Egress from an agent's sandbox is governed by the agent's own `proxy_whitelist` in
-`agent.jsonc` — an array of host globs (`"www.semantius.com"` exact, `"*.semantius.ai"`
-subdomains only). **Deny-all when absent**: an agent without the property (or with an
-empty list) can make no outbound request at all. There is no global whitelist anymore.
-The list rides the agent bundle as `proxyWhitelist`; the ingest route writes it into
+Egress from an agent's sandbox is governed by **two allow lists, unioned**:
+
+| source | where it comes from | record field | lifetime |
+| --- | --- | --- | --- |
+| the **agent's** `proxy_whitelist` | `agent.jsonc` → bundle `proxyWhitelist` | `whitelist` | rewritten from the bundle every message (self-heal) |
+| the **org's** copilot allow list | `POST /session/copilot` at session creation | `org_whitelist` | written once, never touched again |
+
+**Deny-all when both are absent**: an agent without the property (or with an empty list)
+whose org contributes nothing can make no outbound request at all. There is no global
+whitelist anymore.
+
+The agent's list rides the bundle as `proxyWhitelist`; the ingest route writes it into
 **THE session record** — `session:<sessionId>`, the single mutable per-session document
-(browse meta, `egress_secrets`, `whitelist`, and the four data channels) — plus the
-`container:<containerId> → sessionId` pointer, the only containerId-keyed KV entry
-(outbound handlers receive only `ctx.containerId`, and `idFromName` is one-way; every
-other code path *computes* the container id — the record's `containerId` field is
-stored for visibility, not read by code). Both
-outbound handlers in `backend-b/src/cloudflare.ts` resolve pointer → session record per
-invocation; the agent initializer self-heals the egress fields each message
-(write-on-change only — a deleted session stays deny-all). The sentinel→credential swap
-(`brokerEgress`) and the zero-knowledge `egress_secrets` injection both sit behind the
-whitelist gate; a request to a non-whitelisted host is rejected with 403 even when it
-carries the credential sentinel.
+(browse meta, `egress_secrets`, `whitelist`, `org_whitelist`, `copilot`, and the four data
+channels) — plus the `container:<containerId> → sessionId` pointer, the only
+containerId-keyed KV entry (outbound handlers receive only `ctx.containerId`, and
+`idFromName` is one-way; every other code path *computes* the container id — the record's
+`containerId` field is stored for visibility, not read by code). Both outbound handlers in
+`backend-b/src/cloudflare.ts` resolve pointer → session record per invocation; the agent
+initializer self-heals the egress fields each message (write-on-change only — a deleted
+session stays deny-all). The sentinel→credential swap (`brokerEgress`) and the
+zero-knowledge `egress_secrets` injection both sit behind the whitelist gate; a request to
+a non-allowed host is rejected with 403 even when it carries the credential sentinel.
+
+**Why two fields and not one merged list.** The self-heal rewrites the agent half from the
+bundle on every message, and it has no session cookie to re-read the org half with. A
+pre-merged field would therefore lose the org's entries on turn two. The union happens at
+*read* time instead, in [`resolveEgressPolicy`](core/src/egress.js) — one merge point,
+no write-site coordination, nothing to flap.
+
+### Entry format
+
+One grammar for both lists, so an author never has to know which list an entry came from
+([`matchesEgressPattern`](core/src/egress.js)). An entry is a **hostname or a URL**, and
+`*` may appear **any number of times, anywhere**:
+
+| entry | matched against | matches | does not match |
+| --- | --- | --- | --- |
+| `abc.com` | hostname (port and path ignored) | `https://abc.com/any/path` | `https://evil.com` |
+| `*.semantius.ai` | hostname | `tests.semantius.ai` | the apex `semantius.ai`, `evil-semantius.ai`, `tests.semantius.ai.evil.com` |
+| `api.*.acme.io` | hostname | `api.eu.acme.io` | `api.acme.io.evil.com` |
+| `https://xxx/abc.com/*` | request URL | `https://xxx/abc.com/deep` | `http://xxx/abc.com/deep` (scheme is pinned) |
+| `x.com/abc/*` | request URL, either scheme | `https://x.com/abc/1`, `http://x.com/abc/1` | `https://x.com/other` |
+| `*` | everything | anything | — |
+
+Hostname entries ignore the port; URL entries have their default port normalized away and
+their **paths compared case-sensitively** (an allow list must not over-match). A URL entry
+matches with or without the request's query string, so `https://api.acme.io/v1/*` covers
+`…/v1/x?q=1`, while `https://api.acme.io/s?q=*` can pin one.
+
+The org's list is sanitized on arrival (`sanitizeAllowlist`): non-strings, blanks,
+whitespace-bearing entries, values over 255 chars, and anything past 64 entries are
+**dropped, not fatal** — a malformed row upstream can only ever narrow egress, never widen
+it and never fail a session. The agent's list is validated at bundle time instead
+(`core/src/agent.js`, max 32 entries) so a bad glob is a deploy error.
+
+### The org's copilot settings
+
+`POST /session/copilot` is the same server-to-server shape as the token exchange —
+`x-jwt-exchange-api-key` plus the cookie in the body — and answers the copilot columns of
+the session's **active organization**:
+
+```bash
+curl -X POST https://<slug>.semantius.cloud/session/copilot \
+  -H "x-jwt-exchange-api-key: $JWT_EXCHANGE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"sessionCookie": "<token>.<signature>"}'
+# {"copilotEnabled":true,"copilotFirewallEnabled":true,"copilotFirewallAllowlist":["example.com","api.acme.io"]}
+```
+
+- **`copilotEnabled: false` → `POST /sessions/agent` answers 403** and no session is
+  created. This is the org-level switch, checked at creation only: existing conversations
+  run out their 24 h TTL.
+- **`copilotFirewallEnabled: false`** means the org runs unfirewalled, which is stored as
+  the single entry `["*"]`. Note the ceiling: `enableInternet = false` on the Sandbox class
+  still stands, so `*` means *all HTTP/HTTPS through the interceptor*, not raw sockets or
+  other ports.
+- **`copilotFirewallEnabled: true`** stores the sanitized `copilotFirewallAllowlist`.
+
+Both booleans **default to the restrictive reading** — a body that omits or mistypes
+`copilotEnabled` is not enabled, one that omits `copilotFirewallEnabled` is firewalled. A
+malformed answer must never be the thing that opens egress up.
+
+Read **once, at session creation**, and persisted (`fetchCopilotSettings`, called from the
+ingest route). Not per request and not cached: unlike the exchanged JWT this is not a
+credential that expires, and a second upstream round-trip on every chat message would buy
+nothing but latency.
+
+**Only the cookie path can ask.** `/session/copilot` authenticates the user by their
+session cookie, and a bearer caller (`Authorization: Bearer <org>:<jwt>` — `pnpm
+mint-token`, the acceptance suite) has none to send. Bearer-created sessions therefore get
+`org_whitelist: []` and no org gate: the agent's `proxy_whitelist` stands alone, exactly as
+before this endpoint existed. The `if (cookie)` branch in the ingest route is the single
+seam if the endpoint ever accepts a JWT.
+
+### Reachability is not credential scope
+
+`brokerEgress` takes a **`secretHosts`** scope (`SEMANTIUS_HOSTS`) that bounds the
+sentinel→JWT swap independently of the allow list, and that separation is load-bearing now
+that an allow list can legitimately be `["*"]`. An org may widen *where the sandbox can
+talk*; it must never widen *where the user's live Semantius JWT can travel*. A
+sentinel-bearing request to a host that is merely reachable is **403** — never forwarded
+with the placeholder, never with the real key. The same host without a sentinel is fine.
 
 ### `egress_secrets` — per-session downstream credentials
 
@@ -1392,7 +1531,7 @@ until secret retrieval exists; the injected-credential assertion returns with it
 now that the route mints them — plus fail-closed egress after teardown), session-id shape
 (server-minted, tenant-prefixed, sandbox-safe), plus clean-base, zero-skill-agent,
 per-agent-egress deny-all, session_context / session record (THE `session:<id>` record
-carries JWT context + whitelist + containerId in one document — and no server-generated
+carries JWT context + whitelist + org_whitelist + containerId in one document — and no server-generated
 credential, `egress_secrets` stays absent until secret retrieval exists — the
 `container:<containerId>` pointer maps back to the session id, 422 on
 non-object/oversize bodies, record + pointer removed on DELETE),

@@ -37,6 +37,7 @@ import {
   type ChatAuth,
   type SessionCreateInfo,
 } from './components/ai-elements/session';
+import { localHintStore } from './hint-dismissal';
 
 export type ChatPageProps = {
   /** Page heading. */
@@ -201,6 +202,7 @@ export function ChatPage({ title, auth, credential, initialSessionId }: ChatPage
           sessionId={explicitSessionId}
           onSessionCreated={onSessionCreated}
           onError={(err) => setDetail(`session create failed — ${String(err)}`)}
+          hintStore={localHintStore}
         />
       ) : null}
     </main>

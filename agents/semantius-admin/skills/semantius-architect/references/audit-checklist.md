@@ -10,7 +10,8 @@
 - Check the reference file for any other platform constraints added since this skill was written
 
 **Front-matter (YAML block)**
-- Required keys present: `artifact`, `version`, `blueprint_version`, `system_name`, `system_slug`, `tagline`, `description`, `license`, `naming_mode` (greenfield only), `module_kind`, `persona`, `created_at`, `entities`, `initial_request`
+- Required keys present: `artifact`, `version`, `blueprint_version`, `system_name`, `system_slug`, `tagline`, `naming_mode` (greenfield only), `module_kind`, `persona`, `created_at`, `entities`, `initial_request`
+- Publish-only keys: `description` and `license` travel together — both present on a publish-ready blueprint, both absent on an internal-only one. Absence is not a finding; an empty stub (`description: ""`) or a lone one of the pair is 🟡
 - Optional keys: `icon_name`, `domain`, `departments`, `industries`, `related_modules` (advisory; omit when not applicable; do not flag absence)
 - `artifact` is `semantic-blueprint`
 - 🔴 `version` is present, a quoted string in the form `"MAJOR.MINOR"` (e.g. `"1.0"`, `"2.4"`). **Major comparison gates the audit:** same major as `CURRENT_VERSION` → audit normally; older major (or missing, treated as `0`) → refuse to audit and route to archived-knowledge mode (re-author at current major, or reference only — see "How files are routed by version" in the resident SKILL.md); newer major → error and stop.

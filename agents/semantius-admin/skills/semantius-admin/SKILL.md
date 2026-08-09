@@ -678,6 +678,7 @@ Every phrasing maps to one of the six request types in Step 0 (whose table carri
 - "Set up X from scratch" is an end-to-end build unless a catalog blueprint named X exists, in which case it is a clone.
 - "Audit this file" routes by artifact type to the architect's or analyst's Audit mode (it does not go through Step 6).
 - Status, backup, snapshot, and list are admin-only (Step 5).
+- Importing a data file (CSV) into a single entity, existing or new, is not admin territory and not a pipeline deploy: route to the `semantius-importer` skill.
 
 When a phrasing is ambiguous, ask one clarifying question (Step 0); do not guess.
 

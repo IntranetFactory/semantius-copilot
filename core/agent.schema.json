@@ -28,15 +28,16 @@
       "maxItems": 32,
       "items": {
         "type": "string",
-        "pattern": "^(\\*\\.)?[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+        "maxLength": 255,
+        "pattern": "^[A-Za-z0-9*._~:/?#\\[\\]@!$&'()+,;=%-]+$"
       },
-      "description": "Egress allow list for this agent's sandbox: exact hosts ('www.semantius.com') or '*.suffix' subdomain wildcards ('*.semantius.ai' — subdomains only, not the bare apex). DENY-ALL WHEN ABSENT: an agent without this property (or with an empty list) can make no outbound requests from its sandbox at all."
+      "description": "Egress allow list for this agent's sandbox. Each entry is a hostname ('www.semantius.com') or a URL ('https://api.acme.io/v1/*'), and may carry one or more '*' at any position — '*.semantius.ai' matches subdomains but not the bare apex; a bare '*' matches everything. Entries WITHOUT a path match the request's hostname only (port ignored); entries with a scheme and/or path match the request URL, and their paths are case-sensitive. This list is UNIONED at egress with the organization's own copilot allow list, so the effective policy can be wider than what stands here. DENY-ALL WHEN BOTH ARE ABSENT: an agent without this property (or with an empty list) whose org contributes nothing can make no outbound requests from its sandbox at all."
     },
     "welcome": {
       "type": "object",
       "additionalProperties": false,
       "required": ["title"],
-      "description": "Welcome card the chat UI shows while a conversation is empty: title/subtitle plus sections of clickable starter prompts. UI-only — never reaches the model. Clicking a prompt sends `prompt ?? display` as the user's message, immediately unless prefill is true (then it only fills the composer). Section/prompt counts are unbounded; only string lengths are capped.",
+      "description": "Welcome card the chat UI shows while a conversation is empty: title/subtitle plus sections of clickable starter prompts. UI-only — never reaches the model. Clicking a prompt sends `prompt ?? display` as the user's message, immediately unless prefill is true (then it only fills the composer), and shows its `hint` (when set) as a dismissible tip above the composer. Section/prompt counts are unbounded; only string lengths are capped.",
       "properties": {
         "title": { "type": "string", "minLength": 1, "maxLength": 200 },
         "subtitle": { "type": "string", "minLength": 1, "maxLength": 500 },
@@ -72,6 +73,12 @@
                     "prefill": {
                       "type": "boolean",
                       "description": "true = clicking only puts the text into the composer for editing; absent/false = clicking sends it immediately."
+                    },
+                    "hint": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500,
+                      "description": "Optional tip shown in a dismissible box above the chat composer when this prompt is clicked. UI-only, never reaches the model. Dismissal is remembered per agent + display in the user's browser, so re-wording a display re-shows its tip once."
                     }
                   }
                 }

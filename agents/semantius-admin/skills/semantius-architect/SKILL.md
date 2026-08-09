@@ -286,7 +286,7 @@ Follow these stages in order. Do not skip ahead: each stage produces input the n
 
 | Stage | Purpose | Read first |
 |---|---|---|
-| 1. Capture | Capture the system; catalog-surface text; `module_kind` | [`references/stage-1-capture.md`](references/stage-1-capture.md) |
+| 1. Capture | Capture the system; domain category; verbatim `initial_request`; rough scope line | [`references/stage-1-capture.md`](references/stage-1-capture.md) |
 | 2. Naming | Legacy-vendor vs agent-optimized naming; built-in field alignment | [`references/stage-2-naming.md`](references/stage-2-naming.md) |
 | 3. Entities | Propose the entity list; `necessity` rule; §3 catalog-column policy (`data_object` / `catalog code` / `role` / `mastered in`) | [`references/stage-3-entities.md`](references/stage-3-entities.md) |
 | 5. Mermaid | Build the §2 entity-relationship diagram (build-then-verify; render, don't gate) | [`references/stage-5-mermaid.md`](references/stage-5-mermaid.md) |
@@ -295,7 +295,7 @@ Follow these stages in order. Do not skip ahead: each stage produces input the n
 | 8 + 9. Rules & classification | Business-rule intent; `entity_type` ladder + derived write tier; master-cluster hints | [`references/stage-8-9-rules-classification.md`](references/stage-8-9-rules-classification.md) |
 | 10. Workflow perms | W1 / W2 / W6 workflow-gate scan (architect scope) | [`references/stage-10-workflow-perms.md`](references/stage-10-workflow-perms.md) |
 | 11. Governance | Persona discovery; Processes catalog; RACI realization; §9 emission | [`references/stage-11-governance.md`](references/stage-11-governance.md) |
-| 13. Write | Template; frontmatter; keep-with-placeholder rule; then the resident Pre-save verification below | [`references/stage-13-write.md`](references/stage-13-write.md) |
+| 13. Write | Finalize catalog surface (`tagline`, `module_kind`; `description` / `license` only when publishing); template; frontmatter; keep-with-placeholder rule; then the resident Pre-save verification below | [`references/stage-13-write.md`](references/stage-13-write.md) |
 
 **Field-level stages live in the analyst, not here.** Stages 4 (fields), 9b (cross-tier FK reconciliation), and 12 / 12.5 (select-rule + view/edit consistency) are not architect stages: the blueprint stops at entity level (only §3 catalog, §5 edges, §7 lifecycle, §8 permissions). The analyst runs those after this skill writes the blueprint, so run `semantius-analyst` next to elicit field-level detail.
 
@@ -338,6 +338,7 @@ Before writing, run these checks **silently** — do NOT narrate them in chat. T
 | Every canonical top-level / numbered section is present (no omitted canonical section, no bare empty heading); each empty one carries the canonical `_(none: <short reason>)_` placeholder, NOT an old-form free-text stub (`_(no cross-scope edges declared in greenfield mode...)_`, `_(no cross-domain context...)_`, `_(no industry-scoped aliases...)_`, similar) | halt; name the missing canonical section or the old-form stub, and tell the user to keep the heading with a `_(none: <short reason>)_` placeholder |
 | No raw HTML anywhere in the file body (`<details>`, `<summary>`, `</details>`, or any other `<tag>`). A collapsible inherited from a catalog source must be flattened to a plain markdown table — the tags stripped, the table kept | halt; name the offending lines |
 | Greenfield-mode files (`naming_mode` present) carry `departments` / `industries` frontmatter ONLY when populated; otherwise omit. `related_modules` is now allowed in greenfield as an advisory list | halt; remove the offending stubs |
+| `description` / `license` are publish-only and travel together: both present when the Stage 13 publish question was answered "publishing", both absent otherwise. An empty stub (`description: ""`) or a lone one of the pair is a failure | halt; name the stray, empty, or missing key |
 | Catalog-clone-mode files (`naming_mode` absent) carry no `naming_mode` key | halt; remove the offending key |
 
 **Mechanical consistency gate (mandatory — this is enforcement, not eyeballing).** The cross-section rows above (Mermaid ⟺ §3, §2 ⟺ §3, Mermaid ⟺ §5, and the §7 / §6.4 / §8.2 resolution) are NOT verified by re-reading the file. After writing the candidate file, run the bundled deterministic checker shipped alongside this skill and require a clean exit:

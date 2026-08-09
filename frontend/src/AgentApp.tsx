@@ -34,6 +34,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AgentChatContainer } from './components/ai-elements/agent-chat-container';
 import { SessionSidebar } from './components/ai-elements/session-sidebar';
+import { localHintStore } from './hint-dismissal';
 import { agentNameFromPath, consumeCredentialFragment, COOKIE_STORAGE, TOKEN_STORAGE } from './pages';
 
 export function AgentApp() {
@@ -163,6 +164,7 @@ export function AgentApp() {
           sessionId={explicitSessionId}
           onSessionCreated={onSessionCreated}
           onResponseSettled={onResponseSettled}
+          hintStore={localHintStore}
           className="h-auto min-h-0 flex-1"
         />
       </main>

@@ -38,6 +38,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AgentChat } from './agent-chat';
+import type { HintStore } from './hint';
 import {
   BACKEND,
   conversationUrl,
@@ -62,6 +63,7 @@ export function AgentChatContainer({
   onSessionCreated,
   onResponseSettled,
   onError,
+  hintStore,
   className,
   placeholder,
 }: {
@@ -86,6 +88,11 @@ export function AgentChatContainer({
   /** Session-create failure. The container also renders the error inline, so
    * wiring this is optional. */
   onError?: (error: unknown) => void;
+  /** Where "the user closed this tip" is remembered across visits. The host's
+   * call — this folder ships the interface, not a storage choice (see
+   * ./hint.tsx). Omitted: tips still show and still close, but only for the
+   * life of this mount. */
+  hintStore?: HintStore;
   /** Merged into the conversation frame (e.g. to override the default height). */
   className?: string;
   /** Composer placeholder text. */
@@ -178,6 +185,25 @@ export function AgentChatContainer({
     }
   }
 
+  // The welcome-prompt tip AgentChat renders above its composer. It lives HERE
+  // because a draft's welcome click both raises the tip and sends — and that
+  // send flips the key below, remounting AgentChat. State inside AgentChat
+  // would die on the very click that set it; the container survives the flip.
+  const [hint, setHint] = useState<{ id: string; text: string }>();
+
+  /** A clicked prompt's hint, scoped to this agent by its `display` — unless
+   * the user has already closed this one, in which case it never comes back. */
+  function showHint(text: string, key: string) {
+    const id = `${agentName}:${key}`;
+    if (hintStore?.isDismissed(id)) return;
+    setHint({ id, text });
+  }
+
+  function dismissHint() {
+    if (hint) hintStore?.dismiss(hint.id);
+    setHint(undefined);
+  }
+
   if ('ambient' in auth && metaStatus === 401) {
     return (
       <div className="mt-2 rounded-lg border bg-background p-6 text-foreground">
@@ -208,6 +234,9 @@ export function AgentChatContainer({
         onDraftSend={createAndSend}
         draftPending={creating}
         onResponseSettled={onResponseSettled}
+        hint={hint?.text}
+        onHint={showHint}
+        onDismissHint={dismissHint}
         className={className}
         placeholder={placeholder}
       />
