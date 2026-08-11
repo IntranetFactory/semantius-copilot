@@ -83,6 +83,18 @@ button { cursor: pointer; } /* kept global; harmless to ai-elements' own buttons
 .detail-head-actions { display: flex; align-items: center; gap: 0.6rem; }
 .detail-key { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; }
 .value { background: #1a202c; color: #e2e8f0; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.8rem; max-height: 55vh; white-space: pre-wrap; word-break: break-word; }
+/* Raw payload blocks (CopyableValue). The copy button is pinned to the block's
+   top-right corner rather than the text flow, so it stays reachable while a long
+   payload scrolls inside the <pre>; the extra padding-right keeps text from
+   running underneath it. */
+.rawblock { position: relative; }
+.rawblock > pre { padding-right: 2.6rem; }
+.copybtn { position: absolute; top: 0.5rem; right: 0.5rem; display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem; padding: 0; border-radius: 6px; border: 1px solid rgba(226, 232, 240, 0.22); background: rgba(226, 232, 240, 0.1); color: #e2e8f0; }
+.copybtn:hover { background: rgba(226, 232, 240, 0.24); }
+.copybtn.copybtn-failed { color: #feb2b2; border-color: rgba(254, 178, 178, 0.5); }
+.rawblock-light .copybtn { border-color: #cbd5e0; background: #fff; color: #4a5568; }
+.rawblock-light .copybtn:hover { background: #f0f4f8; }
+.rawblock-light .copybtn.copybtn-failed { color: #c53030; border-color: #feb2b2; }
 .meta { margin: 0 0 0.75rem; }
 .meta-row { display: grid; grid-template-columns: minmax(6rem, auto) 1fr; gap: 0.75rem; padding: 0.2rem 0; border-bottom: 1px solid #f0f4f8; }
 .meta dt { color: #718096; font-size: 0.8rem; }

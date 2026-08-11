@@ -1,22 +1,21 @@
 ---
 name: semantius-importer
 description: >-
-  Imports a CSV file into Semantius: introspects the file's schema with the
-  CLI's built-in `get_csvschema` util, maps it to Semantius field formats,
-  detects whether a matching entity already exists (with a field-by-field
-  diff), optionally creates the entity (and its module first), then generates
-  and runs a Bun import script that bulk-loads the rows in batches. Also
-  supports schema-only runs (create the entity, import nothing) and
-  compare-only runs (diff report, zero writes). Trigger when the user wants
-  to: "import this CSV", "load this file into semantius", "create an entity
+  Imports a CSV into Semantius: introspects CSV schema with the CLI's
+  `get_csvschema` util, maps columns to Semantius field formats, detects
+  whether a matching entity exists (field-by-field diff), optionally creates
+  the entity (and its module first), then generates and runs a Bun script that
+  bulk-loads rows in batches. Also supports schema-only runs (create the
+  entity, no rows) and compare-only runs (diff report, zero writes). Trigger
+  on "import this CSV", "load this file into semantius", "create an entity
   from this file / spreadsheet export", "introspect this CSV", "bulk load
-  these rows from a file", "does this CSV match our <table> entity?", or asks
-  what entity shape a CSV implies. Do NOT trigger for: webhook-receiver
-  ingestion where an external system pushes rows (use-semantius
-  references/webhook-import.md), deploying blueprints or specs
+  these rows", "does this CSV match our table?", or asking what entity shape a
+  CSV implies. Do NOT trigger for deploying blueprints or specs
   (semantius-admin / semantius-modeler), designing a multi-entity system
-  (semantius-architect), or CSV manipulation with no Semantius target. For
-  xlsx files, ask the user to export a CSV first; this skill is CSV-only.
+  (semantius-architect), CSV work with no Semantius target, or
+  webhook-receiver ingestion (an external system pushes rows; see
+  use-semantius references/webhook-import.md). For xlsx, ask for a CSV export
+  first; CSV-only.
 ---
 
 # semantius-importer Skill

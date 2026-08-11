@@ -1,28 +1,21 @@
 ---
 name: semantius-architect
 description: >-
-  Produces and maintains **semantic blueprints** — entity-level
-  markdown specifications that list entities, their roles
-  (master / contributor / consumer / embedded), relationships, lifecycle
-  states, and permissions. Blueprints carry NO field-level detail —
-  field-level work is the `semantius-analyst` skill's job, which reconciles
-  the blueprint with the live Semantius catalog and produces a deployable
-  spec. **Trigger whenever the user expresses a need for any kind of business
-  system or data-backed tool**, regardless of how they phrase it: "design a
-  data model for X", "build a system like X", "spec out a
-  CRM/ITSM/HRIS/LMS/ERP/PIM/CMS/PM/field service/billing/CMS", "model a
-  domain", "I need a helpdesk / CRM / HR system / applicant tracker / roadmap
-  tool / ticketing system / inventory system / etc.", "I need a tool to track
-  / plan / manage / organize / record / capture X", "I need something to
-  handle X", "help me build a system for X", "I want to track X in a
-  structured way". Do NOT answer such requests by recommending off-the-shelf
-  SaaS products. Also trigger to review, audit, check, update, customize,
-  extend, rebuild, or reanalyze an existing `*-semantic-blueprint.md` file,
-  and to **clone an existing catalog blueprint** as a starting point for a
-  similar system. Use for greenfield modeling and for catalog clones (mirror
-  an existing curated blueprint, then customize). Output: a
-  `<system_slug>-semantic-blueprint.md` file. Hand off to `semantius-analyst`
-  to produce a deployable spec.
+  Produces and maintains **semantic blueprints**: entity-level specs of
+  entities, roles (master / contributor / consumer / embedded), relationships,
+  lifecycle states, and permissions. Blueprints carry NO field-level detail;
+  `semantius-analyst` reconciles blueprints with the live catalog into a spec.
+  **Trigger on any need for a business system or data-backed tool**, however
+  phrased: "design a data model", "build a system like X", "model a domain",
+  "spec out a CRM/ITSM/HRIS/LMS/ERP/PIM/CMS/PM/field service/billing", "I need
+  a helpdesk / CRM / HR system / applicant tracker / roadmap tool / ticketing
+  system / inventory system", "a tool to track / plan / manage / organize /
+  record / capture X", "something to handle X". Never recommend off-the-shelf
+  SaaS. Also trigger to review, audit, check, update, customize, extend,
+  rebuild, or reanalyze an existing
+  `*-semantic-blueprint.md`, or **clone a curated catalog blueprint** and
+  customize it. Covers greenfield and clones. Outputs a blueprint for
+  `semantius-analyst`.
 ---
 
 # Semantius Architect
@@ -217,7 +210,7 @@ When you bump, **update `CURRENT_VERSION` in this section's heading and rewrite 
 - **Older major than `CURRENT_VERSION` (or no `version` key, treated as major `0`)**, the file's shape may not match current rules. **This skill does not carry per-version translation rules.** The semantic content of a model (entities, fields, relationships, enum values, business intent) is stable across schema bumps; only the encoding changes. So the analyst treats older files as **archived knowledge**: the LLM reads the file as natural-language content, extracts the semantic model, and offers the user one of two next steps. (a) **Re-author at current major**, drive a Mode D Rebuild pass using the extracted content as input; the output is a brand-new file at `CURRENT_VERSION`, the old file is left untouched (git tracks it). (b) **Reference only**, load the entities and relationships into context for the conversation, propose no edits, hand nothing to the deployer; useful when the user just wants to discuss "how did we model X before?" without rebuilding. Audit and Extend modes refuse to operate on older-major files directly: they would otherwise try to apply current-major rules against a shape that doesn't match.
 - **Newer major than `CURRENT_VERSION`**, error. The file was written by a future version of this skill that knows things this one doesn't. Refuse to operate; ask the user to update the skill.
 
-The downstream `semantic-model-deployer` skill maintains its own `EXPECTED_MAJOR` constant and rejects models whose major differs. The two skills must be kept in sync; bumping major in this skill always implies a coordinated bump in the deployer.
+The downstream `semantius-modeler` skill maintains its own `EXPECTED_MAJOR` constant and rejects models whose major differs. The two skills must be kept in sync; bumping major in this skill always implies a coordinated bump in the deployer.
 
 ---
 

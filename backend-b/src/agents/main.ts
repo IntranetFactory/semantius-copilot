@@ -342,12 +342,16 @@ export function Main({ id }: AgentProps) {
   };
   useSandbox(
     {
-      createSessionEnv: async (opts) =>
+      // `createSandbox` since Flue 2.0.3 — the 2.0.x `createSessionEnv` name is
+      // deprecated on the factory we PASS (the runtime still calls it, with a
+      // console warning) and is simply GONE from the one `cloudflareSandbox()`
+      // RETURNS, so the inner call below must use the new name or throw.
+      createSandbox: async (opts) =>
         lazySessionEnv(
           '/workspace',
           // Deferred: this is the first sandbox-DO contact, and it only runs
           // on the provision/delegation path (never for bundle-served reads).
-          () => cloudflareSandbox(getSandbox(namespace, sandboxNameForSession(id))).createSessionEnv(opts),
+          () => cloudflareSandbox(getSandbox(namespace, sandboxNameForSession(id))).createSandbox(opts),
           loadBundle,
           provisionWorkspace,
         ),

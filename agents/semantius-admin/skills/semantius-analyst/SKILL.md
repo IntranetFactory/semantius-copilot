@@ -1,24 +1,20 @@
 ---
 name: semantius-analyst
 description: >-
-  Reconciles a `*-semantic-blueprint.md` (produced by the `semantius-architect`
-  skill) against the live Semantius catalog and produces a deployable
-  `*-semantic-spec.md`. **Trigger when the user has a blueprint and wants it
-  turned into a deployable spec**, or when they say: "reconcile this blueprint
-  with semantius", "what's already in the catalog that this blueprint can
-  reuse", "extend the blueprint into a deployable spec", "fold this blueprint
-  into the live catalog", "make the blueprint match what we already have", or
-  any variation that involves comparing a blueprint to live Semantius state and
-  filling in field-level detail. The analyst is the gatekeeper of the unified
-  catalog: it inspects every blueprint entity against built-ins, same-module
-  duplicates, shared masters, cross-module collisions, and near-name collisions;
-  drives the user through merge / rename / reuse / promote decisions; confirms
-  which optional blueprint entities to include; and only then elicits
-  field-level detail (fields, formats, validation rules, computed fields,
-  input-type rules, select rules) for the entities the spec will OWN. Reused
-  entities are referenced, not respecified. Output: a
-  `<system_slug>-semantic-spec.md` that the `semantius-modeler` skill deploys
-  with no further interactive decisions.
+  Reconciles a `*-semantic-blueprint.md` (from `semantius-architect`) against
+  the live catalog into a `*-semantic-spec.md`. **Trigger when the user has a
+  blueprint to turn into or extend into a deployable spec**, or on "reconcile
+  this blueprint with semantius", "what in the catalog can this blueprint
+  reuse", "fold this blueprint into the live catalog", "make the blueprint
+  match what we already have", or any ask comparing a blueprint to live state
+  and filling in field-level detail. Gatekeeper of the unified catalog: the
+  analyst inspects every blueprint entity against built-ins, same-module
+  duplicates, shared masters, cross-module and near-name collisions; drives
+  merge/rename/reuse/promote decisions; confirms which optional blueprint
+  entities to include; then elicits field-level detail (formats, validation
+  rules, computed fields, input-type and select rules) only for entities the
+  spec OWNs. Reused entities are referenced, not respecified. Spec deploys via
+  `semantius-modeler`, no further interactive decisions.
 ---
 
 # Semantius Analyst

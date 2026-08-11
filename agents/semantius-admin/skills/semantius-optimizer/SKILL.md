@@ -2,19 +2,19 @@
 name: semantius-optimizer
 description: >-
   Reverse-engineers a `*-semantic-spec.md` file (the analyst artifact, version
-  "5.4") from a live Semantius module: reads the module's entities, fields, enum
-  values, permissions, roles, and permission hierarchy via `semantius`, pulls in
-  referenced built-ins (e.g. `users`) so the output is self-contained, and writes
-  a spec byte-compatible with the template the `semantius-analyst` skill produces
-  and the `semantius-modeler` skill deploys. Deterministic: the mapping runs
-  through `references/spec-extract-lib.ts`. After saving, optionally runs an audit
-  pass. Trigger when the user wants to extract / export / snapshot /
-  reverse-engineer / pull / regenerate a spec from a live Semantius module, build
-  a spec for a module that was created without one, or bring a customized live
-  module back in sync with a markdown spec. Example phrases: "generate a spec from
-  the `<slug>` module", "reverse-engineer the `<slug>` module into a spec",
-  "someone built a module in the UI, get me a spec", "snapshot the live module",
-  "pull `<slug>` down to a semantic spec".
+  "5.4") from a live Semantius module: reads the module's entities, fields,
+  enum values, permissions, roles, and permission hierarchy via `semantius`,
+  pulls in referenced built-ins (e.g. `users`) so the output is
+  self-contained, and writes a spec byte-compatible with the template
+  `semantius-analyst` produces and `semantius-modeler` deploys. Deterministic:
+  the mapping runs through `references/spec-extract-lib.ts`. After saving,
+  optionally runs an audit pass. Trigger when the user wants to extract /
+  export / optimize / snapshot / reverse-engineer / pull / regenerate a spec
+  from a live Semantius module, build a spec for a module created without one,
+  or bring a customized live module back in sync with a markdown spec. Example
+  phrases: "generate a spec from the `{slug}` module", "reverse-engineer the
+  `{slug}` module into a spec", "someone built a module in the UI, get me a
+  spec", "pull `{slug}` down to a semantic spec".
 ---
 
 # semantius-optimizer Skill

@@ -19,7 +19,17 @@ import {
 import type { ComponentProps, ReactNode } from "react";
 import { isValidElement } from "react";
 
-import { CodeBlock } from "./code-block";
+import { CodeBlock, CodeBlockCopyButton } from "./code-block";
+
+/**
+ * Copy affordance for the JSON panels below. CodeBlock's container is
+ * `relative`, so pinning the button to its top-right corner keeps it reachable
+ * while a long payload scrolls — the same deal as the admin console's raw
+ * blocks, and it copies the exact bytes rendered.
+ */
+const copyButton = (
+  <CodeBlockCopyButton className="absolute top-1 right-1 z-10 size-7 bg-background/80 text-muted-foreground backdrop-blur-sm hover:bg-background" />
+);
 
 export type ToolProps = ComponentProps<typeof Collapsible>;
 
@@ -122,7 +132,9 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
       Parameters
     </h4>
     <div className="rounded-md bg-muted/50">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
+      <CodeBlock code={JSON.stringify(input, null, 2)} language="json">
+        {copyButton}
+      </CodeBlock>
     </div>
   </div>
 );
@@ -146,10 +158,16 @@ export const ToolOutput = ({
 
   if (typeof output === "object" && !isValidElement(output)) {
     Output = (
-      <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />
+      <CodeBlock code={JSON.stringify(output, null, 2)} language="json">
+        {copyButton}
+      </CodeBlock>
     );
   } else if (typeof output === "string") {
-    Output = <CodeBlock code={output} language="json" />;
+    Output = (
+      <CodeBlock code={output} language="json">
+        {copyButton}
+      </CodeBlock>
+    );
   }
 
   return (

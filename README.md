@@ -291,7 +291,7 @@ workspace discovery finds the skills (it reads the same bundle view), the
 discovered skill wins the name-merge over the mounted definition — same
 content either way. That
 discovered-wins merge is restored by our `@flue/runtime` patch (see
-Prerequisites): the stock runtime (unchanged in 2.0.1) THROWS on the name
+Prerequisites): the stock runtime (unchanged through 2.0.3) THROWS on the name
 conflict instead, and
 when discovery sees the files — which with the bundle view it reliably does —
 every submission of such a session then
@@ -324,9 +324,19 @@ as if instructions or skills are missing.
 ## Prerequisites
 
 - Node **>= 22.18** (Flue requirement; `nvm use 22.22.0`).
-- Flue **2.0.1** (first stable 2.x, released 2026-08-01; upgraded 2026-08-03 from
-  the 2.0 nightly `202607230552` — build, smoke, and all 72 acceptance checks
-  passed unchanged).
+- Flue **2.0.3** (released 2026-08-04; upgraded 2026-08-11 from 2.0.1, which
+  came from the 2.0 nightly `202607230552` on 2026-08-03). The 2.0.3 bump is
+  not drop-in: it renames the sandbox seam (`SessionEnv` → `Sandbox`,
+  `SandboxApi` → `SandboxDriver`, `createSandboxSessionEnv()` →
+  `sandboxFromDriver()`). The types keep deprecated aliases, and the
+  `SandboxFactory.createSessionEnv` method we PASS still works (with a
+  `console.warn`), but the method `cloudflareSandbox()` RETURNS was renamed
+  outright — `createSessionEnv` is gone from it, so `agents/main.ts` had to
+  move to `createSandbox` or every container-needing op would have thrown
+  `is not a function`. 2.0.3 also makes the Cloudflare `agents` SDK a
+  dependency of `@flue/vite` (`^0.20.1`, up from the ^0.14 we resolved
+  before — backend B's own pin was raised to match so only one copy is
+  installed) and force-closes orphaned Cloudflare trace spans.
 - pnpm, Docker (for building the sandbox container image), a Cloudflare account with
   **Workers Paid + Containers** and **Workers AI** enabled.
 - Three dependency patches under `patches/` (applied automatically by `pnpm install`):
@@ -360,8 +370,9 @@ as if instructions or skills are missing.
     version — re-create it (`pnpm patch @flue/runtime@<new-version>`, remove
     the conflict `throw` in `mergeSkillCatalog`, `pnpm patch-commit`) unless
     upstream made the merge tolerant, or B stops double-delivering skills.
-    (Done for 2.0.1: stock 2.0.1 still throws — same one-line removal, now
-    in `dist/conversation-stream-store-CIKkNpqs.mjs`.)
+    (Done for 2.0.3: stock 2.0.3 still throws — same one-line removal, now
+    in `dist/conversation-stream-store-CXwRWonS.mjs`. The chunk hash moves
+    every release, so the patch is a rename + one path edit, not a rewrite.)
   - `@durable-streams/client` — opens the held **SSE** connection on the first `updates`
     request in `live:'sse'` mode. The stock 0.2.6 client (still pinned by @flue/sdk v2) only
     opens SSE after reaching up-to-date, so while an agent is actively generating (never
@@ -1569,11 +1580,13 @@ swapped for their JWT at egress. Same credential requirement as the identity pos
 
 ## Verified results
 
-All 85 acceptance checks pass against the deployed Workers (the `[cookie]` block skipped —
-it needs a live better-auth session cookie). (The original A/B thesis —
-image-baked and dynamically-delivered skills produce byte-identical sandboxes and
-identical `activate_skill → read → bash` behavior — was proven while backend A still
-existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are
+All 86 acceptance checks pass against the deployed Workers (the `[cookie]` block skipped —
+it needs a live better-auth session cookie); re-verified on the Flue 2.0.3 upgrade
+(2026-08-11), which included the live-sandbox blocks (`[clean-base]`, `[C3]`, `[C4]`,
+`[credentials]`, `[backup]`) that exercise the renamed `createSandbox` factory end to
+end. (The original A/B thesis — image-baked and dynamically-delivered skills produce
+byte-identical sandboxes and identical `activate_skill → read → bash` behavior — was
+proven while backend A still existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are
 recorded in [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) §7.
 
 **Workspace backup restore-over-sleep, proven live 2026-08-05:** a real LLM turn wrote

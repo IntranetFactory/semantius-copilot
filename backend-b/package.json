@@ -13,9 +13,9 @@
   "dependencies": {
     "@cloudflare/sandbox": "0.12.3",
     "@earendil-works/pi-ai": "^0.81.1",
-    "@flue/github": "2.0.1",
-    "@flue/opentelemetry": "2.0.1",
-    "@flue/runtime": "2.0.1",
+    "@flue/github": "2.0.3",
+    "@flue/opentelemetry": "2.0.3",
+    "@flue/runtime": "2.0.3",
     "@semantius-copilot/core": "workspace:*",
     "@octokit/rest": "^22.0.1",
     "@opentelemetry/api": "^1.9.1",
@@ -23,14 +23,14 @@
     "@opentelemetry/otlp-transformer": "^0.221.0",
     "@opentelemetry/resources": "^2.10.0",
     "@opentelemetry/sdk-trace-base": "^2.10.0",
-    "agents": "^0.14.2",
+    "agents": "^0.20.1",
     "braintrust": "3.17.0",
     "hono": "^4.8.3",
     "valibot": "^1.1.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.46.0",
-    "@flue/vite": "2.0.1",
+    "@flue/vite": "2.0.3",
     "vite": "^8.1.5",
     "wrangler": "^4.113.0"
   }

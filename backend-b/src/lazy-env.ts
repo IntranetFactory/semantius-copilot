@@ -1,5 +1,5 @@
 /**
- * Lazy-boot SessionEnv wrapper (plan §15 P1 successor): nothing sandbox-side —
+ * Lazy-boot Sandbox wrapper (plan §15 P1 successor): nothing sandbox-side —
  * not the container, not even its Durable Object — is touched until a turn
  * performs an operation that genuinely needs the machine.
  *
@@ -31,20 +31,22 @@
  *     then on every call passes through — the view never changes, only its
  *     backing store.
  *
- * The wrapper mirrors @flue/runtime's SessionEnv surface (exec, readFile,
+ * The wrapper mirrors @flue/runtime's `Sandbox` surface (exec, readFile,
  * readFileBuffer, writeFile, stat, readdir, exists, mkdir, rm, cwd,
- * resolvePath — types-DXeRHzzp.d.mts) and its POSIX path resolution
- * (normalizePath/makeResolvePath, sandbox-BbQ6lruL.mjs:117-134). Re-verify
- * both on any @flue/runtime upgrade: a method added upstream and not delegated
- * here would bypass the boot gate or, worse, dodge the bundle view.
+ * resolvePath — types-CVx9SjIx.d.mts:388, the interface 2.0.3 renamed from
+ * `SessionEnv`) and its POSIX path resolution (normalizePath/makeResolvePath,
+ * sandbox-DAJ0daML.mjs:245-262). Re-verify both on any @flue/runtime upgrade
+ * (the chunk hashes move every release): a method added upstream and not
+ * delegated here would bypass the boot gate or, worse, dodge the bundle view.
+ * Verified unchanged for 2.0.3.
  *
- * One wrapper instance lives per submission (Flue calls createSessionEnv per
+ * One wrapper instance lives per submission (Flue calls createSandbox per
  * submission), so "provisioned" also acts as the per-submission self-heal:
  * the first container-needing op after a container slept re-runs the
  * absent→write provisioning, exactly what useAgentStart used to do eagerly on
  * every message.
  */
-import type { FileStat, SessionEnv } from '@flue/runtime';
+import type { FileStat, Sandbox } from '@flue/runtime';
 import { SKILLS_DIR } from '@semantius-copilot/core';
 
 /** The slice of the agent bundle the virtual view needs. */
@@ -52,7 +54,7 @@ export type SkillFilesBundle = { skills?: Record<string, Record<string, string>>
 
 type VNode = { kind: 'file'; content: string } | { kind: 'dir'; children: Set<string> };
 
-/** Byte-for-byte mirror of @flue/runtime's normalizePath (sandbox-BbQ6lruL.mjs:117). */
+/** Byte-for-byte mirror of @flue/runtime's normalizePath (sandbox-DAJ0daML.mjs:245). */
 function normalizePath(p: string): string {
   const parts = p.split('/');
   const result: string[] = [];
@@ -64,7 +66,7 @@ function normalizePath(p: string): string {
   return `/${result.join('/')}`;
 }
 
-/** Mirror of @flue/runtime's makeResolvePath (sandbox-BbQ6lruL.mjs:128). */
+/** Mirror of @flue/runtime's makeResolvePath (sandbox-DAJ0daML.mjs:256). */
 function makeResolvePath(cwd: string) {
   return (p: string) => {
     if (p.startsWith('/')) return normalizePath(p);
@@ -127,13 +129,13 @@ const notFound = (op: string, path: string) =>
 export function lazySessionEnv(
   cwd: string,
   /** Builds the real env — first use of this is the first sandbox-DO contact. */
-  makeInner: () => Promise<SessionEnv>,
+  makeInner: () => Promise<Sandbox>,
   loadBundle: () => Promise<SkillFilesBundle>,
   provision: (bundle: SkillFilesBundle) => Promise<void>,
-): SessionEnv {
+): Sandbox {
   let provisioned = false;
   let provisioning: Promise<void> | undefined;
-  let innerPromise: Promise<SessionEnv> | undefined;
+  let innerPromise: Promise<Sandbox> | undefined;
   let viewPromise: Promise<Map<string, VNode>> | undefined;
 
   const normalizedCwd = normalizePath(cwd);

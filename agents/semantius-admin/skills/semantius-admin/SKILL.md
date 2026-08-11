@@ -1,23 +1,21 @@
 ---
 name: semantius-admin
 description: >-
-  Orchestrates the three-skill Semantius pipeline (`semantius-architect` →
-  `semantius-analyst` → `semantius-modeler`) and handles administrative
-  operations on a Semantius instance. **Trigger when the user's intent spans
-  more than one skill, when they reference a remote blueprint URL, when they
-  say "deploy this blueprint", "deploy these blueprints", "deploy all of
-  these", "set up these systems", "build me a system and deploy it", "set up
-  a CRM end-to-end", "clone the candidate-crm blueprint and deploy",
-  "what's deployed in our instance?", "status of semantius", "audit this
-  file" (without naming a specific skill), "back up the catalog", "snapshot
-  the module", "get started", "I'm new here, set this up", or any variation
-  that requires inspecting workspace artifacts and routing to the right
-  sub-skill.** Also trigger when a deploy request carries multiple URLs,
-  paths, or a glob. Do NOT trigger when the user explicitly
-  invokes a single sub-skill ("audit this spec with semantius-analyst",
-  "run the modeler"), let those direct calls go through. The admin skill is
-  the front door for end-to-end and ambiguous requests, not a wrapper around
-  every Semantius interaction.
+  Orchestrates the Semantius pipeline (`semantius-architect`,
+  `semantius-analyst`, `semantius-modeler`) and handles instance
+  administration. **Trigger when intent spans more than one skill, on a remote
+  blueprint URL, or on "deploy this blueprint", "deploy these blueprints",
+  "deploy all of these", "set up these systems", "build me a system and deploy
+  it", "set up a CRM end-to-end", "clone the candidate-crm blueprint and
+  deploy", "what's deployed in our instance?", "status of semantius", "audit
+  this file" (naming no specific skill), "back up the catalog", "snapshot the
+  module", "get started", "I'm new here, set this up", or anything needing
+  workspace artifacts inspected and routed to the right sub-skill.** Also
+  trigger on a deploy request with multiple URLs, paths, or a glob. Do NOT
+  trigger when the user invokes one sub-skill directly (not "audit this spec
+  with semantius-analyst", not "run the modeler"); let those through. Front
+  door for end-to-end and ambiguous requests, not a wrapper on Semantius
+  calls.
 ---
 
 # Semantius Admin

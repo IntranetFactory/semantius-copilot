@@ -29,6 +29,7 @@
  * server.
  */
 import { useFlueAgent } from '@flue/react';
+import { CheckIcon, CopyIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { BACKEND, useConversationClient } from './components/ai-elements/session';
@@ -516,6 +517,67 @@ type Detail =
   | BackupDetailShape
   | Record<string, unknown>;
 
+/**
+ * A raw payload block with a copy-to-clipboard action. Every raw view in the
+ * console renders through this — the Raw JSON tabs, the KV value, a bundle's
+ * skill files, a tool call's arguments — so the exact bytes on screen are one
+ * click away, instead of a select-all drag through a scrolling <pre>.
+ *
+ * `tone` picks which surface the button has to sit on: 'dark' is the console's
+ * own `.value` block, 'light' the `.tool pre` inside a conversation.
+ *
+ * `navigator.clipboard` needs a secure context — normal for the deployed
+ * https console, but the hidden-textarea path keeps copy working when it isn't,
+ * and a rejected copy says "Copy failed" rather than silently doing nothing.
+ */
+function CopyableValue({ text, tone = 'dark' }: { text: string; tone?: 'dark' | 'light' }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  useEffect(() => {
+    if (state === 'idle') return;
+    const timer = window.setTimeout(() => setState('idle'), 1600);
+    return () => window.clearTimeout(timer);
+  }, [state]);
+
+  const copy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        if (!ok) throw new Error('copy rejected');
+      }
+      setState('copied');
+    } catch {
+      setState('failed');
+    }
+  };
+
+  const label = state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy to clipboard';
+
+  return (
+    <div className={tone === 'light' ? 'rawblock rawblock-light' : 'rawblock'}>
+      <button
+        type="button"
+        className={state === 'failed' ? 'copybtn copybtn-failed' : 'copybtn'}
+        onClick={copy}
+        title={label}
+        aria-label={label}
+      >
+        {state === 'copied' ? <CheckIcon size={14} aria-hidden /> : <CopyIcon size={14} aria-hidden />}
+      </button>
+      {tone === 'light' ? <pre>{text}</pre> : <pre className="value">{text}</pre>}
+    </div>
+  );
+}
+
 function RecordDetail({
   base,
   apiKey,
@@ -585,13 +647,15 @@ function RecordDetail({
           // Payload only — key and size already sit in the header, and the
           // admin envelope's `json` is just the parsed copy of `value`, so
           // showing the whole envelope displayed the same bytes twice.
-          <pre className="value">
-            {(detail as { json: unknown }).json != null
-              ? JSON.stringify((detail as { json: unknown }).json, null, 2)
-              : (detail as { value: string }).value}
-          </pre>
+          <CopyableValue
+            text={
+              (detail as { json: unknown }).json != null
+                ? JSON.stringify((detail as { json: unknown }).json, null, 2)
+                : (detail as { value: string }).value
+            }
+          />
         ) : (
-          <pre className="value">{JSON.stringify(detail, null, 2)}</pre>
+          <CopyableValue text={JSON.stringify(detail, null, 2)} />
         )
       ) : detail.kind === 'kv' ? (
         <KvValue value={(detail as { value: string }).value} json={(detail as { json: unknown }).json} />
@@ -600,7 +664,7 @@ function RecordDetail({
       ) : detail.kind === 'backup' ? (
         <BackupView base={base} apiKey={apiKey} detail={detail as BackupDetailShape} />
       ) : (
-        <pre className="value">{JSON.stringify(detail, null, 2)}</pre>
+        <CopyableValue text={JSON.stringify(detail, null, 2)} />
       )}
     </div>
   );
@@ -728,8 +792,8 @@ function RawSession({
   }, [apiKey, sessionId]);
 
   return (
-    <pre className="value">
-      {JSON.stringify(
+    <CopyableValue
+      text={JSON.stringify(
         {
           sessionIndex: session,
           conversation: error ? { error } : conversation ?? '(loading…)',
@@ -737,15 +801,15 @@ function RawSession({
         null,
         2,
       )}
-    </pre>
+    />
   );
 }
 
 function KvValue({ value, json }: { value: string; json: unknown }) {
   const bundle = asBundle(json);
   if (bundle) return <BundleView bundle={bundle} />;
-  if (json !== null && json !== undefined) return <pre className="value">{JSON.stringify(json, null, 2)}</pre>;
-  return <pre className="value">{value}</pre>;
+  if (json !== null && json !== undefined) return <CopyableValue text={JSON.stringify(json, null, 2)} />;
+  return <CopyableValue text={value} />;
 }
 
 function SessionDetail({
@@ -808,7 +872,7 @@ function Message({ message }: { message: AgentMessage }) {
         ) : part.type === 'dynamic-tool' ? (
           <details key={index} className="tool">
             <summary>tool: {'toolName' in part ? String(part.toolName) : 'call'}</summary>
-            <pre>{JSON.stringify(part, null, 2)}</pre>
+            <CopyableValue text={JSON.stringify(part, null, 2)} tone="light" />
           </details>
         ) : null,
       )}
@@ -906,7 +970,7 @@ function BundleView({ bundle }: { bundle: AgentBundle }) {
           </button>
         ))}
       </div>
-      {open ? <pre className="value">{contents.get(open)}</pre> : null}
+      {open ? <CopyableValue text={contents.get(open) ?? ''} /> : null}
     </div>
   );
 }
