@@ -173,6 +173,10 @@ When the catalog owner module later installs and Branch-B promotion moves the en
 
 This convention is what lets bundles like `hiring-starter` and master modules with embedded entities (e.g. `ats-recruitment-pipeline` embeds `candidates` from `ats-candidate-crm`) round-trip cleanly. Both shapes exercise the same code path.
 
+### Bash file-content discipline
+
+**Bash never carries file content.** No heredocs in tool-emitted bash, ever — not `cat > file <<EOF` to write a file, not `semantius call … <<'JSON'` to feed the CLI — and no multi-KB `printf`/`echo` bodies. A generation cut mid-heredoc leaves the command blocked on stdin indefinitely (a live session wedged for ~55 minutes exactly this way), while a truncated pipe form fails immediately as a visible bash syntax error. File content goes through the Write tool, chunked per [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md) when it can exceed ~4 KB. Small inline payloads (≤ ~1 KB, ASCII, no apostrophes/backticks) use the fail-fast pipe form `printf '%s' '…' | semantius call …`; anything larger or with hazardous quoting goes through a file (`semantius call … < payload.json`) or a Bun script. PowerShell here-strings (`@'…'@`) fall under the same ban. A truncated generation is an expected, recoverable event: rewrite the affected part or payload file, never retry as a heredoc.
+
 ---
 
 ## Skill version: `CURRENT_VERSION = "5.2"`
@@ -304,6 +308,7 @@ Before writing, run these checks **silently** — do NOT narrate them in chat. T
 
 | Check | If it fails |
 |---|---|
+| **Parts-protocol completeness** — the candidate was assembled from verified parts: every `00-manifest` entry exists with the exact filename, each part carries the `<!-- part-complete -->` sentinel exactly once and ends with a newline, and the candidate's tail matches the last part's closing content (protocol R3–R5 in [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md); recovery is rewriting only the affected part, never the whole file) | halt; list the missing / truncated / unlisted parts |
 | `version` is `"5.2"` and `blueprint_version` is `"3.0"` | halt; print plain-English failure |
 | No field-level content anywhere (no Format/Required/Label columns in entities catalog; no JSON sub-blocks for computed_fields/validation_rules/input_type_rules/select_rule). **The optional `## Additional Requirements Specification` section is exempt** — it is free prose and MAY name fields (see "The one exception" near the top of this skill). | halt; tell the user *"This file has field-level detail; that work belongs to the next step (reconciliation)."* |
 | Every `master` entity has a lifecycle sub-section OR is pure reference data | halt; name the missing masters in plain English |
@@ -334,10 +339,10 @@ Before writing, run these checks **silently** — do NOT narrate them in chat. T
 | `description` / `license` are publish-only and travel together: both present when the Stage 13 publish question was answered "publishing", both absent otherwise. An empty stub (`description: ""`) or a lone one of the pair is a failure | halt; name the stray, empty, or missing key |
 | Catalog-clone-mode files (`naming_mode` absent) carry no `naming_mode` key | halt; remove the offending key |
 
-**Mechanical consistency gate (mandatory — this is enforcement, not eyeballing).** The cross-section rows above (Mermaid ⟺ §3, §2 ⟺ §3, Mermaid ⟺ §5, and the §7 / §6.4 / §8.2 resolution) are NOT verified by re-reading the file. After writing the candidate file, run the bundled deterministic checker shipped alongside this skill and require a clean exit:
+**Mechanical consistency gate (mandatory — this is enforcement, not eyeballing).** The cross-section rows above (Mermaid ⟺ §3, §2 ⟺ §3, Mermaid ⟺ §5, and the §7 / §6.4 / §8.2 resolution) are NOT verified by re-reading the file. After assembling the candidate file (stage-13's write sequence; the gate runs against the candidate, BEFORE the `mv` into `semantius/blueprints/`), run the bundled deterministic checker shipped alongside this skill and require a clean exit:
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT:-.claude/skills/semantius-architect}/references/consistency-check.ts" "<path-to-the-written-blueprint>"
+bun "${CLAUDE_PLUGIN_ROOT:-.claude/skills/semantius-architect}/references/consistency-check.ts" "<parts folder>/candidate.md"
 ```
 
 It parses the file, treats §3 as the entity registry, and byte-compares every other place each entity's identifier / display name / edge appears. It is **content-agnostic** — it never judges language, casing, or word choice, only that every occurrence agrees (reverse a label in *every* section and it passes; change it in *one* and it fails). Exit 0 = consistent; non-zero prints the exact entity, the differing values, and the disagreeing sections. **If it exits non-zero the save is not complete:** fix every reported line and re-run until exit 0, then emit the success line. The same script validates specs (`artifact: semantic-spec`); the analyst runs it at its own pre-save. Do not hand-wave this — blueprints shipped inconsistent precisely because the check was "done carefully" by reading instead of run.

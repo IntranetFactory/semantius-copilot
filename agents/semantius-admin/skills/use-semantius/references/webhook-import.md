@@ -236,6 +236,7 @@ build_json() {
 
 ok=0; failed=0; row=0
 failed_file="failed_rows.txt"
+resp_file="wh_response.tmp"   # response-body scratch beside the script, never /tmp
 > "$failed_file"
 
 while IFS=',' read -r code title category price stock active; do
@@ -247,7 +248,7 @@ while IFS=',' read -r code title category price stock active; do
   TIMESTAMP=$(date +%s)
   SIG=$(sign "$MSG_ID" "$TIMESTAMP" "$BODY")
 
-  HTTP_STATUS=$(curl -s -o /tmp/wh_response -w "%{http_code}" -X POST "$WEBHOOK_URL" \
+  HTTP_STATUS=$(curl -s -o "$resp_file" -w "%{http_code}" -X POST "$WEBHOOK_URL" \
     -H "Content-Type: application/json" \
     -H "webhook-id: $MSG_ID" \
     -H "webhook-timestamp: $TIMESTAMP" \
@@ -255,7 +256,7 @@ while IFS=',' read -r code title category price stock active; do
     -d "$BODY")
 
   if [ "$HTTP_STATUS" -ge 300 ]; then
-    echo "Row $row FAILED ($HTTP_STATUS): $(cat /tmp/wh_response)" | tee -a "$failed_file"
+    echo "Row $row FAILED ($HTTP_STATUS): $(cat "$resp_file")" | tee -a "$failed_file"
     ((failed++)) || true
   else
     ((ok++)) || true
@@ -265,6 +266,7 @@ while IFS=',' read -r code title category price stock active; do
   sleep 0.05
 done < "$CSV_FILE"
 
+rm -f "$resp_file"
 echo "Done: $ok ok, $failed failed"
 [ "$failed" -gt 0 ] && echo "Failed rows in $failed_file"
 ```

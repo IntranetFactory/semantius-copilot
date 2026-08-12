@@ -2,7 +2,28 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
-## 1.2
+## 1.4
+
+Truncation-proof `mapping.json` writes and the bash file-content discipline (companion to the analyst's parts-protocol change; see its CHANGELOG for the incident).
+
+- On a wide CSV, `mapping.json` can exceed the ~4 KB chunk cap, and a generation cut mid-`Write` would ship a silently partial mapping. Section 8 of schema-mapping.md now routes over-cap mappings through the shared parts protocol (`../semantius-admin/references/parts-protocol.md`, new): manifest-first parts under `parts/mapping/` in the run folder, sentinel + verification pass, content-free assembly to `candidate.json`, a deterministic `JSON.parse` + column-count gate, then `mv` to `mapping.json`. Below the cap, a single `Write` stays fine; review-loop changes are capped `Edit`s either way.
+- New resident "Bash file-content discipline" section in SKILL.md: bash never carries file content; heredocs are banned outright in tool-emitted bash (a truncated heredoc blocks on stdin indefinitely; a truncated pipe fails fast as a syntax error); small ASCII payloads use `printf '%s' '…' | semantius call …`; larger or quote-hazardous payloads go through Write-tool files or Bun scripts — already this skill's standard path. The `import.template.ts` copy is unaffected (deterministic, byte-for-byte, never model-generated).
+
+## 1.3
+
+Run workspace moved out of the OS temp directory.
+
+- The run workspace is now `<cwd>/.tmp_import/run-<ts>/` (gitignored; same scratch-folder family as the modeler's `.tmp_deploy/` and the admin's `.tmp_admin/`) instead of `<os-tmpdir>/semantius-import/run-<ts>/`. Sandboxes can wipe the OS temp directory when they restart mid-run, which lost the approved `mapping.json` and the `failed-batches.json` history; cwd survives a restart and stays inspectable by path. The `bun -e 'os.tmpdir()'` resolution step is gone.
+- Retention unchanged: run folders persist after the run (re-run reuse, failure history in one place); the user manages cleanup. The three run scripts needed no changes — they resolve `mapping.json` and their outputs relative to their own location.
+- The use-semantius webhook-import pure-shell variant likewise dropped its literal `/tmp/wh_response` for a cwd-relative `wh_response.tmp` (also fixes the fixed-filename collision across concurrent runs).
+- `field_order` for created fields now starts at 30 (30, 40, 50, ...) instead of 10 — positions 10 and 20 are already occupied by every entity's auto-created fields. `render-plan.ts` warns on `create` columns with `field_order` below 30.
+- Four fixes from a live test run (each failure observed once, now structural):
+  - Workspace setup is one canonical block at Stage 2: mkdir plus all four copies under their **final names** — including `import.template.ts` → `import.ts` — plus `bun add csv-parse`. Previously the `import.ts` rename was documented only in Stage 5 while setup ran in Stage 2, so the copy kept the template name and Stage 5 failed with "Module not found".
+  - `create-fields.ts` retries exit 3 (transport) per field up to 3 times with 1s/3s/9s backoff, matching `import.template.ts`; fail-fast is reserved for exit 4 (validation, where continuing is pointless) and exit 5 (auth). One transient `SERVER_CONNECTION_FAILED` no longer kills a 30-field run.
+  - New per-stage command checklist at the top of the SKILL.md workflow: a stage counts as run only when its listed commands ran; substituting a variant call (a bare `read_entity '{}'` for Stage 3's `--single` read + field-overlap sweep) is skipping the stage. The Stage 3 sweep is what prevents duplicate entities on a populated instance.
+  - Stage 6 spot-reads select `<id_column>,<label_column>,<sample fields>`, never `select=label` — the computed `label` is a read-time projection, not a PostgREST column, and the probe fails with `42703` (verified live; also noted in importer-essentials.md). New rule: probe errors are findings — an errored verification probe goes into the report verbatim as failed/not-verified, never reasoned away into a pass.
+
+## 1.2 
 
 Determinism and throughput rev, driven by a real HubSpot-leads import: no more hand-transcribed scripts, no more prose arithmetic, no more serial field creation, plus the "introspection verdict is gold" rule.
 

@@ -83,9 +83,9 @@ When reconciliation requires "removing" something (e.g. user wants to retire an 
 
 ### 🚫 NEVER touch the user's files — the analyst only WRITES its own spec
 
-This is an **absolute, non-negotiable rule with no exceptions and no "helpful" override.** The analyst's ONLY filesystem write is creating/updating the single spec file it was invoked to produce (`semantius/specs/<slug>-semantic-spec.md`, or an explicit path the user gave). Nothing else on disk is ever the analyst's to touch.
+This is an **absolute, non-negotiable rule with one narrow carve-out and no "helpful" override.** The analyst's filesystem writes are exactly two things: (1) creating/updating the single spec file it was invoked to produce (`semantius/specs/<slug>-semantic-spec.md`, or an explicit path the user gave), and (2) files **inside its own run-scratch parts folder created this run** (`parts/<slug>/` under the run's scratch home, per the chunked-write protocol in [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md)) — those the analyst may freely create, overwrite, and delete, because they are its own ephemeral scratch, not the user's artifacts: recreating the folder fresh per attempt, rewriting a truncated part, and cleaning up after assembly are all in-scope. Nothing else on disk is ever the analyst's to touch; the rules below continue to cover everything outside that one folder.
 
-**The analyst MUST NEVER, under any circumstances:**
+**Outside that one parts folder, the analyst MUST NEVER, under any circumstances:**
 
 - **Delete, remove, `rm`, or unlink any file** — not a stale spec, not a duplicate, not a `master1`/`master2`/`draftN` variant, not a backup, not "leftover cruft," nothing. Ever.
 - **Rename, move, `mv`, or overwrite any pre-existing file** other than the exact spec file it is writing.
@@ -96,7 +96,11 @@ This is an **absolute, non-negotiable rule with no exceptions and no "helpful" o
 
 **If the user themselves explicitly asks for a deletion or rename**, the analyst still does not perform it silently as part of reconciliation: confirm the exact file(s) and the exact operation in plain language, and only act on an unambiguous, file-specific instruction — never on the analyst's own initiative or inference. The default, the fallback, and the behavior under any ambiguity is **always "leave it alone."**
 
-Rationale: these are the user's design artifacts and their git working tree. They review and commit. A skill that deletes or renames files the user did not ask it to touch destroys work and trust. Writing one spec file is the entire filesystem footprint of this skill.
+Rationale: these are the user's design artifacts and their git working tree. They review and commit. A skill that deletes or renames files the user did not ask it to touch destroys work and trust. Writing one spec file (plus its ephemeral parts scratch) is the entire filesystem footprint of this skill.
+
+### Bash file-content discipline
+
+**Bash never carries file content.** No heredocs in tool-emitted bash, ever — not `cat > file <<EOF` to write a file, not `semantius call … <<'JSON'` to feed the CLI — and no multi-KB `printf`/`echo` bodies. A generation cut mid-heredoc leaves the command blocked on stdin indefinitely (a live session wedged for ~55 minutes exactly this way), while a truncated pipe form fails immediately as a visible bash syntax error. File content goes through the Write tool, chunked per [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md) when it can exceed ~4 KB. Small inline payloads (≤ ~1 KB, ASCII, no apostrophes/backticks) use the fail-fast pipe form `printf '%s' '…' | semantius call …`; anything larger or with hazardous quoting goes through a file (`semantius call … < payload.json`) or a Bun script. PowerShell here-strings (`@'…'@`) fall under the same ban. A truncated generation is an expected, recoverable event: rewrite the affected part or payload file, never retry as a heredoc.
 
 ---
 
@@ -305,6 +309,7 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 
 | Check | Failure surfaces as |
 |---|---|
+| **Parts-protocol completeness** — the candidate was assembled from verified parts: every `00-manifest` entry exists with the exact filename, each part carries the `<!-- part-complete -->` sentinel exactly once and ends with a newline, and the candidate's tail matches the last part's closing content (protocol R3–R5 in `../semantius-admin/references/parts-protocol.md`; recovery is rewriting only the affected part, never the whole file) | missing / truncated / unlisted parts list |
 | `version` is `"5.4"` | front-matter has wrong major |
 | Every blueprint §3 entity has a Reconciliation decision | missing decisions list |
 | No `reuse-from` entity carries a Fields block | over-spec list |
@@ -334,10 +339,10 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 | **No cross-primitive format change** without §7.1 🔴 blocker | format-change list (entity, field, live format, spec format) |
 | **Permission tier downgrade has user consent** (Stage 3f.3 option 2 explicitly picked) | unconfirmed downgrade list (entity, live tier, spec tier) |
 
-**Mechanical consistency gate (mandatory — run it, do not eyeball it).** The §2 Mermaid-completeness row above and the entity-set / label / reference reconciliation are enforced by the same deterministic checker the architect ships (it handles both blueprints and specs). After writing the candidate spec, run it and require a clean exit:
+**Mechanical consistency gate (mandatory — run it, do not eyeball it).** The §2 Mermaid-completeness row above and the entity-set / label / reference reconciliation are enforced by the same deterministic checker the architect ships (it handles both blueprints and specs). After assembling the candidate spec (stage-11's write sequence; the gate runs against the candidate, BEFORE the `mv` into `semantius/specs/`), run it and require a clean exit:
 
 ```bash
-bun ".claude/skills/semantius-architect/references/consistency-check.ts" "semantius/specs/<slug>-semantic-spec.md"
+bun ".claude/skills/semantius-architect/references/consistency-check.ts" "<parts folder>/candidate.md"
 ```
 
 For a spec it byte-compares: the frontmatter `entities:` list ⟺ §2 `Table name` ⟺ §3 sub-section headings (the entity set, strict 1:1); §2 `Singular label` ⟺ the §3 heading singular label (per entity); that every §4 / §5 / §8.2 / mermaid reference resolves to a declared entity; and that every §2 mermaid edge's direction + verb agrees with what §3 `relationship_label` + §4 `Cardinality`/`Kind` derive (a `parent`-kind row is always drawn as a bare arrow with no verb, per the junction convention; every other row's verb comes from §3, never invented at diagram time). It is **content-agnostic** on prose — it never judges language or casing, only that every occurrence of a name (and now every diagram edge) agrees with its source. A non-zero exit prints the exact entity and the disagreeing locations; fix every reported line and re-run until exit 0 before narrating the close-out. Do not substitute reading for running it.

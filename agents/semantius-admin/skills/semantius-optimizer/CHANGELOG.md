@@ -8,6 +8,10 @@ Entries below are newest first. `SPEC_VERSION` tracks the analyst's `CURRENT_VER
 
 ---
 
+## Unreleased: bash file-content discipline (resident section)
+
+2026-08-12. Companion to the analyst's parts-protocol change (see its CHANGELOG for the incident). New resident "Bash file-content discipline" section in SKILL.md: bash never carries file content; heredocs are banned outright in tool-emitted bash (a truncated heredoc blocks on stdin indefinitely; a truncated pipe fails fast as a syntax error); small ASCII payloads use the `printf '%s' '…' |` pipe form; anything larger or quote-hazardous goes through Write-tool files or Bun scripts, chunked per `../semantius-admin/references/parts-protocol.md` over ~4 KB. This skill's spec output is written by the deterministic extractor and is unaffected; the rule covers auxiliary files and CLI payloads. No extractor or spec-shape change.
+
 ## Unreleased: extractor emits the deploy-provenance keys (`deployed_version` / `deployed_version_date` / `deployed_related_versions`)
 
 2026-07-05. `frontmatter()` now emits the deploy-provenance keys from live state: `deployed_version` = the module's `modules.version`, `deployed_version_date` = `modules.version_date`, and `deployed_related_versions` = a `slug: version` map of every other module this spec reuses an entity from (computed in `main()` from the reference-target entities' owning modules). Unlike the authoring-only `reconciled_*` / `source_blueprint` keys the extractor drops, these are live truth, so a reverse-engineered spec carries them and is trivially in-sync (the analyst's 2a.1 drift gate reads `deployed_version == live.version` until prod next changes). Guarded on `mod.version` presence, so an older platform (no `version` column) omits all three. Pairs with the modeler's Stage 5b stamp and the analyst's 2a.1 gate. No `SPEC_VERSION` bump (additive optional keys within the v5.4 shape); validated with `bun build`.

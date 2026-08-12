@@ -82,6 +82,10 @@ That file is the distilled subset of `use-semantius` this workflow needs: CLI fo
 | Big payloads | Pipe JSON via stdin (`... | semantius call crud postgrestRequest`); the CLI reads stdin when no JSON argument is given. The "always pass inline JSON" warning is about interactive shells with an empty stdin, not scripts that pipe | cli-usage.md → Passing Arguments |
 | Format vocabulary | `enum` (with `enum_values`), never `select`; monetary values are `number` + `precision` | data-modeling.md |
 
+### Bash file-content discipline
+
+**Bash never carries file content.** No heredocs in tool-emitted bash, ever — not `cat > file <<EOF` to write a file, not `semantius call … <<'JSON'` to feed the CLI — and no multi-KB `printf`/`echo` bodies. A generation cut mid-heredoc leaves the command blocked on stdin indefinitely (a live session wedged for ~55 minutes exactly this way), while a truncated pipe form fails immediately as a visible bash syntax error. File content goes through the Write tool — `mapping.json` on a wide CSV is chunked per [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md) (see schema-mapping.md section 8). Small inline payloads (≤ ~1 KB, ASCII, no apostrophes/backticks) use the fail-fast pipe form `printf '%s' '…' | semantius call …`; anything larger or with hazardous quoting goes through a file (`semantius call … < payload.json`) or a Bun script — which is already this skill's standard path (the "Big payloads" row above and the Stage 4 payload-hygiene rule). PowerShell here-strings (`@'…'@`) fall under the same ban. A truncated generation is an expected, recoverable event: rewrite the affected part or payload file, never retry as a heredoc.
+
 ---
 
 ## Workflow
@@ -91,6 +95,17 @@ That file is the distilled subset of `use-semantius` this workflow needs: CLI fo
 ```
 
 Read **[`references/schema-mapping.md`](references/schema-mapping.md)** and **[`references/import-script-template.md`](references/import-script-template.md)** (workspace and helper mechanics) before Stage 2.
+
+**Per-stage command checklist.** The prose below governs the details; this table is the completeness gate. A stage counts as run only when its listed commands actually ran — substituting a variant call (e.g. a bare `read_entity '{}'` in place of Stage 3's `--single` read plus the overlap sweep) is skipping the stage, not running it.
+
+| Stage | Mandatory commands |
+|---|---|
+| 1 Introspect | `semantius call utils/get_csvschema '{"path": "<csv>"}'` |
+| 2 Map & review | the canonical setup block (import-script-template.md → Workspace layout): mkdir + all four copies under **final names** (`import.template.ts` → `import.ts`) + `bun add csv-parse`; then `bun run render-plan.ts` after every mapping edit |
+| 3 Detect & diff | `read_entity --single '{"filters":"table_name=eq.<table>"}'` + `read_field '{"filters":"table_name=eq.<table>"}'`; on absent entity additionally `read_entity '{}'` (name sweep) **and** `read_field '{"filters":"field_name=in.(<mapped field names>)"}'` (overlap sweep), then the create-vs-reuse question |
+| 4 Decide & create | catalog writes per decision; `bun run create-fields.ts --dry-run` (pre-write gate), then `bun run create-fields.ts` |
+| 5 Run import | `bun run import.ts <absolute-csv-path>` (`import.ts` exists since the Stage 2 setup block) |
+| 6 Verify & report | spot-read `postgrestRequest` GET with `select=<id_column>,<label_column>,<sample fields>` — never `select=label`; every probe result, including errors, goes into the report |
 
 ### Stage 1 — Introspect
 
@@ -104,7 +119,7 @@ The schema is a wrapper: `{id_mode, id_move_column?, record_count, fields}`. Rec
 
 ### Stage 2 — Map and review
 
-First create the run workspace: `<os-tmpdir>/semantius-import/run-<timestamp>/` (temp dir resolved with `bun -e 'console.log(require("node:os").tmpdir())'`, never a shell-literal `/tmp` or `$TMPDIR`), copy in the `.csvschema.json` and the helpers `references/render-plan.ts` and `references/create-fields.ts`, and run `bun add csv-parse` — full mechanics in import-script-template.md. If a previous run folder for the same table exists, offer to reuse and reconfigure it instead. The mapping lives in that folder as `mapping.json` from the first proposal on.
+First create the run workspace with the **canonical setup block** (import-script-template.md → Workspace layout): `<cwd>/.tmp_import/run-<timestamp>/` (a scratch folder under the current working directory — never `$TMPDIR` / `/tmp/` / `$env:TEMP`, which a sandbox restart can wipe mid-run; add `.tmp_import/` to `.gitignore` once), then all four copies under their **final names** — the `.csvschema.json`, `render-plan.ts`, `create-fields.ts`, and `references/import.template.ts` copied **as `import.ts`** (the rename happens here at setup, never in Stage 5) — and `bun add csv-parse`. If a previous run folder for the same table exists, offer to reuse and reconfigure it instead. The mapping lives in that folder as `mapping.json` from the first proposal on.
 
 Apply schema-mapping.md sections 2–7 to produce the proposed mapping:
 
@@ -150,7 +165,7 @@ Creation order (mechanics in data-modeling.md, `read_*` before every `create_*` 
 
 1. Module (when needed): `create_module`, then `<slug>:read` + `<slug>:manage` permissions, then `update_module` to wire `view_permission` / `manage_permission_id`.
 2. Entity: `create_entity` with `table_name`, symmetric `singular_label` / `plural_label`, description, **`label_column`** (the platform auto-creates that field and the computed `label` field), `module_id`, `view_permission`, `edit_permission`.
-3. Fields: run `bun run create-fields.ts` in the run workspace — it creates every `disposition: "create"` column from `mapping.json` **concurrently** (pool of 5) with the mapping's explicit `field_order` (increments of 10; the platform preserves explicit order, so creation order carries no meaning), skips field names that already exist live, and **fails fast and loud**: per-field exit code and first stderr line in a compact result table, first failure stops new launches, non-zero exit. Never hand-roll a shell loop for field creation — ad-hoc loops swallow errors. The label column (`disposition: "label"`) and skipped columns are never created. When the label field deserves a more specific title than `singular_label`, follow up with `update_field` on that field's `title` (importer-essentials.md).
+3. Fields: run `bun run create-fields.ts` in the run workspace — it creates every `disposition: "create"` column from `mapping.json` **concurrently** (pool of 5) with the mapping's explicit `field_order` (increments of 10 starting at 30 — 10 and 20 belong to the auto-created fields; the platform preserves explicit order, so creation order carries no meaning), skips field names that already exist live, **retries transient failures** (exit 3: up to 3 per-field retries with 1s/3s/9s backoff, same policy as the import script), and **fails fast and loud on real errors** (exit 4 validation / exit 5 auth, never retried): per-field exit code and first stderr line in a compact result table, the first non-transient failure stops new launches, non-zero exit. Never hand-roll a shell loop for field creation — ad-hoc loops swallow errors. The label column (`disposition: "label"`) and skipped columns are never created. When the label field deserves a more specific title than `singular_label`, follow up with `update_field` on that field's `title` (importer-essentials.md).
 
 **Write mode (`on_exists`).** With a natural key set, the import behaves per the prompted decision: `insert` skips existing keys; `update` synchronizes them — unchanged rows are not written, changed rows are updated, new rows inserted. Update mode requires the key field to be unique (`unique_value: true`); on a non-unique key, say so plainly and offer making it unique via the possible-change classification (which fails loudly when live duplicates exist) or fall back to insert mode.
 
@@ -164,7 +179,7 @@ Payload hygiene: any payload carrying free text from the CSV or the user (descri
 
 The workspace, mapping, and dependencies already exist from Stage 2. Per **[`references/import-script-template.md`](references/import-script-template.md)**:
 
-1. Copy **`references/import.template.ts`** into the run folder as `import.ts` — **byte-for-byte, never retyped or edited per run**. The script carries no placeholders; it reads all run configuration from `./mapping.json` at startup.
+1. `import.ts` already sits in the run folder — the Stage 2 setup block copied `references/import.template.ts` to that final name, **byte-for-byte, never retyped or edited per run** (no placeholders; it reads all run configuration from `./mapping.json` at startup). If it is missing, re-run that one copy line; never re-author the file.
 2. `bun run import.ts <absolute-csv-path>` (streaming parse, coercion per mapping, uniform-key batches via stdin-piped `postgrestRequest`, exit-code-aware retries, `failed-batches.json` capture, natural-key dedupe and write modes, built-in count verify).
 
 ### Stage 6 — Verify and report
@@ -172,9 +187,11 @@ The workspace, mapping, and dependencies already exist from Stage 2. Per **[`ref
 The script already count-verifies and emits `import-summary.json`. The skill then:
 
 1. Checks `parsed` against the introspection's `record_count` (full-scan runs): a mismatch is a parsing defect to surface (delimiter trouble, embedded newlines), not noise.
-2. Spot-reads 2–3 imported rows (`postgrestRequest` GET) and eyeballs the coercions: booleans are `true`/`false`, dates are dates, enums carry expected values, the label renders. In update mode, one spot-read targets an updated row to confirm the new values landed.
+2. Spot-reads 2–3 imported rows (`postgrestRequest` GET with `select=<id_column>,<label_column>,<a few mapped fields>`) and eyeballs the coercions: booleans are `true`/`false`, dates are dates, enums carry expected values, the **label column field** carries the expected values. **Never `select=label`**: the computed `label` field is a read-time projection, not a PostgREST column — that probe fails with `42703` (verified live). In update mode, one spot-read targets an updated row to confirm the new values landed.
 3. Renders the final report: parsed / inserted / updated / unchanged / skipped / failed, the count-verify verdict, the path to `failed-batches.json` when failures exist (with the first error quoted verbatim), and what was created in the catalog.
 4. Closes with a clickable deep link to the entity list: `[Open <Plural Label> in Semantius →](<ui_baseurl>/<module_slug>)` — read `ui_baseurl` as a discrete field from `getCurrentUser`, never derive it from `api_baseurl`.
+
+**Probe errors are findings.** A verification probe that returns an error — any non-zero exit or error body — goes into the final report verbatim, with that check marked **failed** or **not verified**. It is never reasoned away, and no prose may claim a check passed whose probe errored: a check either ran and passed, or its error is quoted. ("The probe failed but it's probably fine" is exactly the failure this rule exists to prevent.)
 
 A failed batch is loud: the run is reported as incomplete with the re-run instruction (fix the cause, re-run with the natural key set so completed rows skip). Never render a success-shaped summary over a partial import.
 

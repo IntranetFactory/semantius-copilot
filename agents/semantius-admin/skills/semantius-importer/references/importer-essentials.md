@@ -65,7 +65,7 @@ semantius call crud create_entity '{"data": {"table_name": "products", "singular
 ```
 
 - `table_name` is **plural snake_case**. `module_id` is required and non-null. `singular_label`/`plural_label` are grammatically symmetric bare nouns ("Product"/"Products", never "Product Name").
-- **Auto-created on `create_entity`** — never `create_field` these: `id`, `label`, the `<label_column>` field, `created_at`, `updated_at`. `_label` and `<fk>_label` are read-time projections (absent from the fields catalog, never writable, never import targets).
+- **Auto-created on `create_entity`** — never `create_field` these: `id`, `label`, the `<label_column>` field, `created_at`, `updated_at`. `_label` and `<fk>_label` are read-time projections (absent from the fields catalog, never writable, never import targets). The computed `label` is likewise **not a PostgREST column**: `select=label` fails with `42703` (verified live) — to verify labels, select the `<label_column>` field instead.
 - The auto-created label field's `title` defaults to `singular_label`; when the CSV implies a better one ("Product Code"), follow up with `update_field` on that field's `title`.
 - **Never create or import into `users`** or other platform built-ins.
 
@@ -84,7 +84,7 @@ Properties the importer uses:
 | `format` | Open vocabulary; the importer passes the csvschema verdict through (`string`, `multiline`, `integer`, `number`, `date`, `date-time`, `boolean`, `enum`, `email`, `url`, ...). `enum` requires `enum_values` (never `select`). Monetary values: `number` + `precision`. |
 | `precision` | `number` only; digits after the decimal (default 2). |
 | `input_type` | `default`, `required` (mandatory in UI), `readonly`, `disabled`, `hidden`. **There is no `required` column and no `is_nullable`** — sending either fails. Never target live `readonly`/`disabled` fields with an import. |
-| `field_order` | Display order; the platform preserves explicit values regardless of creation order. Use increments of 10 (10, 20, 30, ...) to leave insertion room. |
+| `field_order` | Display order; the platform preserves explicit values regardless of creation order. Start at 30 and use increments of 10 (30, 40, 50, ...) to leave insertion room — 10 and 20 are already used by the auto-created fields in every entity. |
 | `width` | `"default"` unless a layout need exists. |
 | `unique_value` | `true` enforces DB-level uniqueness (natural keys for update-mode imports). On an existing field it fails when live duplicates exist. |
 | `searchable` | `true` adds the field to full-text search. |

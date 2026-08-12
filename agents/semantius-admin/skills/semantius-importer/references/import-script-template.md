@@ -2,7 +2,7 @@
 
 The import script is a Bun (TypeScript) one-shot that streams the CSV with `csv-parse`, coerces per `mapping.json`, and bulk-inserts uniform-key batches through `semantius call crud postgrestRequest`. Python is not used in this skill; Bun runs identically on every platform.
 
-**The script ships as a real file: [`import.template.ts`](import.template.ts), next to this document.** It carries no generation-time placeholders — all run configuration comes from `./mapping.json` (schema-mapping.md section 8), which it reads at startup. "Generating" the script means copying the file byte-for-byte:
+**The script ships as a real file: [`import.template.ts`](import.template.ts), next to this document.** It carries no generation-time placeholders — all run configuration comes from `./mapping.json` (schema-mapping.md section 8), which it reads at startup. "Generating" the script means copying the file byte-for-byte **as `import.ts`** — done once, in the Stage 2 setup block below, never deferred to Stage 5:
 
 ```bash
 cp <skill-folder>/references/import.template.ts <run-folder>/import.ts
@@ -12,35 +12,41 @@ cp <skill-folder>/references/import.template.ts <run-folder>/import.ts
 
 ## Workspace layout
 
-Every import run gets its own scratch folder in the **OS temp directory**. Resolve it portably with Bun (never a shell-literal `/tmp` or `$TMPDIR`, which resolve inconsistently across shells on Windows):
-
-```bash
-bun -e 'console.log(require("node:os").tmpdir())'
-```
+Every import run gets its own scratch folder under the **current working directory**, joining the plugin's scratch-folder family beside the modeler's `.tmp_deploy/` and the admin's `.tmp_admin/`. `<cwd>` is the one path every shell, the Write tool, and the harness already agree on — no translation, no surprises — and unlike the OS temp directory it survives a sandbox restart mid-run, so an approved `mapping.json` is never lost between review and import. Do **not** write to `$TMPDIR` / `/tmp/` / `$env:TEMP`: those paths resolve differently between Git Bash and Windows-native runtimes, a recycling sandbox may wipe them, and the user cannot inspect them by path if a run fails. Add `.tmp_import/` to `.gitignore` once.
 
 ```
-<os-tmpdir>/semantius-import/run-<yyyymmdd-hhmmss>/
+<cwd>/.tmp_import/run-<yyyymmdd-hhmmss>/
 ├── package.json          # {"dependencies": {"csv-parse": "^6"}} — created by `bun add csv-parse`
 ├── mapping.json          # the approved mapping (schema-mapping.md section 8) — the single runtime input
 ├── <file>.csvschema.json # copied introspection output
 ├── render-plan.ts        # copied helper: renders the mapping table + plan facts (Stage 2/4)
 ├── create-fields.ts      # copied helper: parallel create_field runner (Stage 4)
-├── import.ts             # byte-for-byte copy of import.template.ts (Stage 5)
+├── import.ts             # byte-for-byte copy of import.template.ts (copied at Stage 2 setup, run in Stage 5)
 ├── failed-batches.json   # written only when something fails
 └── import-summary.json   # written at the end of every run
 ```
 
-The workspace is created at the start of Stage 2 (the helpers need `mapping.json` beside them from the first review round). Setup commands (run inside the run folder):
+The workspace is created at the start of Stage 2 (the helpers need `mapping.json` beside them from the first review round). **One canonical setup block, run in full at Stage 2** — every copy lands under its **final name**, so no later stage renames anything. In particular `import.template.ts` becomes `import.ts` here; defer that rename to Stage 5 and `bun run import.ts` dies with "Module not found":
 
 ```bash
-cd "<os-tmpdir>/semantius-import/run-<ts>" && bun add csv-parse
+mkdir -p .tmp_import/run-<ts>                                          # from <cwd>
+cp <csv-folder>/<file>.csvschema.json     .tmp_import/run-<ts>/
+cp <skill-folder>/references/render-plan.ts    .tmp_import/run-<ts>/render-plan.ts
+cp <skill-folder>/references/create-fields.ts  .tmp_import/run-<ts>/create-fields.ts
+cp <skill-folder>/references/import.template.ts .tmp_import/run-<ts>/import.ts   # note the final name
+cd "<cwd>/.tmp_import/run-<ts>" && bun add csv-parse
+```
+
+Run commands (inside the run folder, as each stage arrives):
+
+```bash
 bun run render-plan.ts                       # Stage 2: mapping table + facts
 bun run create-fields.ts --dry-run           # Stage 4: exact create_field payloads
 bun run create-fields.ts                     # Stage 4: create the fields (concurrency 5)
 bun run import.ts <absolute-path-to>/<file>.csv   # Stage 5
 ```
 
-The workspace never goes into the user's project, the CSV's folder, or the skill folder; it is disposable scratch outside anything the user tracks. Always report the run folder's **absolute path** in the final summary so the user can open `failed-batches.json` and `import-summary.json` directly. Re-running an import for the same table: prefer updating `mapping.json` in the existing run folder over generating a fresh one, so `failed-batches.json` history stays in one place.
+The workspace lives under the project's working directory but stays out of `git status` via the `.tmp_import/` gitignore entry; it never goes into the CSV's folder or the skill folder. Always report the run folder's **absolute path** in the final summary so the user can open `failed-batches.json` and `import-summary.json` directly. Re-running an import for the same table: prefer updating `mapping.json` in the existing run folder over generating a fresh one, so `failed-batches.json` history stays in one place.
 
 ## Design rules the script implements
 
@@ -62,9 +68,9 @@ These are the contract `import.template.ts` fulfills — read them to understand
 
 Stage 4's `create_field` calls go through the copied runner, never an ad-hoc shell loop. Its contract:
 
-- Selects `disposition: "create"` columns from `mapping.json` and creates them with a **concurrency pool of 5**. Explicit `field_order` from the mapping (increments of 10) makes creation order meaningless, which is what permits the parallelism.
+- Selects `disposition: "create"` columns from `mapping.json` and creates them with a **concurrency pool of 5**. Explicit `field_order` from the mapping (increments of 10 starting at 30) makes creation order meaningless, which is what permits the parallelism.
 - **Idempotent**: reads the live fields first and skips names that already exist, so a re-run after a partial failure never double-creates.
-- **Fail-fast and loud**: per-field exit code and stderr are captured; the first failure stops new launches, in-flight calls drain, and every requested field gets a row in the final result table (`ok` / `failed` / `skipped-exists` / `not-run`). The script exits 1 on any failure (5 on auth) — a failed create can never scroll past silently.
+- **Transient-tolerant, fail-fast on real errors, loud always**: exit 3 (transport) is retried per field up to 3 times with 1s/3s/9s backoff, the same policy as the import script — one flaky connection must not kill a 30-field run. Exit 4 (validation: a bad mapping, where continuing is genuinely pointless) and exit 5 (auth) never retry; the first such failure — or an exit 3 that survives the retries — stops new launches, in-flight calls drain, and every requested field gets a row in the final result table (`ok` / `failed` / `skipped-exists` / `not-run`). The script exits 1 on any failure (5 on auth) — a failed create can never scroll past silently, and the idempotent re-run picks up exactly where it stopped.
 - `--dry-run` prints the exact `create_field` payloads without writing — used for the pre-write confirmation gate and for verification.
 
 ## mapping.json checklist (before running anything)
@@ -73,7 +79,7 @@ The old generation-time checklist is now a checklist on the artifact, verified o
 
 - [ ] Every column has a `disposition`: `create` / `exists` / `label` / `skip` — and skipped columns carry a `reason`.
 - [ ] Exactly one column has `disposition: "label"` for a new entity (the auto-created label column: imported, never `create_field`), and no `field_name` targets an auto-generated column (`created_at`, `updated_at`, `label`) or the entity's primary key.
-- [ ] Every `create` column carries `title`, `format`, and `field_order` in increments of 10; `precision` on `number` columns; `enum_values` on confirmed enums; `input_type` per the review; `unique_value: true` on the natural key when update mode is planned.
+- [ ] Every `create` column carries `title`, `format`, and `field_order` in increments of 10 starting at 30 (10 and 20 belong to the auto-created fields); `precision` on `number` columns; `enum_values` on confirmed enums; `input_type` per the review; `unique_value: true` on the natural key when update mode is planned.
 - [ ] Every `boolean` column carries its `bool_pair` from the introspection.
 - [ ] Digit-leading field names were renamed during the review.
 - [ ] `natural_key` is a **field name** present among the non-skipped columns, or absent/null.
@@ -81,4 +87,4 @@ The old generation-time checklist is now a checklist on the artifact, verified o
 - [ ] `id_column` equals the target entity's live `id_column` (from `read_entity`; `id` only for entities this skill just created).
 - [ ] `expected_records` carries the introspection's `record_count` on full scans, `null` when the scan was capped.
 - [ ] When the diff chose coerce-into-live for a mismatched column, that column's `format` is the **live** field's format, so validation routes incompatible rows to the failed capture.
-- [ ] After a successful run, report the summary with the run folder's absolute path and leave the folder in place (the user may want `failed-batches.json` and `import-summary.json`); the OS cleans its temp directory on its own schedule.
+- [ ] After a successful run, report the summary with the run folder's absolute path and leave the folder in place (the user may want `failed-batches.json` and `import-summary.json`); `.tmp_import/` is gitignored and the user manages cleanup — the next run gets its own folder.

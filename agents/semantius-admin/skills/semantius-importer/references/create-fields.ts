@@ -9,9 +9,13 @@
  *
  * - Idempotent: live fields are read first; columns whose field_name already
  *   exists are skipped (safe re-run; read-before-create).
- * - Fail-fast: the first non-zero exit stops new launches, in-flight calls
- *   drain, and the run exits 1 with the result table below. Exit 5 (auth)
- *   aborts the same way and the script exits 5.
+ * - Transient-tolerant: exit 3 (transport failure, CLI retries exhausted) is
+ *   retried per field up to 3 times with 1s/3s/9s backoff - the same policy
+ *   as import.template.ts. A flaky connection must not kill a 30-field run.
+ * - Fail-fast on real errors: exit 4 (validation - a bad mapping) and exit 5
+ *   (auth) never retry; the first such failure (or an exit 3 that survives
+ *   the retries) stops new launches, in-flight calls drain, and the run
+ *   exits 1 with the result table below. Exit 5 makes the script exit 5.
  * - Loud: every field gets a row in the final table - field, status
  *   (ok / failed / skipped-exists / not-run), exit code, first stderr line.
  *   No error is ever swallowed.
@@ -125,12 +129,26 @@ for (const c of toCreate) {
 let stopped = false;
 let authFailure = false;
 
+async function createWithRetry(c: ColumnSpec): Promise<{ code: number; stdout: string; stderr: string }> {
+  // Exit 3 = transport failure with the CLI's own retries already exhausted:
+  // back off and retry (1s/3s/9s), mirroring import.template.ts. Exit 4
+  // (validation) and exit 5 (auth) are never retried.
+  let res = await call("create_field", payloadFor(c));
+  for (let attempt = 1; res.code === 3 && attempt <= 3 && !stopped; attempt++) {
+    const delay = 1000 * 3 ** (attempt - 1);
+    console.error(`  transient  ${c.field_name} (exit 3), retry ${attempt}/3 in ${delay / 1000}s`);
+    await new Promise((r) => setTimeout(r, delay));
+    res = await call("create_field", payloadFor(c));
+  }
+  return res;
+}
+
 async function worker(): Promise<void> {
   for (;;) {
     if (stopped) return;
     const c = queue.shift();
     if (!c) return;
-    const res = await call("create_field", payloadFor(c));
+    const res = await createWithRetry(c);
     if (res.code === 0) {
       results.set(c.field_name, { status: "ok" });
       console.error(`  ok       ${c.field_name}`);

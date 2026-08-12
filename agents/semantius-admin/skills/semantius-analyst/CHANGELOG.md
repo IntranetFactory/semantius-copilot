@@ -8,6 +8,17 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## Unreleased: truncation-proof spec writes (parts protocol) + bash file-content discipline
+
+2026-08-12. Driven by a live incident (an HVAC blueprint deploy): the model's long tool-call generations were cut mid-stream four times — three truncated `Write` calls of the 30–50 KB spec (one cut before the `path` argument, so no file existed at all), then a `cat > file <<'EOF'` bash fallback whose generation was cut before the terminator, blocking on stdin ~55 minutes. Root cause was the single-emission requirement, not a token cap. Changes:
+
+1. **Stage 11 write sequence reworked around the shared parts protocol** (`../semantius-admin/references/parts-protocol.md`, new): the spec is emitted as ≤ ~4 KB sentinel-terminated parts under a fresh `parts/<slug>/` folder (manifest first), verified by a deterministic CRLF-tolerant bash pass, assembled content-free to a candidate, gated (pre-save table + `consistency-check.ts` now run against the candidate), then `mv`ed into `semantius/specs/` — the committed path never holds a half-finished state. The mermaid gate is now "no part may contain a hand-typed mermaid block"; the §2 part carries the placeholder fence; the generator output is spliced by a capped `Edit` on the candidate. Recovery framing: a truncated generation is expected and recoverable — rewrite the affected part only, never the whole file, never a bash heredoc.
+2. **Pre-save verification** gains a parts-protocol completeness row (manifest ⟺ part set, sentinel exactly once per part, candidate tail check).
+3. **The "NEVER touch the user's files" rule gains its one carve-out**: the analyst may create, overwrite, and delete files inside its own run-scratch parts folder created this run; the absolute ban continues to cover everything else. Without this the protocol and the rule were contradictory.
+4. **New resident "Bash file-content discipline"**: bash never carries file content, heredocs are banned outright in tool-emitted bash (truncation → open-stdin hang), small ASCII payloads use the fail-fast `printf '%s' '…' |` pipe form, everything else goes through Write-tool files or Bun scripts.
+
+Process changes only — no spec-shape change, no version bump.
+
 ## Unreleased: 2a.1 version-match drift gate + deploy-provenance frontmatter carry-forward
 
 2026-07-05. Closes the owned-entity drift gap: previously the analyst reconciled a spec against its **blueprint** (Reconcile / Rebuild) and deep-inspected only **adopted** entities against live (2h), so prod-side drift on the spec's own OWNED entities surfaced only at modeler-deploy time (a late halt). Two additions, both keyed on a platform-maintained `modules.version` (monotonic integer, bumped on any owned-schema change):

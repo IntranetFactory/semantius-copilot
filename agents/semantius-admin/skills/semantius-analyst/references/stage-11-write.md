@@ -8,7 +8,7 @@ Write the spec file at **`semantius/specs/<system_slug>-semantic-spec.md`** in t
 
 ```bash
 mkdir -p semantius/specs
-# then write the file at semantius/specs/<system_slug>-semantic-spec.md
+# the verified, assembled candidate is moved here — see the write sequence below
 ```
 
 Do **not** write the spec at the workspace root. The committed-artifact convention is `semantius/blueprints/` for blueprints and `semantius/specs/` for specs, so that customers can commit one folder and have all their semantic artifacts travel with their repo. If a spec already exists at the workspace root, do not move it automatically; the user can rm or `git mv` it themselves.
@@ -106,25 +106,28 @@ Before generating §2, put the §3 entities (and the `entities:` frontmatter lis
 
 **Write §3 and §4 first, then derive §2 from them mechanically. Do not compose the mermaid diagram by hand.** §3's per-field `relationship_label` and §4's `From`/`Field`/`To`/`Cardinality`/`Kind` are already fully resolved by the time §2 is written — freely re-authoring an arrow direction and verb from that same data a second time is pure duplicated, error-prone work, and it is exactly how a spec ends up self-contradictory (§3 declares `relationship_label: "owns"` while the hand-drawn §2 edge says `"owned by"` and points the wrong way — a real failure this guards against, not a hypothetical one).
 
-**Hard procedural gate (not just guidance): the first `Write` of the spec file must NOT contain a hand-typed mermaid block.** It is not enough to state the rule in prose and trust it will be followed — an agent under time pressure will draft the whole file (including a plausible-looking §2) in one `Write` call and only discover the drift when the consistency gate fails, which is strictly worse: the diagram is already wrong once, a hand-edit is needed to patch it, and that hand-edit is itself another hand-authored diagram, repeating the exact mistake. Follow this sequence instead, every time, no exceptions:
+**Hard procedural gate (not just guidance): the spec is emitted in verified parts, and no part may contain a hand-typed mermaid block.** A spec is 30–50 KB; requiring it to survive one `Write` generation is exactly how a mid-stream truncation ships a partial artifact (or no artifact at all — a real incident, not a hypothetical). And an agent under time pressure will draft a plausible-looking §2 by hand and only discover the drift when the consistency gate fails, which is strictly worse: the diagram is already wrong once, and the patch is itself another hand-authored diagram. Both failure modes are closed by the same write sequence. The chunked-write mechanics (chunk cap, manifest, sentinel, verification pass, assembly pipeline, recovery) are the shared **parts protocol** — read [`../../semantius-admin/references/parts-protocol.md`](../../semantius-admin/references/parts-protocol.md) before the first `Write`. Follow this sequence, every time, no exceptions:
 
-1. `Write` the full spec file with every section EXCEPT the mermaid block populated. Leave the `### Entity-relationship diagram` heading in place with a literal placeholder body (e.g. a single line `<!-- generated below, do not hand-author -->` inside the ` ```mermaid ` fence) — never a guessed diagram, not even a "close enough" draft.
-2. Run the generator (below) against that file.
-3. `Edit` the placeholder block, replacing it with the generator's exact output, byte-for-byte. Do not retype it, reformat it, add node text the generator didn't emit, or otherwise touch what it printed.
-4. Only then run the mandatory consistency gate (no `--emit-mermaid`) as the pre-save check.
+1. **Create the parts folder fresh** (empty) under the run's scratch home per protocol R2: `.tmp_admin/<run_id>/parts/<system_slug>/` when admin-orchestrated; on a standalone run mint a `run-<timestamp>` folder first. Then `Write` the `00-manifest` (protocol R3) listing every planned `NN-<label>.md` part.
+2. **`Write` the spec as parts** (protocol R1/R2/R4): one section per part, ~4 KB max each, each ending with the `<!-- part-complete -->` sentinel line. A section that would exceed the cap (a wide §3 entity block) is split across consecutive parts. The part carrying §2 holds the `### Entity-relationship diagram` heading with a literal placeholder body — a single line `<!-- generated below, do not hand-author -->` inside the ` ```mermaid ` fence — never a guessed diagram, not even a "close enough" draft. **No part may contain a hand-typed mermaid block.**
+3. **Run the verification pass** (protocol R4). A missing, truncated, or unterminated part → rewrite **only that part** and re-verify (protocol R7); never regenerate the whole spec, never fall back to a bash heredoc.
+4. **Assemble to the candidate** (protocol R5): the canonical `cat | sed | grep -vFx` pipeline into `parts/<system_slug>/candidate.md`. Verify it is non-empty and its tail matches the last part's closing content.
+5. **Generate §2 into the candidate.** `Read` the candidate (at least the placeholder region — required before `Edit`, and doubling as an assembly spot-check), run the generator (below) against the candidate path, then `Edit` the placeholder block with the generator's exact output, byte-for-byte. Do not retype it, reformat it, add node text the generator didn't emit, or otherwise touch what it printed. This `Edit` obeys the ~4 KB cap like every other call.
+6. **Run the pre-save gates on the candidate** — the resident SKILL.md verification table and the mandatory consistency gate (no `--emit-mermaid`). The consistency gate is also the backstop that catches a truncated mermaid `Edit`.
+7. **Move the candidate into place**: `mv parts/<system_slug>/candidate.md semantius/specs/<slug>-semantic-spec.md`. The committed path never holds a half-finished state. After this the parts are dead — never reassemble (it would clobber post-assembly edits); any later revision is an `Edit` on the final file (capped per R1), and revise-loop edits re-run the pre-save gates.
 
 If you find yourself about to type `-->` or `|verb|` directly into a `Write` or `Edit` call for §2, stop — that is the bug this gate exists to prevent, not an efficient shortcut.
 
-Once §3 and §4 are written, generate the block and paste its output as §2 verbatim:
+Once the §3 and §4 parts are assembled into the candidate, generate the block and splice its output as §2 verbatim (step 5 above):
 
 ```bash
-bun ".claude/skills/semantius-architect/references/consistency-check.ts" --emit-mermaid "semantius/specs/<slug>-semantic-spec.md"
+bun ".claude/skills/semantius-architect/references/consistency-check.ts" --emit-mermaid "<parts folder>/candidate.md"
 ```
 
 This reads the file's own §3/§4 and prints a ready-to-paste ` ```mermaid ` block: arrow direction from `Cardinality` (`N:1` → the `To` side is the parent, arrow runs `To --> From`; `1:N` → arrow runs `From --> To`; `1:1` → flat `---`), verb from §3's `relationship_label` for that field (a `parent`-kind row — a junction FK — is always a bare arrow with no verb, per the junction convention, even though §3 may declare a `relationship_label` for that field), `builtin`/`master` classDef lines from entity role, and a bare node line for any entity with no edges. Re-run it whenever §3 or §4 changes after the fact (an added field, a renamed verb, a cardinality fix) — never hand-patch §2 to keep it in sync.
 
 The mandatory consistency gate (`consistency-check.ts`, no `--emit-mermaid` flag, run per SKILL.md "Verification gates") then re-derives the same diagram internally and diffs it against what's actually in §2, so a hand-edit that drifts back out of sync fails the gate rather than shipping silently.
 
-*(The pre-save verification gates run at this point; they are resident in SKILL.md under "Verification gates", not repeated here.)*
+*(The pre-save verification gates run at this point, against the candidate; they are resident in SKILL.md under "Verification gates", not repeated here.)*
 
 After a successful save, narrate the close-out. Its shape (admin-orchestrated vs stand-alone wording, the plain-English translation table, and the bans on raw summary dumps and skill-name mentions) is the resident **Closing message** section in SKILL.md, which also covers the Audit and Rebuild close-outs. Follow it.
