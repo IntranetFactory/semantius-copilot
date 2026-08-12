@@ -285,16 +285,18 @@ The environment checks are shared across all four Semantius skills and live in o
 
 ## Step 0 (hard gate): Load the use-semantius Skill
 
-**This is a blocking prerequisite, not a suggestion. Do not author a deploy script and do not issue a single `create_*` / `update_*` call until you have read both files below.** Every write this skill makes goes through use-semantius's patterns. The failures that look like platform bugs — wrong column names, `null` rejected on a column you thought was optional, "I got an array, I expected an object" — are almost always Step 0 not being read. Read both, now:
+**This is a blocking prerequisite, not a suggestion. Do not author a deploy script and do not issue a single `create_*` / `update_*` call until you have read all four files below.** Every write this skill makes goes through use-semantius's patterns. The failures that look like platform bugs — wrong column names, `null` rejected on a column you thought was optional, "I got an array, I expected an object" — are almost always Step 0 not being read. Read all four, now:
 
 ```
 Read: ../use-semantius/SKILL.md
 Read: ../use-semantius/references/data-modeling.md
+Read: ../use-semantius/references/jsonlogic.md
+Read: ../use-semantius/references/select-rule.md
 ```
 
-The data-modeling reference gives you the mandatory creation order, all field formats, the Golden Rules, and exact CLI syntax. Everything in the execution stages below follows those patterns. Also read `references/cli-usage.md` if you need help with CLI invocation, piping, or error handling.
+The data-modeling reference gives you the mandatory creation order, all field formats, the Golden Rules, and exact CLI syntax. The jsonlogic and select-rule references define the rule properties the spec carries and this skill deploys verbatim (`computed_fields`, `validation_rules`, `input_type_rule`, `select_rule`). Everything in the execution stages below follows those patterns. Also read `../use-semantius/references/cli-usage.md` if you need help with CLI invocation, piping, or error handling.
 
-### Safety-net cheat table (does NOT replace reading the two files above)
+### Safety-net cheat table (does NOT replace reading the files above)
 
 These are the traps that have actually broken deploys. This table is a backstop for when you read Step 0 but a detail slips — it is a pointer to the authoritative text, never a substitute for it. **When anything here is incomplete or seems to conflict with use-semantius, use-semantius wins; go read the cited section.**
 

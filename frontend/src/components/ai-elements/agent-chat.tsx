@@ -478,7 +478,7 @@ function MessageView({ message, questions }: { message: AgentMessage; questions:
     <Message from={message.role}>
       <MessageContent>
         {reasoningParts.length > 0 ? (
-          <Reasoning className="w-full" isStreaming={isReasoningStreaming}>
+          <Reasoning className="w-full" isStreaming={isReasoningStreaming} defaultOpen={false}>
             <ReasoningTrigger />
             <ReasoningContent>{reasoningText}</ReasoningContent>
           </Reasoning>

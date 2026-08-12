@@ -408,6 +408,8 @@ Treat this as a real analyst engagement, not a form-filling exercise. Concretely
 - [`../semantius-admin/references/writing-conventions.md`](../semantius-admin/references/writing-conventions.md) — the shared writing conventions (Conventions 1-8). This skill keeps its own fuller copy resident, including the architect-only Conventions 9-10 and the Pre-emit / Narration restraint phrased for blueprint authoring.
 - [`../semantius-admin/references/preflight.md`](../semantius-admin/references/preflight.md) — environment preflight (shared by all four skills).
 - [`../use-semantius/references/data-modeling.md`](../use-semantius/references/data-modeling.md) — Semantius platform reference (entity naming rules, built-in tables, field format rules, relationship rules). Load it to reason about platform constraints during blueprint design.
+- [`../use-semantius/references/jsonlogic.md`](../use-semantius/references/jsonlogic.md) — JsonLogic rule reference: entity-level (`computed_fields`, `validation_rules`) and field-level (`input_type_rule`) rules, extension operators, cross-entity lookups. Mostly analyst territory; load only when reasoning about rule feasibility.
+- [`../use-semantius/references/select-rule.md`](../use-semantius/references/select-rule.md) — row-level security (`select_rule`) reference: REPLACE-vs-AND semantics, oversight disjuncts.
 - [`../semantius-analyst/SKILL.md`](../semantius-analyst/SKILL.md) — downstream skill that reconciles the blueprint against live Semantius and produces a `*-semantic-spec.md`. Invoke after the blueprint is written.
 - [`../semantius-modeler/SKILL.md`](../semantius-modeler/SKILL.md) — deploys the spec to live Semantius. The architect doesn't invoke this directly; it's the third link in the chain.
 

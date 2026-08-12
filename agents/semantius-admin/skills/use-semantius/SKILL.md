@@ -54,6 +54,8 @@ Understanding which layer you're working with determines which tools to use:
 |------|-------------|
 | `references/cli-usage.md` | CLI commands, shell patterns, chaining, installation |
 | `references/data-modeling.md` | Layer 1, entities, fields, modules, relationships, safe evolution |
+| `references/jsonlogic.md` | Layer 1, JsonLogic rules: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, dynamic `input_type_rule` (conditional readonly/hidden/required) |
+| `references/select-rule.md` | Layer 1, row-level security: `select_rule`, who sees which rows, REPLACE-vs-AND semantics, admin-lockout risk |
 | `references/rbac.md` | Layer 1, permissions, roles, user assignments, hierarchy |
 | `references/crud-tools.md` | Layer 1 typed tools + Layer 2 postgrestRequest/sqlToRest reference |
 | `references/cube-queries.md` | Layer 3, CubeJS query DSL, date filtering, analysis modes |
@@ -67,8 +69,14 @@ Understanding which layer you're working with determines which tools to use:
 **Managing schema, create/modify entities, fields, modules?**
 → Layer 1, read `references/data-modeling.md`, follow mandatory creation order
 
+**Computed fields, validation rules, or conditional field behavior (readonly/hidden/required depending on the record)?**
+→ Layer 1, read `references/jsonlogic.md`, entity-level and field-level JsonLogic, operators, cross-entity lookups
+
 **Setting up permissions, roles, users?**
 → Layer 1, read `references/rbac.md`
+
+**Restricting which rows a user can see (row-level security via `select_rule`)?**
+→ Layer 1, read `references/select-rule.md`. Caution: a non-empty rule REPLACES `view_permission` for reads — a rule without a `has_permission` disjunct locks out admins
 
 **Inserting, reading, updating, or deleting records in a single table?**
 → Layer 2, use `postgrestRequest`, see `references/crud-tools.md`

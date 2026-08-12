@@ -208,7 +208,7 @@ The typed tools accept a structured object instead of raw path strings:
 ### `create_entity`
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `data` | object | yes | Entity fields. See data-modeling.md for required fields and auto-generated fields. `module_id` is **required** and must be a valid integer module id (`null` is rejected — it is no longer nullable). `singular` is now **optional**. Includes the optional JSON arrays `computed_fields` and `validation_rules` (default `[]`); see "Computed fields and validation rules" in data-modeling.md. Also accepts the optional `label_parent` (the FK field name that is this entity's identity spine; must name a `reference`/`parent` FK, must not be set on a junction or target one). |
+| `data` | object | yes | Entity fields. See data-modeling.md for required fields and auto-generated fields. `module_id` is **required** and must be a valid integer module id (`null` is rejected — it is no longer nullable). `singular` is now **optional**. Includes the optional JSON arrays `computed_fields` and `validation_rules` (default `[]`); see "Computed fields and validation rules" in jsonlogic.md. Also accepts the optional `label_parent` (the FK field name that is this entity's identity spine; must name a `reference`/`parent` FK, must not be set on a junction or target one). |
 
 ### `read_entity`
 Accepts common read parameters (`filters`, `select`, `limit`, `offset`, `order`). Returns `computed_fields` and `validation_rules` as JSON arrays alongside the other entity properties, plus `label_parent` (the identity-spine FK field name, or null).

@@ -7,7 +7,7 @@
 **Semantius platform constraints** _(from `../../use-semantius/references/data-modeling.md` — treat any violation as 🔴 Blocker)_
 - Every `table_name` is **plural** snake_case (`campaigns`, `leads`, `campaign_members`) — singular names are wrong
 - If the model declares `users`, `roles`, `permissions`, or any other Semantius built-in, the `table_name` must match the built-in exactly (plural, snake_case) so the semantius-modeler skill can deduplicate. Declaring `app_users` when the built-in is `users` is a 🟡 Warning — the deployer can't dedup. Declaring `user` (singular) is a 🔴 Blocker (naming rule).
-- Check the reference file for any other platform constraints added since this skill was written
+- Check the reference files (`data-modeling.md`, `jsonlogic.md`, `select-rule.md`) for any other platform constraints added since this skill was written
 
 **Front-matter (YAML block)**
 - Required keys present: `artifact`, `version`, `blueprint_version`, `system_name`, `system_slug`, `tagline`, `naming_mode` (greenfield only), `module_kind`, `persona`, `created_at`, `entities`, `initial_request`

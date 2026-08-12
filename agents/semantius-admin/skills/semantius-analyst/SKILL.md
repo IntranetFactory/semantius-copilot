@@ -129,7 +129,7 @@ Read: ../use-semantius/SKILL.md
 Read: ../use-semantius/references/data-modeling.md
 ```
 
-The data-modeling reference gives you the mandatory creation order, all field formats, the Golden Rules, and exact CLI syntax. Everything below follows those patterns. Also read `../use-semantius/references/cli-usage.md` if you need help with CLI invocation, piping, or error handling.
+The data-modeling reference gives you the mandatory creation order, all field formats, the Golden Rules, and exact CLI syntax. Everything below follows those patterns. Also read `../use-semantius/references/cli-usage.md` if you need help with CLI invocation, piping, or error handling. The rule-level references (`../use-semantius/references/jsonlogic.md` for `computed_fields` / `validation_rules` / `input_type_rule`, `../use-semantius/references/select-rule.md` for `select_rule`) are loaded by the stage files that author them (Stages 6, 7, 10) — don't preload them here.
 
 All Semantius operations in this skill are performed using the **`semantius` command-line tool**, e.g.:
 
@@ -287,7 +287,7 @@ Failure modes (all 🔴 blockers, halt save):
 
 - A `require_permission` argument references a permission code not in §8.1.
 - A `select_rule` references a column that isn't on this entity.
-- A `select_rule` JsonLogic body contains a **throwing operator** (`require_permission` or `throw_error`). A `select_rule` compiles to a per-row `FOR SELECT` policy evaluated on every read; a throw aborts the entire read instead of hiding the row. Permission checks inside a `select_rule` must use the non-throwing `has_permission` (it returns `false` rather than throwing). See use-semantius `data-modeling.md`, which calls `require_permission` *"Wrong shape for `select_rule`"*. This is the check whose absence let `require_permission` ship inside a read rule.
+- A `select_rule` JsonLogic body contains a **throwing operator** (`require_permission` or `throw_error`). A `select_rule` compiles to a per-row `FOR SELECT` policy evaluated on every read; a throw aborts the entire read instead of hiding the row. Permission checks inside a `select_rule` must use the non-throwing `has_permission` (it returns `false` rather than throwing). See use-semantius `jsonlogic.md`, which calls `require_permission` *"Wrong shape for `select_rule`"*. This is the check whose absence let `require_permission` ship inside a read rule.
 - An entity's `**Edit permission:** admin` annotation but the `baseline-admin` row (`<slug>:admin`) isn't declared in §8.1.
 - An `override`-tier `view_all_<plural>` / `manage_all_<plural>` row in §8.1 with no `select_rule` on the matching entity (the row-scope playbook's owner + oversight shape mints both together), or vice versa.
 - A `<slug>:<workflow>` permission declared in §8.1 but never invoked by any `require_permission` rule.
@@ -406,7 +406,9 @@ Lead with the structured output (tables, JSON, plans). Prose between sections st
 
 - [`../semantius-admin/references/writing-conventions.md`](../semantius-admin/references/writing-conventions.md) - the full writing conventions (Conventions 1-8)
 - [`../semantius-admin/references/preflight.md`](../semantius-admin/references/preflight.md) - environment preflight (shared by all four skills)
-- [`../use-semantius/references/data-modeling.md`](../use-semantius/references/data-modeling.md) - field formats, built-in field shapes, JsonLogic catalog, FK rules, the Golden Rules
+- [`../use-semantius/references/data-modeling.md`](../use-semantius/references/data-modeling.md) - field formats, built-in field shapes, FK rules, the Golden Rules
+- [`../use-semantius/references/jsonlogic.md`](../use-semantius/references/jsonlogic.md) - JsonLogic catalog: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, `input_type_rule`
+- [`../use-semantius/references/select-rule.md`](../use-semantius/references/select-rule.md) - row-level security: `select_rule` REPLACE semantics, oversight disjuncts
 - [`../use-semantius/SKILL.md`](../use-semantius/SKILL.md) - CLI for catalog inspection
 - [`../semantius-architect/SKILL.md`](../semantius-architect/SKILL.md) - produces blueprints (this skill's input)
 - [`../semantius-architect/references/semantic-blueprint-template.md`](../semantius-architect/references/semantic-blueprint-template.md) - the blueprint format

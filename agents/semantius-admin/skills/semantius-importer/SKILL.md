@@ -20,8 +20,6 @@ description: >-
 
 # semantius-importer Skill
 
-> **Status** (kept in sync with `README.md`): id preservation (`id_mode` "id"/"move" writing source ids into the primary key) is **disabled this iteration** — explicit-id imports leave the platform id sequence behind and later inserts collide; it returns once the `fix_id_sequence` RPC is installed. Batched upsert awaits a `prefer` passthrough in the MCP; until then, update mode uses diff-then-PATCH. The README carries the details and the roadmap.
-
 The front door for getting a **file** into Semantius. One CSV in, one entity out (created or reused), rows loaded in batches. The pipeline skills (architect → analyst → modeler) design and deploy whole systems from specs; this skill deliberately does lightweight, single-entity creation driven by what a file actually contains — no blueprint, no catalog reconciliation machinery.
 
 Division of responsibility:
@@ -42,9 +40,15 @@ Pick from the user's phrasing; ask once when ambiguous.
 
 In every mode, each decision branch that would modify an existing entity carries an explicit **"report only, do not update"** option. Comparing never forces updating.
 
-## Writing conventions
+## Writing conventions (apply to every user-facing output)
 
-User-facing output follows the shared conventions (see `../semantius-modeler/SKILL.md`, "Writing conventions"): US English, no em-dashes in chat output, plain language (say "table" / "field" / "row", never internal jargon), narration restraint — do the work, render the decision points and the final report, skip the play-by-play. Data is sacred: CSV values travel into Semantius byte-for-byte except for the coercions the mapping explicitly declares.
+Self-contained — no other skill file needs to be read for these. They govern chat output, `AskUserQuestion` text, plans, and reports; they never apply to data payloads bound for Semantius.
+
+1. **US English spellings, always**: optimize, behavior, customize, organization, analyze — never the British forms.
+2. **No em-dashes (`—`) in chat output.** Use a comma, parentheses, a semicolon, or two sentences instead. (Skill and reference files may use them; the ban is on what the user reads in chat.)
+3. **Plain language.** Say "table", "field", "row", "the file" — never internal jargon (csvschema verdict, disposition, mapping artifact) without a plain-English gloss.
+4. **Narration restraint.** Never announce what you are about to do ("Let me read...", "Now let me check..."). Do the work; render only the decision points and the final report. Play-by-play between tool calls is noise.
+5. **Data is sacred.** CSV values travel into Semantius byte-for-byte except for the coercions the mapping explicitly declares; house style (spelling, dash policy) is never applied to payloads, titles, or enum values derived from the file.
 
 ---
 
@@ -54,16 +58,15 @@ The shared environment checks live in **[`../semantius-admin/references/prefligh
 
 Also confirm the CLI ships the introspection util: `semantius info utils` must list `get_csvschema`. An older CLI without it needs the installer re-run first.
 
-## Step 0 (hard gate): load use-semantius
+## Step 0 (hard gate): load the essentials
 
-**Blocking prerequisite, not a suggestion.** Do not author the import script and do not issue a single `create_*` / `update_*` until you have read:
+**Blocking prerequisite, not a suggestion.** Do not issue a single `create_*` / `update_*` and do not start the import until you have read:
 
 ```
-Read: ../use-semantius/SKILL.md
-Read: ../use-semantius/references/data-modeling.md
+Read: references/importer-essentials.md
 ```
 
-Consult `../use-semantius/references/cli-usage.md` for stdin piping and exit codes, and `../use-semantius/references/crud-tools.md` for `postgrestRequest`.
+That file is the distilled subset of `use-semantius` this workflow needs: CLI forms, exit codes, response shapes, the three catalog writes, `postgrestRequest`, deep links. It is a distillation, not the authority — **use-semantius wins on any conflict** — and the full references are consulted **on demand**, not up front: `../use-semantius/references/data-modeling.md` for FK modeling depth, RBAC beyond the module's two standard permissions, or schema-evolution risk; `../use-semantius/references/crud-tools.md` for PostgREST syntax beyond the essentials; `../use-semantius/references/cli-usage.md` for exotic CLI forms and chaining.
 
 ### Safety-net cheat table (a backstop, never a substitute; use-semantius wins)
 
@@ -84,10 +87,10 @@ Consult `../use-semantius/references/cli-usage.md` for stdin piping and exit cod
 ## Workflow
 
 ```
-1. Introspect → 2. Map & review → 3. Detect & diff → 4. Decide & create → 5. Generate & run import → 6. Verify & report
+1. Introspect → 2. Map & review → 3. Detect & diff → 4. Decide & create → 5. Run import → 6. Verify & report
 ```
 
-Read **[`references/schema-mapping.md`](references/schema-mapping.md)** before Stage 2 and **[`references/import-script-template.md`](references/import-script-template.md)** before Stage 5.
+Read **[`references/schema-mapping.md`](references/schema-mapping.md)** and **[`references/import-script-template.md`](references/import-script-template.md)** (workspace and helper mechanics) before Stage 2.
 
 ### Stage 1 — Introspect
 
@@ -101,20 +104,22 @@ The schema is a wrapper: `{id_mode, id_move_column?, record_count, fields}`. Rec
 
 ### Stage 2 — Map and review
 
+First create the run workspace: `<os-tmpdir>/semantius-import/run-<timestamp>/` (temp dir resolved with `bun -e 'console.log(require("node:os").tmpdir())'`, never a shell-literal `/tmp` or `$TMPDIR`), copy in the `.csvschema.json` and the helpers `references/render-plan.ts` and `references/create-fields.ts`, and run `bun add csv-parse` — full mechanics in import-script-template.md. If a previous run folder for the same table exists, offer to reuse and reconfigure it instead. The mapping lives in that folder as `mapping.json` from the first proposal on.
+
 Apply schema-mapping.md sections 2–7 to produce the proposed mapping:
 
 - format passthrough (the CLI vocabulary is aligned; unlisted formats flow through verbatim per the fallback rule) plus the `multiline` naming heuristic;
 - **enum review** for every `enum` verdict (low-cardinality columns masquerade as enums);
-- **the id line** (schema-mapping.md section 4): `id_mode` applies to the **new-entity path only** — report the detection ("this file carries a usable primary key" / "the first column is an id candidate"), then apply the **classic policy**: id-named column renamed to `external_id` (offered as the unique natural key), an `id_move_column` kept as its own integer field. Importing source ids into a newly created entity's primary key is **deferred** until the `fix_id_sequence` RPC exists (see the Status note and README). For an **existing target entity**, `id_mode` is ignored; the live `id_column` drives the collision policy and the payload guard;
+- **the id line** (schema-mapping.md section 4): `id_mode` applies to the **new-entity path only** — report the detection ("this file carries a usable primary key" / "the first column is an id candidate"), then apply the **classic policy**: id-named column renamed to `external_id` (offered as the unique natural key), an `id_move_column` kept as its own integer field. Importing source ids into a newly created entity's primary key is **deferred** until the `fix_id_sequence` RPC exists (design and roadmap in the README). For an **existing target entity**, `id_mode` is ignored; the live `id_column` drives the collision policy and the payload guard;
 - **the write mode** (`on_exists`), asked explicitly when a natural key is in play: `insert` (existing keys skipped) or `update` (existing records synchronized; requires the key to be unique). Recorded in `mapping.json`;
 - field-name verification, digit-leading renames, and **reserved-column resolutions** (`created_at`, `updated_at`, `label`);
 - **FK candidates** (only with a live target and user confirmation);
 - **label column** proposal (new entities);
 - empty-cell policy per column; the util's `input_type` proposals (downgradeable).
 
-Render the full mapping as one table: raw header → field name → format → extras → empty-cell rule → notes, plus the id-handling line. Then run the **review loop**: the user can rename any field, change a format, drop a column, change the id decision, or pick a different label column; re-render and repeat until approved. Bundle the open per-column questions (ambiguous enums, zero-for-empty, reserved collisions) into as few `AskUserQuestion` calls as possible — one question per topic, all collisions listed together, never one widget per column.
+Write the proposal as `mapping.json` (schema-mapping.md section 8) and render it with the helper: `bun run render-plan.ts` prints the mapping table (raw header → field → format → extras → empty-cell rule → disposition → notes) and a facts block with every count. **Paste the helper's output; never restate a number in prose that the helper did not print** — the artifact is the single source of truth for the table, the plan, and what executes, so counts can never drift between what was said and what was done. Add the id-handling line beside it. Then run the **review loop**: the user can rename any field, change a format, drop a column, change the id decision, or pick a different label column; apply each change to `mapping.json`, re-render with the helper, repeat until approved. Bundle the open per-column questions (ambiguous enums, zero-for-empty, reserved collisions) into as few `AskUserQuestion` calls as possible — one question per topic, all collisions listed together, never one widget per column. Format is **not** free to change silently: every deviation from the introspected csvschema verdict (schema-mapping.md section 2) must be surfaced as a user question with the introspected format as the default, and never folded into the mapping on the skill's own judgment — the rendered mapping carries one pending question per proposed format deviation, and there should be none unless the user asked. If the approved mapping ends up differing from the csvschema verdict on any `format`, that decision must trace to an explicit user answer, not skill inference.
 
-Persist the approved result as `mapping.json` (schema-mapping.md section 8).
+The approved `mapping.json` is final: every later stage (pre-write plan, field creation, import) executes exactly what it says, nothing more.
 
 ### Stage 3 — Detect and diff
 
@@ -145,28 +150,22 @@ Creation order (mechanics in data-modeling.md, `read_*` before every `create_*` 
 
 1. Module (when needed): `create_module`, then `<slug>:read` + `<slug>:manage` permissions, then `update_module` to wire `view_permission` / `manage_permission_id`.
 2. Entity: `create_entity` with `table_name`, symmetric `singular_label` / `plural_label`, description, **`label_column`** (the platform auto-creates that field and the computed `label` field), `module_id`, `view_permission`, `edit_permission`.
-3. Fields: `create_field` per mapping row — **excluding** the label column (auto-created) and skipped columns, issued **in CSV column order** with no `field_order` (the platform assigns positions from creation order). When the label field deserves a more specific title than `singular_label`, follow up with `update_field` per data-modeling.md "Customizing the `label` field's title".
-
-<!-- DEFERRED — id preservation (re-enable after the fix_id_sequence RPC is installed platform-side; see README):
-**Preserved ids (id_mode `"id"` / `"move"`).** The import writes explicit `id` values through `postgrestRequest`; the platform accepts them (verified: the identity column takes explicit values). The catch, also verified: the id **sequence does not advance past explicit inserts** — a fresh table loaded with ids 1..N collides on the first platform-side record creation (UI or default insert). After the import, call `postgrestRequest {"method":"POST","path":"/rpc/fix_id_sequence","body":{"p_table":"<table>"}}` to advance the sequence past the imported maximum; state the id decision in the pre-write plan and confirm the RPC result in the post-import report. The `id` entry in the mapping is excluded from `create_field` (the primary key exists; the import writes it).
--->
+3. Fields: run `bun run create-fields.ts` in the run workspace — it creates every `disposition: "create"` column from `mapping.json` **concurrently** (pool of 5) with the mapping's explicit `field_order` (increments of 10; the platform preserves explicit order, so creation order carries no meaning), skips field names that already exist live, and **fails fast and loud**: per-field exit code and first stderr line in a compact result table, first failure stops new launches, non-zero exit. Never hand-roll a shell loop for field creation — ad-hoc loops swallow errors. The label column (`disposition: "label"`) and skipped columns are never created. When the label field deserves a more specific title than `singular_label`, follow up with `update_field` on that field's `title` (importer-essentials.md).
 
 **Write mode (`on_exists`).** With a natural key set, the import behaves per the prompted decision: `insert` skips existing keys; `update` synchronizes them — unchanged rows are not written, changed rows are updated, new rows inserted. Update mode requires the key field to be unique (`unique_value: true`); on a non-unique key, say so plainly and offer making it unique via the possible-change classification (which fails loudly when live duplicates exist) or fall back to insert mode.
 
-**One pre-write confirmation gate** (`AskUserQuestion`, never a typed y/n): render the complete numbered plan — module ops, entity, each field, planned alterations, then the import (M rows in K batches) — and get one approval before the first write. The per-topic decisions above happen during analysis; the gate is a single yes.
+**One pre-write confirmation gate** (`AskUserQuestion`, never a typed y/n): render the complete numbered plan — module ops, entity, each field, planned alterations, then the import (rows and batches) — and get one approval before the first write. Every number and field line in the plan comes from the helpers, not from prose arithmetic: `bun run render-plan.ts` for the mapping table and counts, `bun run create-fields.ts --dry-run` for the exact `create_field` payloads. The per-topic decisions above happen during analysis; the gate is a single yes.
 
 **Schema-only mode ends here** after the catalog writes, reporting what was created plus the deep link.
 
 Payload hygiene: any payload carrying free text from the CSV or the user (descriptions, titles, enum values) goes through a Bun script or stdin pipe, never inline shell-quoted JSON (see the modeler's data-fidelity rules; same reasoning).
 
-### Stage 5 — Generate and run the import script
+### Stage 5 — Run the import
 
-Everything per **[`references/import-script-template.md`](references/import-script-template.md)**:
+The workspace, mapping, and dependencies already exist from Stage 2. Per **[`references/import-script-template.md`](references/import-script-template.md)**:
 
-1. Create the run workspace in the **OS temp directory**: `<os-tmpdir>/semantius-import/run-<timestamp>/`. Resolve the temp dir portably with `bun -e 'console.log(require("node:os").tmpdir())'` (never a shell-literal `/tmp` or `$TMPDIR`, which resolve inconsistently across shells on Windows). If a previous run folder for the same table exists there, offer to reuse and reconfigure it instead.
-2. `bun add csv-parse` inside the folder (the CSV parser is a real dependency, installed first — no hand-rolled parsing).
-3. Copy `mapping.json` and the `.csvschema.json`; generate `import.ts` from the template (streaming parse, coercion per mapping, uniform-key batches of 250 via stdin-piped `postgrestRequest`, exit-code-aware retries, `failed-batches.json` capture, optional `NATURAL_KEY` dedupe, built-in count verify).
-4. `bun run import.ts <absolute-csv-path>`.
+1. Copy **`references/import.template.ts`** into the run folder as `import.ts` — **byte-for-byte, never retyped or edited per run**. The script carries no placeholders; it reads all run configuration from `./mapping.json` at startup.
+2. `bun run import.ts <absolute-csv-path>` (streaming parse, coercion per mapping, uniform-key batches via stdin-piped `postgrestRequest`, exit-code-aware retries, `failed-batches.json` capture, natural-key dedupe and write modes, built-in count verify).
 
 ### Stage 6 — Verify and report
 

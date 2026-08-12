@@ -80,7 +80,7 @@ These rules are baked into the introspector and are load-bearing for the review 
 
 1. **Enum overrides at low cardinality.** Any column with 10 or fewer distinct non-empty values is reported `enum`, even when every value is an integer, a number, or a date. A numeric status code column, a 1-to-5 rating, or a small FK id column will arrive as `enum` with string `enum_values`. Section 3 exists because of this.
 2. **Boolean detection is exact-pair.** `boolean` fires only when the column's distinct values are exactly one of these pairs (case-insensitive): `0|1`, `f|t`, `false|true`, `n|y`, `no|yes`. The raw pair is preserved in `sample_values`; the import script needs it for coercion.
-3. **Identifier heuristic.** Numeric-looking columns with leading zeros (`007`) or a uniform fixed length (zip codes, SKU codes) are deliberately kept `string`. Never "upgrade" them to `integer`; the leading zeros are data.
+3. **Identifier heuristic.** Numeric-looking columns with leading zeros (`007`) or a uniform fixed length (zip codes, SKU codes) are deliberately kept `string`. Never "upgrade" them to `integer`; the leading zeros are data. The verdict is authoritative: if you believe the column is genuinely numeric rather than an identifier, propose the change as a question to the user per the section 2 format-override rule — do not silently send `integer` (or any other override) into the mapping or `create_field`. This applies whether or not the sampled values carry leading zeros; a uniform-length id column is still an identifier by default.
 4. **`date` vs `date-time`.** Values must be ISO (`YYYY-MM-DD` prefix). A column is `date` only when every value carries the identical time-of-day signature (plain dates, or all midnight); otherwise `date-time`.
 5. **Semantic formats refine strings and beat enum.** `email` / `url` are detected by elimination (one invalid non-empty value disqualifies the column; empties only clear `required`). They only ever refine a would-be `string` column, and a detected semantic format **wins over the boolean/enum checks**: a column of five distinct addresses stays `email` with `sample_values`, never `enum` with `enum_values`. A bare `www.example.com` is not a `url` (no protocol); `mailto:` links are not urls (no host).
 6. **`required: false` only means an empty was seen.** With `maxRecords` limited, a column can scan `required: true` while later rows contain empties. When in doubt, introspect the whole file (the default).
@@ -106,7 +106,9 @@ The vocabulary is aligned, so most formats pass straight into `create_field`:
 
 **Fallback rule: any `format` not in the table passes through verbatim.** The table documents the formats whose handling has nuances; it is guidance, never an allowlist. A format without a row (`email`, `url`, anything a future CLI version emits) is sent to `create_field` as-is (together with `precision`, `enum_values`, and `input_type` when present), passed through untouched by the import script's coercion, and gets the string-family empty-cell default (`""`) unless the platform's nullability rule marks it NULL-capable. A new format must never break or block the skill.
 
-Additional `create_field` properties per column: `title` (Title Case of the field name unless the raw header is already a better human title), `width: "default"`, and the util's `input_type` when present (section 6). **Do not send `field_order`** — fields are created in CSV column order and the platform assigns positions from creation order. Reordering afterward is a user action via `update_field`.
+**The introspection verdict is gold — default to it, and never override it silently.** Every `format` (and `precision`, `enum_values`, `input_type`, and the boolean pair) in the csvschema output is a deliberate decision produced by the detection rules of section 1, not an accident. Pass it through to `create_field` unchanged unless there is a genuine, domain-level reason to change it. If you are confident the verdict is wrong for the data (e.g. a heuristic `string` id column that is really a numeric measurement, or an enum that is really an integer), that override is a **user decision, not a mapping edit**: raise it in the mapping review as an `AskUserQuestion` that states the introspected format, the proposed override, and the reason, and defaults to the introspected format. Silently changing a column's format in the mapping is editorializing the source's declared type — the exact mistake this rule exists to prevent. A mapping that differs from the csvschema verdict without a recorded user decision is a defect.
+
+Additional `create_field` properties per column: `title` (Title Case of the field name unless the raw header is already a better human title), `width: "default"`, the util's `input_type` when present (section 6), and an explicit **`field_order` in increments of 10** (10, 20, 30, ... following the mapping's column order). The platform preserves explicit `field_order` values regardless of creation order, and the tens spacing leaves room to slot fields in later. Because order is explicit, field creation runs **concurrently** through the copied `create-fields.ts` runner (import-script-template.md) instead of serially.
 
 Monetary columns (price, cost, amount, total): always `number` with `precision`, per `use-semantius` data-modeling rules.
 
@@ -152,18 +154,7 @@ The util's `field_name` suggestions are mechanically valid. The skill still veri
 | a CSV column whose field name equals the target's primary key column (`id` on a new entity, the live `id_column` on an existing one) | rename to `external_id`, offer it as the **unique natural key** (`unique_value: true`) for idempotent, updatable re-imports | skip the column |
 | `id_move_column` (new entity, `id_mode: "move"`) | keep as its own `integer` field, offer as unique natural key | skip |
 
-<!-- DEFERRED — id preservation for NEW entities (re-enable after the fix_id_sequence RPC is installed platform-side; see README). Applies to the create path only; existing entities keep their primary key untouched:
-
-| `id_mode` | Default behavior | Alternative (offered in the mapping review) |
-|---|---|---|
-| `"id"` | Import the CSV `id` column **into the platform `id` primary key**: the mapping includes an entry with `field_name: "id"`, no `create_field` happens for it (auto-generated), and the script's natural key defaults to `id` (idempotent re-runs for free) | Rename to `external_id`; the platform assigns fresh ids |
-| `"move"` | The `id_move_column`'s data is **moved into `id`**: its raw header maps to `field_name: "id"`, and **no separate field is created for it** — moved, never duplicated | Keep it as its own `integer` field; the platform assigns ids |
-| `"none"` | The platform assigns ids. When an `id`-named column exists anyway (detection suppressed by quirks 1/3), surface that and apply the classic policy | |
-
-**Preserved-ids sequence rule (verified on the platform).** Explicit `id` inserts are accepted, but the id **sequence does not advance past them**: a fresh table filled with ids 1..N collides on the first platform-side record creation. After a preserve-ids import, always call `POST /rpc/fix_id_sequence {"p_table": "<table>"}` and confirm the returned value exceeds the imported maximum; state the outcome in the post-import report.
--->
-
-**Why deferred:** the sequence collision is real (verified live) and the repairing RPC is not yet installed on the platform. The README carries the RPC SQL and the roadmap.
+**Why deferred:** explicit-id imports leave the platform id sequence behind and the first platform-side insert collides (verified live). The full preservation design, the sequence rule, and the repairing RPC's SQL live in the README under "Deferred design"; it returns once the `fix_id_sequence` RPC is installed.
 
 **Other reserved-name collisions.** `label`, the `<label_column>` field, `created_at`, and `updated_at` are auto-created; `_label` and `<fk>_label` are read-time projections. None may be targeted by `create_field`:
 
@@ -173,7 +164,7 @@ The util's `field_name` suggestions are mechanically valid. The skill still veri
 | `label` | rename to `source_label` | skip; or choose it as the label column (section 6), which makes it the auto-created field |
 | anything ending `_id_label` or starting `_` | already avoided by the util's normalizer; if a manual rename reintroduces it, reject the rename | |
 
-**Manual renames to reserved names are rejected in the review loop**: the target entity's `id_column` (default `id`, read from the live entity — never assumed), `label`, `created_at`, `updated_at`, and the chosen label column are never valid `field_name` targets. As a second line of defense the import script **silently strips the entity's primary key column from every payload** (insert and PATCH) while id preservation is deferred — a mapping mistake cannot reintroduce explicit-id inserts and the sequence desync they cause (template design rule 1a; `ID_COLUMN` is filled from the live `id_column` at generation time).
+**Manual renames to reserved names are rejected in the review loop**: the target entity's `id_column` (default `id`, read from the live entity — never assumed), `label`, `created_at`, `updated_at`, and the chosen label column are never valid `field_name` targets. As a second line of defense the import script **silently strips the entity's primary key column from every payload** (insert and PATCH) while id preservation is deferred — a mapping mistake cannot reintroduce explicit-id inserts and the sequence desync they cause (import-script-template.md design rule 2; the script reads `id_column` from mapping.json, filled from the live entity).
 
 Record every decision in the mapping (section 8); renamed columns keep their raw `header` key so the script can still find them in the CSV.
 
@@ -230,7 +221,7 @@ The platform computes nullability from `format`: only `reference`, `date`, and `
 
 ## 8. The mapping artifact (`mapping.json`)
 
-The review loop's output, consumed verbatim by the import script. One entry per imported column plus the shared config:
+The review loop's output and the **single runtime input** for every script in the run folder: `render-plan.ts` renders the mapping table and plan facts from it, `create-fields.ts` creates fields from it, `import.ts` imports by it. One entry per CSV column plus the shared config — nothing about the run is stated anywhere else, so the rendered plan and what actually executes can never disagree.
 
 ```json
 {
@@ -238,42 +229,71 @@ The review loop's output, consumed verbatim by the import script. One entry per 
   "id_column": "id",
   "natural_key": "external_id",
   "on_exists": "update",
+  "expected_records": 110,
+  "batch_size": 250,
   "columns": [
     {
       "header": "id",
       "field_name": "external_id",
       "format": "integer",
+      "title": "External ID",
+      "field_order": 10,
+      "unique_value": true,
       "empty_value": 0,
-      "skip": false
+      "disposition": "create"
     },
     {
       "header": "Product Code",
       "field_name": "product_code",
       "format": "string",
+      "title": "Product Code",
+      "field_order": 20,
+      "input_type": "required",
       "empty_value": "",
-      "skip": false
+      "disposition": "label"
     },
     {
       "header": "Is Active",
       "field_name": "is_active",
       "format": "boolean",
+      "title": "Is Active",
+      "field_order": 30,
       "bool_pair": {"true": "Yes", "false": "No"},
       "empty_value": false,
-      "skip": false
+      "disposition": "create"
     },
     {
       "header": "created_at",
       "field_name": null,
-      "skip": true,
+      "disposition": "skip",
       "reason": "platform-owned column"
     }
   ]
 }
 ```
 
-Rules: `header` is always the raw CSV header. `id_column` is copied from the target entity's live `id_column` property (`read_entity`; `id` for entities this skill just created) — the script's payload guard keys on it. Skipped columns stay in the file with `skip: true` and a `reason`, so a re-run shows the same picture. `bool_pair` records the raw values (original casing) that map to `true`/`false`. `empty_value` is the section 7 resolution. `natural_key` is optional; when set it names the **field** (not header) that identifies a row across re-imports. `on_exists` (meaningful only with a natural key) is the prompted write mode: `"insert"` skips rows whose key already exists; `"update"` synchronizes them — unchanged rows untouched, changed rows updated, new rows inserted. Update mode requires the key field to be unique (`unique_value: true`); with a non-unique key only `"insert"` is available and the skill says so.
+Top-level keys:
 
-<!-- DEFERRED — id preservation: an entry with `field_name: "id"` targets the platform primary key; the import writes it, `create_field` never does, and it appears exactly once (a moved column never also exists as its own field; in move mode the entry's `header` is the `id_move_column`). Re-enable with the fix_id_sequence RPC. -->
+| Key | Meaning |
+|---|---|
+| `table` | Target `table_name`. |
+| `id_column` | Copied from the target entity's live `id_column` property (`read_entity`; `id` for entities this skill just created). The import script's payload guard keys on it. |
+| `natural_key` | Optional. Names the **field** (not header) that identifies a row across re-imports. |
+| `on_exists` | Meaningful only with a natural key: `"insert"` skips rows whose key already exists; `"update"` synchronizes them — unchanged rows untouched, changed rows updated, new rows inserted. Update mode requires the key field to be unique (`unique_value: true`); with a non-unique key only `"insert"` is available and the skill says so. |
+| `expected_records` | The introspection wrapper's `record_count` on a full scan; `null` when the scan was capped. The import verifies `parsed` against it (section 9). |
+| `batch_size` | Optional insert batch size (default 250, sane range 200–500). |
+
+Per column:
+
+| Key | Meaning |
+|---|---|
+| `header` | Always the raw CSV header — the import script keys rows by it, so renamed columns keep their raw `header`. |
+| `field_name` | The Semantius field name (payload key); `null` on skipped columns. |
+| `disposition` | `"create"` (needs `create_field`) / `"exists"` (targets a live field) / `"label"` (the label column: auto-created by `create_entity`, imported, never `create_field`) / `"skip"` (not imported; the entry stays in the file with a `reason`, so a re-run shows the same picture). |
+| `format` | The format the import coerces into: the csvschema verdict, or the **live** field's format when the diff chose coerce-into-live (section 9). |
+| `empty_value` | The section 7 resolution, sent for empty cells. |
+| `bool_pair` | On `boolean` columns: the raw values (original casing) that map to `true`/`false`. |
+| `title`, `field_order`, `precision`, `enum_values`, `input_type`, `unique_value`, `searchable`, `default_value`, `reference_table`, `reference_delete_mode` | The full `create_field` payload data, carried per column so `create-fields.ts` can build the exact call (`field_order` in increments of 10 per section 2). Required on `create` columns; harmless elsewhere. |
 
 ---
 

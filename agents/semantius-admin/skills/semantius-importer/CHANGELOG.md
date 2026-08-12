@@ -2,6 +2,20 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## 1.2
+
+Determinism and throughput rev, driven by a real HubSpot-leads import: no more hand-transcribed scripts, no more prose arithmetic, no more serial field creation, plus the "introspection verdict is gold" rule.
+
+- Verdict is gold: the `get_csvschema` output is the authoritative default for every `format` (and `precision`, `enum_values`, `input_type`, boolean pair). Overrides are user decisions raised via `AskUserQuestion` (defaulting to the introspected format), never silent mapping edits; a mapping that deviates without a recorded user answer is a defect (schema-mapping.md section 2, quirk 3, SKILL.md Stage 2).
+- The import script ships as a real file, `references/import.template.ts`, copied byte-for-byte into the run folder; it reads all run configuration from `./mapping.json` at startup. The fenced markdown template and its generation-time placeholder filling are gone (transcription was a standing escaping/divergence risk; a nested-template-literal failure burned a cycle in the field).
+- mapping.json contract v2 (section 8): per-column `disposition` (`create` / `exists` / `label` / `skip`) replaces the `skip` boolean; columns carry the full `create_field` payload data (`title`, `precision`, `enum_values`, `input_type`, `unique_value`, `reference_*`, `default_value`); new top-level `expected_records` and optional `batch_size`. The artifact is the single runtime input for all three scripts.
+- New helper `references/render-plan.ts`: renders the Stage 2 mapping table and every plan/report count straight from mapping.json. The skill pastes its output instead of restating numbers in prose ("35 → 33 → created 34" can no longer happen).
+- New helper `references/create-fields.ts`: parallel field creation (concurrency 5) with explicit `field_order` in increments of 10 — the platform preserves explicit order, which removes the old "create serially in CSV column order, no field_order" constraint (34 serial creates took 158s, about two thirds of the run's wall time). Idempotent via read-before-create, fail-fast, per-field exit code and stderr in a result table (the ad-hoc bash loop it replaces swallowed errors), `--dry-run` feeds the pre-write gate.
+- Step 0 hard gate trimmed: reads the new `references/importer-essentials.md` (a ~150-line distillation) instead of ~2100 lines of use-semantius up front; the full references are consulted on demand and still win on conflict. The run workspace is now created at the start of Stage 2 so mapping.json and the helpers live together from the first review round.
+- Writing conventions inlined into SKILL.md (US English, no em-dashes in chat, plain language, narration restraint, data fidelity) — the old cross-skill pointer to the modeler sat outside the hard gate and was never read.
+- The deferred id-preservation design (Status banner, two DEFERRED comment blocks) moved wholesale into the README's "Deferred design" section, out of the runtime contract.
+- Shared preflight (in `semantius-admin`): a successful `getCurrentUser` probe now ends credential handling regardless of auth mechanism (API key, JWT preauth); only explicit auth evidence (exit 5 / 401 / 403) triggers the API-key path, and transient errors re-probe once instead of touching `.env`.
+
 ## 1.1
 
 Updated for semantius-cli v0.8.3 (vendored csv-schema 2.0.0), added the update write mode, and deferred id preservation. A `README.md` now carries the skill's visible status: what works, what is disabled and why, and the roadmap (MCP `prefer` passthrough for batched upsert; platform `fix_id_sequence` RPC).
