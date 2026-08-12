@@ -64,5 +64,10 @@ for (const { name, key } of targets) {
   console.log(`  version:   ${info.version}`);
   console.log(`  skills:    ${info.skills.join(', ') || '(none)'}`);
   console.log(`  bytes:     ${info.bytes}`);
+  // The server checks the bundle's model against the SAME pi-ai catalog the
+  // deployed runtime resolves with (a local check could drift from the
+  // worker's bundled catalog). Non-fatal: the definition IS deployed, but
+  // sessions run degraded (8k output cap) until the model id is fixed.
+  if (info.modelWarning) console.warn(`  ⚠ MODEL WARNING: ${info.modelWarning}`);
 }
 process.exit(failed ? 1 : 0);

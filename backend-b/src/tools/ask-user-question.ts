@@ -40,7 +40,9 @@ const Option = v.object({
 
 const Question = v.object({
   question: v.pipe(v.string(), v.minLength(1), v.maxLength(2000)),
-  header: v.pipe(v.string(), v.minLength(1), v.maxLength(12)),
+  // Claude Code caps this at 12 for its fixed-width TUI tabs; our HTML chip
+  // row wraps, so only a hygiene bound is needed.
+  header: v.pipe(v.string(), v.minLength(1), v.maxLength(64)),
   options: v.pipe(v.array(Option), v.minLength(2), v.maxLength(4)),
   multiSelect: v.optional(v.boolean(), false),
 });
@@ -65,7 +67,7 @@ export const askUserQuestion = defineTool({
     'response to wait for the answers. Use it when you need the user to pick between ' +
     'concrete options before you can proceed (choosing an approach, confirming a step, ' +
     'narrowing scope). Do NOT use it for open-ended questions — ask those in plain text ' +
-    'instead. Each question needs a short header (max 12 chars, shown as a tab label), ' +
+    'instead. Each question needs a short header (a few words, shown as a tab label), ' +
     '2-4 options with a label and a one-line description, and multiSelect true/false. ' +
     'The form automatically adds an "Other" free-text option — never add your own ' +
     '"Other"/"None" option. Calling this tool ENDS your current response: do not repeat ' +

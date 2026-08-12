@@ -112,6 +112,7 @@ import {
 } from './backups';
 import { channel } from './channels/github';
 import { fetchContainerCosts } from './costs';
+import { modelCatalogWarning } from './llm';
 import {
   base64ToBytes,
   bytesToBase64,
@@ -449,6 +450,15 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
     throw err;
   }
   await c.env.STORE.put(`${AGENT_DEF_KEY_PREFIX}${name}`, text);
+  // Non-fatal on purpose: a model newer than the pinned pi-ai catalog is
+  // legitimately deployable, just degraded — but silently degraded is how a
+  // session gets truncated mid-write, so the deploy answer carries the
+  // warning and deploy-agent.mjs prints it.
+  const modelWarning = modelCatalogWarning({
+    agentName: bundle.agentName,
+    model: bundle.model,
+    modelBaseUrl: bundle.modelBaseUrl,
+  });
   return c.json({
     ok: true,
     name,
@@ -456,6 +466,7 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
     version: bundle.version,
     skills: Object.keys(bundle.skills),
     bytes: text.length,
+    ...(modelWarning ? { modelWarning } : {}),
   });
 });
 

@@ -17,6 +17,30 @@ if (apiKey) {
   });
 }
 
+// Truncation watchdog, independent of the Braintrust export (observe() is
+// additive — a subscriber Set). A turn whose response stopped at the output
+// -token cap still SETTLES as completed: no error anywhere, the model
+// announces work, emits no tool call, and the UI just goes quiet. That cap
+// is catalog metadata (`maxTokens`), so a catalog-miss placeholder (8k, see
+// modelCatalogWarning in src/llm.ts) hits it on any long single-pass write —
+// root-caused 2026-08-12 on session tests-user3-a8d1…. One Workers-Logs line
+// per truncated turn (`pnpm logs`) makes the silence attributable.
+observe((event) => {
+  if (event.type !== 'turn') return;
+  const { request, response, instanceId } = event as {
+    request?: TurnRequestInfo;
+    response?: TurnResponseInfo;
+    instanceId?: string;
+  };
+  if (response?.finishReason !== 'length') return;
+  const model = response?.responseModel ?? request?.requestedModel ?? 'unknown model';
+  console.warn(
+    `[llm] response truncated at the output-token cap (finishReason=length) — ` +
+      `session ${instanceId ?? 'unknown'}, ${model}; the turn settles as completed with the work unfinished. ` +
+      `If the model is a catalog miss it is capped at the 8k placeholder (see modelCatalogWarning, src/llm.ts).`,
+  );
+});
+
 // Braintrust 3.17 still expects the pre-v2 `tool_call` terminal event name and
 // doesn't know `run_resume`; translate both here instead of changing Flue's
 // event contract. Re-check on every Braintrust upgrade and drop the

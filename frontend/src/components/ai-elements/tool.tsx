@@ -17,7 +17,7 @@ import {
   XCircleIcon,
 } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { isValidElement } from "react";
+import { isValidElement, useState } from "react";
 
 import { CodeBlock, CodeBlockCopyButton } from "./code-block";
 
@@ -138,6 +138,135 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
     </div>
   </div>
 );
+
+const isSettled = (state: ToolPart["state"]) =>
+  state === "output-available" ||
+  state === "output-error" ||
+  state === "output-denied";
+
+const toolName = (part: ToolPart) =>
+  part.type === "dynamic-tool"
+    ? part.toolName
+    : part.type.split("-").slice(1).join("-");
+
+/** The most informative one-liner in a call's input — its first non-empty
+ * string value (a file path, a command, …) — so a collapsed row reads as
+ * "edit entities/technician.json" rather than just "edit". */
+const summarizeInput = (input: ToolPart["input"]): string | undefined => {
+  const flatten = (text: string) => text.replace(/\s+/g, " ").trim();
+  if (typeof input === "string") return flatten(input) || undefined;
+  if (!input || typeof input !== "object") return undefined;
+  for (const value of Object.values(input as Record<string, unknown>)) {
+    if (typeof value === "string" && value.trim()) return flatten(value);
+  }
+  return undefined;
+};
+
+export type ToolCallGroupProps = {
+  /** The run's tool parts, in stream order. */
+  parts: ToolPart[];
+  className?: string;
+};
+
+/**
+ * A run of consecutive tool calls collapsed to ONE summary line ("Ran 7 tool
+ * calls ✓") instead of a bordered card per call — long agent runs were filling
+ * the viewport with ~65px of repeated chrome each. While the run is live the
+ * line names the call in flight; expanding shows a slim row per call, and each
+ * row opens into the same ToolInput/ToolOutput panels the per-call card used.
+ * Styled after ReasoningTrigger so tool activity and "Thought for…" read as
+ * one family of affordances.
+ */
+export const ToolCallGroup = ({ parts, className }: ToolCallGroupProps) => {
+  const active = parts.find((part) => !isSettled(part.state));
+  const errorCount = parts.filter(
+    (part) => part.state === "output-error"
+  ).length;
+
+  // A failure must be visible without a click, but it can land long after
+  // mount (the group mounts on the run's FIRST call), so defaultOpen is too
+  // early — pop open on the no-errors → errors edge instead.
+  const [open, setOpen] = useState(errorCount > 0);
+  const [sawError, setSawError] = useState(errorCount > 0);
+  if (errorCount > 0 && !sawError) {
+    setSawError(true);
+    setOpen(true);
+  }
+
+  const single = parts.length === 1 ? parts[0] : undefined;
+  const label = active
+    ? active.state === "approval-requested"
+      ? `Awaiting approval · ${toolName(active)}`
+      : `Running ${toolName(active)}…`
+    : errorCount > 0
+      ? `${parts.length} tool call${parts.length === 1 ? "" : "s"} · ${errorCount} failed`
+      : single
+        ? toolName(single)
+        : `Ran ${parts.length} tool calls`;
+  // A lone settled call keeps its input summary on the line itself, so the
+  // common one-call case stays informative without a click.
+  const summary =
+    !active && errorCount === 0 && single
+      ? summarizeInput(single.input)
+      : undefined;
+  const icon = active ? (
+    <ClockIcon className="size-4 shrink-0 animate-pulse" />
+  ) : errorCount > 0 ? (
+    <XCircleIcon className="size-4 shrink-0 text-red-600" />
+  ) : (
+    <CheckCircleIcon className="size-4 shrink-0 text-green-600" />
+  );
+
+  return (
+    <Collapsible
+      className={cn("not-prose mb-4 w-full", className)}
+      onOpenChange={setOpen}
+      open={open}
+    >
+      <CollapsibleTrigger className="group flex w-full min-w-0 items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground">
+        {icon}
+        <span className="shrink-0 font-medium">{label}</span>
+        {summary ? (
+          <span className="min-w-0 truncate text-xs">{summary}</span>
+        ) : null}
+        <ChevronDownIcon className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 outline-none data-[state=closed]:animate-out data-[state=open]:animate-in">
+        <div className="mt-2 divide-y rounded-md border">
+          {parts.map((part) => (
+            <ToolCallRow key={part.toolCallId} part={part} />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
+
+const ToolCallRow = ({ part }: { part: ToolPart }) => {
+  const summary = summarizeInput(part.input);
+
+  return (
+    <Collapsible defaultOpen={part.state === "output-error"}>
+      <CollapsibleTrigger className="group/row flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left text-sm hover:bg-muted/50">
+        <span className="shrink-0">{statusIcons[part.state]}</span>
+        <span className="shrink-0 font-medium">{toolName(part)}</span>
+        {summary ? (
+          <span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">
+            {summary}
+          </span>
+        ) : null}
+        <ChevronDownIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/row:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-4 px-2.5 pt-1 pb-3">
+        <ToolInput input={part.input} />
+        <ToolOutput
+          errorText={part.state === "output-error" ? part.errorText : undefined}
+          output={part.state === "output-available" ? part.output : undefined}
+        />
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
 
 export type ToolOutputProps = ComponentProps<"div"> & {
   output: ToolPart["output"];

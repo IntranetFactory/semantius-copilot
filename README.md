@@ -629,6 +629,28 @@ Two layers:
   the worker-wide `LLM_API_KEY` secret. The override is applied per session from the
   agent's bundle.
 
+**Catalog misses are detected, not silent.** A placeholder-path model caps output at 8k
+tokens, and that cap truncates long single-pass writes mid-response (`stop_reason:
+"length"`) — the turn still settles as *completed*, so the UI shows the agent announcing
+work and then going silent (root-caused 2026-08-12: `deepseek/deepseek-v4-flash-0731`, a
+dated slug the catalog doesn't know — only the undated `deepseek/deepseek-v4-flash` is an
+exact catalog id). Three seams surface the condition (`modelCatalogWarning`,
+`backend-b/src/llm.ts` — the deploy check and the runtime resolution share the one
+predicate, so they cannot drift):
+
+- **deploy time** — `PUT /agents/:name` answers a `modelWarning` when the bundle's model
+  would resolve through the placeholder path, checked against the *deployed worker's own*
+  pi-ai catalog (a local check could drift from the worker's bundled copy);
+  `pnpm deploy:agent` prints it as `⚠ MODEL WARNING`. Non-fatal: a model newer than the
+  pinned catalog is legitimately deployable, just degraded.
+- **runtime** — `agentModelSpecifier` logs one `[llm]` warning per specifier per isolate
+  when it synthesizes the placeholder, and a truncation watchdog (`src/braintrust.ts`,
+  registered even without a Braintrust key) logs every `finishReason: "length"` turn with
+  its session id. Both land in Workers Logs (`pnpm logs`).
+- **after the fact** — `pnpm sessions` has a `len-stops` column (per session, and per
+  message with `--session <id>`) counting truncated responses from the Braintrust spans
+  (`flue.stop_reason`).
+
 ## Welcome card (per-agent `welcome`)
 
 The chat UI shows a per-agent welcome card while a conversation is empty, configured by
@@ -1318,7 +1340,10 @@ costs" for why that matters.
 The `AskUserQuestion` tool (`backend-b/src/tools/ask-user-question.ts`) lets the model ask
 the user 1-4 multiple-choice questions through an interactive card — Claude Code's tool of
 the same name, schema-compatible at its core (question/header/2-4 options with
-label+description/multiSelect; no `preview` support). Mounted for web/chat sessions only —
+label+description/multiSelect; no `preview` support). One deliberate deviation: the
+`header` cap is 64 chars, not Claude Code's 12 — that limit exists for its fixed-width
+TUI tab bar, while our HTML chip row wraps, so headers like "Access control" must not
+fail validation (every input valid for Claude Code remains valid here). Mounted for web/chat sessions only —
 the GitHub channel has no browser, and an unmounted tool cannot be called.
 
 **Turn-boundary design.** Flue has no human-in-the-loop primitive (no approval states, no

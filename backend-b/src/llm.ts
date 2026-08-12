@@ -71,6 +71,46 @@ const PROVIDER_BASE_URLS: Record<string, string | undefined> = {
 export type AgentLlm = { agentName: string; model?: string; modelBaseUrl?: string };
 
 /**
+ * The one predicate for "this agent's model resolves through the degrading
+ * placeholder path" (agentModelSpecifier case 3), phrased as the warning to
+ * show. Shared by the deploy route (PUT /agents/:name answers it to the
+ * deploy script) and the runtime warn in agentModelSpecifier, so deploy-time
+ * detection can never drift from what resolution actually does. Undefined =
+ * full catalog metadata applies (or the env default / AI binding, which are
+ * not the agent's doing).
+ *
+ * Why it exists: a catalog-miss override silently runs sessions with the
+ * conservative placeholder (128k window, 8k output cap), and the cap
+ * truncates long single-pass writes mid-response (stop_reason "length") —
+ * the UI shows the agent announcing work and then going silent. Root-caused
+ * 2026-08-12 on `deepseek/deepseek-v4-flash-0731` (dated slug; only the
+ * undated `deepseek/deepseek-v4-flash` is in the catalog).
+ */
+export function modelCatalogWarning(agent: AgentLlm): string | undefined {
+  if (!agent.model && !agent.modelBaseUrl) return undefined;
+  const spec = agent.model ?? MODEL_SPECIFIER;
+  const slash = spec.indexOf('/');
+  const upstreamProvider = spec.slice(0, slash);
+  const modelId = spec.slice(slash + 1);
+  if (upstreamProvider === 'cloudflare') return undefined;
+  const known =
+    upstreamProvider === 'openrouter' &&
+    openrouterProvider()
+      .getModels()
+      .some((model) => model.id === modelId);
+  if (known) return undefined;
+  return (
+    `model "${spec}" is not in Pi's catalog — sessions will run with the conservative placeholder ` +
+    `(128k context window, 8k output cap), and the cap truncates long single-pass responses ` +
+    `(stop_reason "length": the agent announces work, then goes silent). ` +
+    `Use an exact catalog id (for openrouter models usually the undated slug).`
+  );
+}
+
+/** One warning per specifier per isolate — resolution runs on every render. */
+const warnedPlaceholderSpecs = new Set<string>();
+
+/**
  * The raw OpenAI-compatible chat-completions endpoint for a session's model —
  * for one-shot side calls (session title generation) that must not run
  * through the Flue harness. Same resolution order as agentModelSpecifier:
@@ -129,6 +169,11 @@ export function agentModelSpecifier(agent?: AgentLlm | null): string {
           .find((model) => model.id === modelId)
       : undefined;
   if (catalogEntry && !agent.modelBaseUrl) return spec;
+
+  if (!catalogEntry && !warnedPlaceholderSpecs.has(spec)) {
+    warnedPlaceholderSpecs.add(spec);
+    console.warn(`[llm] agent "${agent.agentName}": ${modelCatalogWarning(agent)}`);
+  }
 
   const id = `agent-${agent.agentName}`;
   const auth = {

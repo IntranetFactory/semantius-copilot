@@ -1,9 +1,13 @@
 {
   "$schema": "../../core/agent.schema.json",  
-  // Bundler prefix rule makes this openrouter/xiaomi/mimo-v2.5-pro; Pi's
-  // catalog entry supplies the real metadata (reasoning-capable, 1M context
-  // window — this agent needs well over 300k).
-  "model": "deepseek/deepseek-v4-flash-0731", // "xiaomi/mimo-v2.5-pro",
+  // MUST be a model id Pi's openrouter catalog knows EXACTLY (undated slug —
+  // dated snapshots like -0731 are catalog misses): agentModelSpecifier falls
+  // back to a placeholder entry (128k window, 8k output cap) on a miss, and
+  // the 8k cap truncates any long single-pass write mid-response
+  // (stop_reason "length"), which the UI shows as the agent going silent
+  // after announcing work. This agent needs well over 300k context; the
+  // catalog entry supplies the real metadata (1M window, 393k output).
+  "model": "deepseek/deepseek-v4-flash", // alternative: "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
   "proxy_whitelist": [
     "registry.npmjs.org",  // for  dependencies
     "registry.npmjs.org",  // for  dependencies

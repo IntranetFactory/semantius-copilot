@@ -47,7 +47,7 @@ import {
 } from './prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './reasoning';
 import { seedFromMeta, useAgentMeta, withAgentSeed, type ChatAuth } from './session';
-import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from './tool';
+import { Tool, ToolCallGroup, ToolContent, ToolHeader, ToolInput, ToolOutput } from './tool';
 import { WelcomeCard } from './welcome';
 import { chatMarkdownComponents, WorkspaceLinkContext } from './workspace-link';
 import { WorkspaceUploadButton } from './workspace-upload';
@@ -464,6 +464,46 @@ function questionStatus(
   return { kind: 'pending' };
 }
 
+type ToolRunPart = Extract<AgentPart, { type: 'dynamic-tool' }>;
+
+/** True when a tool part renders as the interactive AskUserQuestion card. A
+ * validation error (output-error) or an input the guard doesn't recognize
+ * stays false, so those failures render in the generic tool form. Shared by
+ * the grouping in MessageView and PartView so the two can never disagree.
+ * (Deliberately NOT a type predicate: PartView's fallback branch must keep
+ * `part` usable after a false result, not narrow it to never.) */
+function isQuestionCard(part: AgentPart): boolean {
+  return (
+    part.type === 'dynamic-tool' &&
+    part.toolName === ASK_USER_TOOL_NAME &&
+    part.state !== 'output-error' &&
+    !!parseQuestions(part.input)
+  );
+}
+
+/** The transcript in render order, with runs of consecutive tool calls fused
+ * into one segment for ToolCallGroup — a card per call was filling the
+ * viewport with chrome. Only parts that render something inline (text, files,
+ * question cards) break a run; reasoning (consolidated separately) and other
+ * invisible parts pass through without splitting it. */
+type Segment =
+  | { kind: 'tools'; key: string; parts: ToolRunPart[] }
+  | { kind: 'part'; key: string; part: AgentPart };
+
+function toSegments(parts: AgentPart[]): Segment[] {
+  const segments: Segment[] = [];
+  for (const [index, part] of parts.entries()) {
+    if (part.type === 'dynamic-tool' && !isQuestionCard(part)) {
+      const previous = segments.at(-1);
+      if (previous?.kind === 'tools') previous.parts.push(part);
+      else segments.push({ kind: 'tools', key: `tools-${index}`, parts: [part] });
+    } else if (part.type === 'text' || part.type === 'file' || isQuestionCard(part)) {
+      segments.push({ kind: 'part', key: `part-${index}`, part });
+    }
+  }
+  return segments;
+}
+
 function MessageView({ message, questions }: { message: AgentMessage; questions: QuestionCtx }) {
   // Consolidate all reasoning parts into one block (a model may emit several) so
   // there's a single "Thinking…" affordance rather than one per part.
@@ -483,9 +523,13 @@ function MessageView({ message, questions }: { message: AgentMessage; questions:
             <ReasoningContent>{reasoningText}</ReasoningContent>
           </Reasoning>
         ) : null}
-        {message.parts.map((part, index) => (
-          <PartView key={index} part={part} messageId={message.id} questions={questions} />
-        ))}
+        {toSegments(message.parts).map((segment) =>
+          segment.kind === 'tools' ? (
+            <ToolCallGroup key={segment.key} parts={segment.parts} />
+          ) : (
+            <PartView key={segment.key} part={segment.part} messageId={message.id} questions={questions} />
+          ),
+        )}
       </MessageContent>
     </Message>
   );
@@ -497,11 +541,10 @@ function PartView({ part, messageId, questions }: { part: AgentPart; messageId: 
       // components: workspace download links + plain anchors (workspace-link.tsx).
       return <MessageResponse components={chatMarkdownComponents}>{part.text}</MessageResponse>;
     case 'dynamic-tool':
-      // AskUserQuestion renders as an interactive card, not a collapsible tool
-      // dump. A validation error (output-error) or an input the guard doesn't
-      // recognize falls through to the generic card, so failures stay visible
-      // in the familiar form.
-      if (part.toolName === ASK_USER_TOOL_NAME && part.state !== 'output-error' && parseQuestions(part.input)) {
+      // Only AskUserQuestion cards reach here — every other tool part is fused
+      // into a ToolCallGroup by toSegments. The generic card below stays as
+      // the fallback should that routing ever miss.
+      if (isQuestionCard(part)) {
         return (
           <AskUserQuestionCard
             input={part.input}

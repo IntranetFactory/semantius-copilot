@@ -78,7 +78,8 @@ while (data.length < MAX_SPANS) {
     `${before ? ` and created < '${before}'` : ''} | ` +
     `sort: created desc | limit: ${PAGE} | ` +
     `select: created, root_span_id, span_attributes.type as type, metadata."flue.instance_id" as instance, ` +
-    `metadata.model as model, metrics.prompt_tokens as prompt, metrics.completion_tokens as completion, ` +
+    `metadata.model as model, metadata."flue.stop_reason" as stop, ` +
+    `metrics.prompt_tokens as prompt, metrics.completion_tokens as completion, ` +
     `metrics.estimated_cost as cost`;
   const page = (await api('/btql', { method: 'POST', body: JSON.stringify({ query, fmt: 'json' }) })).data ?? [];
   data.push(...page);
@@ -97,7 +98,7 @@ if (spans.length === 0) {
 }
 
 function aggregate(group) {
-  const out = { llm: 0, tool: 0, prompt: 0, completion: 0, cost: 0, first: Infinity, last: -Infinity, models: new Set(), roots: new Set() };
+  const out = { llm: 0, tool: 0, lengthStops: 0, prompt: 0, completion: 0, cost: 0, first: Infinity, last: -Infinity, models: new Set(), roots: new Set() };
   for (const s of group) {
     const t = Date.parse(s.created);
     out.first = Math.min(out.first, t);
@@ -106,6 +107,10 @@ function aggregate(group) {
     if (s.type === 'tool') out.tool += 1;
     else {
       out.llm += 1;
+      // A length stop is a response truncated at the output-token cap — the
+      // turn settles as completed with the work unfinished (the "agent went
+      // silent" failure; see modelCatalogWarning in backend-b/src/llm.ts).
+      if (s.stop === 'length') out.lengthStops += 1;
       out.prompt += s.prompt ?? 0;
       out.completion += s.completion ?? 0;
       out.cost += s.cost ?? 0;
@@ -144,12 +149,13 @@ printTable(
     s.roots.size,
     s.llm,
     s.tool,
+    s.lengthStops > 0 ? `⚠ ${s.lengthStops}` : '',
     fmt.int(s.prompt),
     fmt.int(s.completion),
     fmt.cost(s.cost),
     [...s.models].join(','),
   ]),
-  ['session', 'started (UTC)', 'span', 'msgs', 'llm', 'tools', 'prompt tok', 'compl tok', 'cost', 'model'],
+  ['session', 'started (UTC)', 'span', 'msgs', 'llm', 'tools', 'len-stops', 'prompt tok', 'compl tok', 'cost', 'model'],
 );
 const total = aggregate(spans);
 console.log(
@@ -170,10 +176,11 @@ if (onlySession) {
       fmt.mins(m.last - m.first),
       m.llm,
       m.tool,
+      m.lengthStops > 0 ? `⚠ ${m.lengthStops}` : '',
       fmt.int(m.prompt),
       fmt.int(m.completion),
       fmt.cost(m.cost),
     ]),
-    ['#', 'started (UTC)', 'span', 'llm', 'tools', 'prompt tok', 'compl tok', 'cost'],
+    ['#', 'started (UTC)', 'span', 'llm', 'tools', 'len-stops', 'prompt tok', 'compl tok', 'cost'],
   );
 }
