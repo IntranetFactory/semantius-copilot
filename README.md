@@ -1313,6 +1313,43 @@ today-only window. Written with
 `mergeExistingSessionRecord`, so it can never resurrect a deleted session — see "Container
 costs" for why that matters.
 
+## AskUserQuestion (structured user prompts)
+
+The `AskUserQuestion` tool (`backend-b/src/tools/ask-user-question.ts`) lets the model ask
+the user 1-4 multiple-choice questions through an interactive card — Claude Code's tool of
+the same name, schema-compatible at its core (question/header/2-4 options with
+label+description/multiSelect; no `preview` support). Mounted for web/chat sessions only —
+the GitHub channel has no browser, and an unmounted tool cannot be called.
+
+**Turn-boundary design.** Flue has no human-in-the-loop primitive (no approval states, no
+elicitation, tool `run()` resolves server-side), so the tool does not block: it validates,
+echoes the question texts, and ends the response with `terminate: true`. The chat UI
+(`frontend/src/components/ai-elements/ask-user-question.tsx`, wired in `agent-chat.tsx`)
+renders the card from the dynamic-tool part's `input` and sends the selections back as a
+**`kind: 'signal'` delivery** on the same conversation POST:
+
+```
+{ kind: 'signal', type: 'ask_user_question.answer', tagName: 'user_answers',
+  attributes: { toolCallId },
+  body: JSON.stringify({ toolCallId, cancelled, answers }) }   // answers: question text → label(s)
+```
+
+A signal wakes the idle agent as its own submission and renders to the model as a
+`<user_answers toolCallId="…">` block; its projection is `display: 'diagnostic'`, so the
+raw JSON never shows as a chat bubble. The frontend matches answers by
+`message.signal.tagName` + `attributes.toolCallId` (the delivered `type` is not projected)
+and derives every card state from history alone — answered beats all; anything not on the
+last visible message is stale (typing a normal reply = implicit skip); an unsettled answer
+send renders "Sending…" and holds the busy strip (the hook's status stays `idle` between a
+raw `client.send()` and the first streamed token). `idempotencyKey:
+ask-user-question:<toolCallId>` makes double-clicks and two-tab races converge on one
+admission. Multi-select answers join labels with `", "`; the auto-added "Other" option
+returns the typed text verbatim; Dismiss sends `cancelled: true`.
+
+`node scripts/ask-user-question-probe.mjs` verifies the full round-trip against the
+deployed backend: ask turn settles `completed` with the tool part, the answer signal wakes
+the agent and projects `system/dispatch/diagnostic`, and the reply repeats the chosen label.
+
 **`session_backup` — infra-written, updated at each workspace-touching response.** The
 durable record of the session's R2 workspace backup (see "Workspace backup & restore"):
 `backup_id`, `size_bytes`, `backup_count`, `last_backup_at`, `storage_monthly_usd` (the

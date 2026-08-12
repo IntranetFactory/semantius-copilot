@@ -1,0 +1,92 @@
+/**
+ * AskUserQuestion — Claude Code-style structured clarifying questions.
+ *
+ * Turn-boundary flow (no human-in-the-loop primitive exists in flue): the tool
+ * validates and echoes the questions, then ends the response with `terminate`.
+ * The chat frontend renders an interactive card from this tool call's `input`
+ * (already on the wire as the dynamic-tool part) and sends the user's
+ * selections back as a `kind: 'signal'` delivery on the same conversation:
+ *
+ *   { kind: 'signal', type: ASK_USER_ANSWER_SIGNAL_TYPE,
+ *     tagName: ASK_USER_ANSWER_TAG, attributes: { toolCallId },
+ *     body: JSON.stringify({ toolCallId, cancelled, answers }) }
+ *
+ * A signal wakes an idle agent as its own submission and renders to the model
+ * as a `<user_answers …>` XML block; its snapshot projection is
+ * `display: 'diagnostic'`, so the raw JSON never shows as a chat bubble. The
+ * projection carries only `tagName` + `attributes` (not `type`), which is why
+ * the frontend matches on the tag name.
+ *
+ * Mounted for web/chat sessions only (main.ts) — GitHub-issue conversations
+ * have no browser to answer, and an unmounted tool cannot be called.
+ */
+import { defineTool } from '@flue/runtime';
+import * as v from 'valibot';
+
+/** Signal `type` the chat client sends the answers back with. */
+export const ASK_USER_ANSWER_SIGNAL_TYPE = 'ask_user_question.answer';
+/**
+ * XML tag the answers render under in model context AND the projection key the
+ * frontend matches on (`message.signal.tagName` — the delivered `type` is not
+ * projected). The frontend duplicates this constant (ai-elements is
+ * copy-pasteable and must not import backend code).
+ */
+export const ASK_USER_ANSWER_TAG = 'user_answers';
+
+const Option = v.object({
+  label: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
+  description: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
+});
+
+const Question = v.object({
+  question: v.pipe(v.string(), v.minLength(1), v.maxLength(2000)),
+  header: v.pipe(v.string(), v.minLength(1), v.maxLength(12)),
+  options: v.pipe(v.array(Option), v.minLength(2), v.maxLength(4)),
+  multiSelect: v.optional(v.boolean(), false),
+});
+
+export const askUserQuestionInput = v.pipe(
+  v.object({
+    questions: v.pipe(v.array(Question), v.minLength(1), v.maxLength(4)),
+  }),
+  // Answers come back keyed by question text — duplicates would collide.
+  v.check(
+    (data) => new Set(data.questions.map((q) => q.question)).size === data.questions.length,
+    'question texts must be unique',
+  ),
+);
+
+export type AskUserQuestionInput = v.InferOutput<typeof askUserQuestionInput>;
+
+export const askUserQuestion = defineTool({
+  name: 'AskUserQuestion',
+  description:
+    'Ask the user 1-4 multiple-choice questions through an interactive form and end your ' +
+    'response to wait for the answers. Use it when you need the user to pick between ' +
+    'concrete options before you can proceed (choosing an approach, confirming a step, ' +
+    'narrowing scope). Do NOT use it for open-ended questions — ask those in plain text ' +
+    'instead. Each question needs a short header (max 12 chars, shown as a tab label), ' +
+    '2-4 options with a label and a one-line description, and multiSelect true/false. ' +
+    'The form automatically adds an "Other" free-text option — never add your own ' +
+    '"Other"/"None" option. Calling this tool ENDS your current response: do not repeat ' +
+    'the questions in text, do not call this tool more than once per response, and expect ' +
+    'no further output this turn. The answers arrive as your next input in a ' +
+    '<user_answers toolCallId="..."> block: its JSON body has "answers" mapping each ' +
+    'question text to the chosen label(s) (multi-select labels joined with ", "; a ' +
+    'free-form "Other" answer appears verbatim), and "cancelled": true when the user ' +
+    'dismissed the form — then continue without the answers and do not immediately ' +
+    're-ask. The user may also ignore the form and type a normal message instead; treat ' +
+    'that message as superseding the questions.',
+  input: askUserQuestionInput,
+  run({ data }) {
+    // The full question set is already in model context as the call arguments;
+    // echo only the texts so the model can correlate the incoming answers.
+    return {
+      output: {
+        status: 'awaiting_user_response',
+        questions: data.questions.map((q) => q.question),
+      },
+      terminate: true,
+    };
+  },
+});

@@ -64,6 +64,7 @@ import {
 } from '../backups';
 import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '../channels/github';
 import { lazySessionEnv } from '../lazy-env';
+import { askUserQuestion } from '../tools/ask-user-question';
 import { agentModelSpecifier } from '../llm';
 import { drainTitleTranscript, maybeGenerateTitle } from '../title';
 import { drainLlmCalls } from '../usage';
@@ -461,6 +462,10 @@ export function Main({ id }: AgentProps) {
       suffix
     );
   }
+
+  // Web/chat sessions only: GitHub-issue conversations have no browser to
+  // render the question card, so the tool is not mounted there at all.
+  useTool(askUserQuestion);
 
   return instructions + WORKSPACE_LINK_INSTRUCTIONS + suffix;
 }

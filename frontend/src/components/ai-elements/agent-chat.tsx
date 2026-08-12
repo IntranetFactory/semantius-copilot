@@ -20,6 +20,15 @@ import { Spinner } from '@/components/ui/spinner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
+  ASK_USER_ANSWER_SIGNAL_TYPE,
+  ASK_USER_ANSWER_TAG,
+  ASK_USER_TOOL_NAME,
+  AskUserQuestionCard,
+  parseQuestions,
+  type AskUserAnswerPayload,
+  type AskUserQuestionStatus,
+} from './ask-user-question';
+import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
@@ -157,8 +166,85 @@ export function AgentChat({
     [agent.messages],
   );
 
+  // AskUserQuestion answers, keyed by toolCallId. Scanned over ALL messages
+  // (not the visible filter): the answer signal projects as a diagnostic
+  // system message, matched by its tagName — the delivered `type` is not in
+  // the projection. Durable truth for the card's answered state, so reloads
+  // and the container's key-flip remount re-derive it from history alone.
+  const questionAnswers = useMemo(() => {
+    const map = new Map<string, AskUserAnswerPayload>();
+    for (const message of agent.messages) {
+      if (message.signal?.tagName !== ASK_USER_ANSWER_TAG) continue;
+      const toolCallId = message.signal.attributes?.toolCallId;
+      const text = message.parts.find((part) => part.type === 'text')?.text;
+      if (!toolCallId || !text) continue;
+      try {
+        map.set(toolCallId, JSON.parse(text) as AskUserAnswerPayload);
+      } catch {
+        // Malformed body — leave the card pending/stale rather than crash.
+      }
+    }
+    return map;
+  }, [agent.messages]);
+
+  // Answer sends in flight: toolCallId → submissionId once admitted. Transient
+  // UI only ("Sending…" + busy strip) — the signal echo above takes over the
+  // moment it lands. Entries are pruned when their submission settles.
+  const [answersInFlight, setAnswersInFlight] = useState<Map<string, string | undefined>>(new Map());
+  const [answerError, setAnswerError] = useState<string>();
+
   const chatStatus: ChatStatus = draft ? (draftPending ? 'submitted' : 'ready') : toChatStatus(agent.status);
   const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
+
+  // The hook's status stays 'idle' between a raw client.send() and the first
+  // streamed token (activeSubmissionIds only grows via its own sendMessage),
+  // so an unsettled answer send keeps the busy strip up itself.
+  const answerInFlight =
+    answersInFlight.size > 0 &&
+    [...answersInFlight.values()].some(
+      (submissionId) =>
+        !submissionId || !agent.settlements.some((settlement) => settlement.submissionId === submissionId),
+    );
+  useEffect(() => {
+    if (answersInFlight.size === 0) return;
+    const settled = [...answersInFlight.entries()].filter(
+      ([, submissionId]) =>
+        submissionId && agent.settlements.some((settlement) => settlement.submissionId === submissionId),
+    );
+    if (settled.length === 0) return;
+    setAnswersInFlight((prev) => {
+      const next = new Map(prev);
+      for (const [toolCallId] of settled) next.delete(toolCallId);
+      return next;
+    });
+  }, [agent.settlements, answersInFlight]);
+
+  async function sendQuestionAnswer(toolCallId: string, result: { answers: Record<string, string>; cancelled: boolean }) {
+    if (!seededClient) return;
+    setAnswerError(undefined);
+    setAnswersInFlight((prev) => new Map(prev).set(toolCallId, undefined));
+    try {
+      const admission = await seededClient.send({
+        message: {
+          kind: 'signal',
+          type: ASK_USER_ANSWER_SIGNAL_TYPE,
+          tagName: ASK_USER_ANSWER_TAG,
+          attributes: { toolCallId },
+          body: JSON.stringify({ toolCallId, ...result }),
+        },
+        // Double-click / two-tab safe: replays converge on the one admission.
+        idempotencyKey: `ask-user-question:${toolCallId}`,
+      });
+      setAnswersInFlight((prev) => new Map(prev).set(toolCallId, admission.submissionId));
+    } catch (error) {
+      setAnswersInFlight((prev) => {
+        const next = new Map(prev);
+        next.delete(toolCallId);
+        return next;
+      });
+      setAnswerError(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   // Settle edge (busy → idle) reported to the host. Ref-guarded so re-renders
   // at a stable status never re-fire; the callback lives in a ref so a host
@@ -227,7 +313,23 @@ export function AgentChat({
   // The strip also covers the handoff gap where the echo bubble is the only
   // content: status can blip through 'ready' between the live mount and the
   // initial send, and the chat must not look idle mid-handoff. Error drops it.
-  const showBusy = busy || (!!echo && messages.length === 0 && chatStatus !== 'error');
+  // An unsettled question-answer send counts too (see answerInFlight above).
+  const showBusy = busy || answerInFlight || (!!echo && messages.length === 0 && chatStatus !== 'error');
+
+  // Everything an AskUserQuestion card needs to derive its state from history
+  // and hand back an answer. Threaded through MessageView/PartView as plain
+  // props (private same-file components — no memo barrier in between).
+  const questionCtx = useMemo<QuestionCtx>(
+    () => ({
+      answers: questionAnswers,
+      inFlight: answersInFlight,
+      lastVisibleMessageId: messages.at(-1)?.id,
+      busy: busy || answerInFlight,
+      onAnswer: sendQuestionAnswer,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendQuestionAnswer is stable in behavior
+    [questionAnswers, answersInFlight, messages, busy, answerInFlight],
+  );
 
   // A draft whose agent cannot be loaded is not a chat: a bad/expired
   // credential or an unknown agent name renders the error ALONE — no
@@ -275,7 +377,7 @@ export function AgentChat({
                 />
               )
             ) : (
-              messages.map((message) => <MessageView key={message.id} message={message} />)
+              messages.map((message) => <MessageView key={message.id} message={message} questions={questionCtx} />)
             )}
           </ConversationContent>
           <ConversationScrollButton />
@@ -296,6 +398,7 @@ export function AgentChat({
             </div>
           ) : null}
           {uploadError ? <div className="mb-2 text-destructive text-sm">upload failed — {uploadError}</div> : null}
+          {answerError ? <div className="mb-2 text-destructive text-sm">answer failed — {answerError}</div> : null}
           <PromptInput onSubmit={handleSubmit}>
             <PromptInputBody>
               <PromptInputTextarea
@@ -336,7 +439,32 @@ export function AgentChat({
   );
 }
 
-function MessageView({ message }: { message: AgentMessage }) {
+/** What an AskUserQuestion card needs from the conversation. */
+type QuestionCtx = {
+  answers: ReadonlyMap<string, AskUserAnswerPayload>;
+  /** toolCallIds whose answer send has not settled yet. */
+  inFlight: ReadonlyMap<string, string | undefined>;
+  lastVisibleMessageId?: string;
+  busy: boolean;
+  onAnswer: (toolCallId: string, result: { answers: Record<string, string>; cancelled: boolean }) => void;
+};
+
+/** Card state, derived from history alone (survives reloads and remounts):
+ * answered beats everything; anything not on the LAST visible message is
+ * stale (the user typed past it, or a newer response exists). */
+function questionStatus(
+  part: Extract<AgentPart, { type: 'dynamic-tool' }>,
+  messageId: string,
+  ctx: QuestionCtx,
+): AskUserQuestionStatus {
+  const answer = ctx.answers.get(part.toolCallId);
+  if (answer) return { kind: 'answered', answer };
+  if (part.state !== 'output-available' || messageId !== ctx.lastVisibleMessageId) return { kind: 'stale' };
+  if (ctx.inFlight.has(part.toolCallId) || ctx.busy) return { kind: 'submitting' };
+  return { kind: 'pending' };
+}
+
+function MessageView({ message, questions }: { message: AgentMessage; questions: QuestionCtx }) {
   // Consolidate all reasoning parts into one block (a model may emit several) so
   // there's a single "Thinking…" affordance rather than one per part.
   const reasoningParts = message.parts.filter(
@@ -356,19 +484,32 @@ function MessageView({ message }: { message: AgentMessage }) {
           </Reasoning>
         ) : null}
         {message.parts.map((part, index) => (
-          <PartView key={index} part={part} />
+          <PartView key={index} part={part} messageId={message.id} questions={questions} />
         ))}
       </MessageContent>
     </Message>
   );
 }
 
-function PartView({ part }: { part: AgentPart }) {
+function PartView({ part, messageId, questions }: { part: AgentPart; messageId: string; questions: QuestionCtx }) {
   switch (part.type) {
     case 'text':
       // components: workspace download links + plain anchors (workspace-link.tsx).
       return <MessageResponse components={chatMarkdownComponents}>{part.text}</MessageResponse>;
     case 'dynamic-tool':
+      // AskUserQuestion renders as an interactive card, not a collapsible tool
+      // dump. A validation error (output-error) or an input the guard doesn't
+      // recognize falls through to the generic card, so failures stay visible
+      // in the familiar form.
+      if (part.toolName === ASK_USER_TOOL_NAME && part.state !== 'output-error' && parseQuestions(part.input)) {
+        return (
+          <AskUserQuestionCard
+            input={part.input}
+            status={questionStatus(part, messageId, questions)}
+            onSubmit={(result) => questions.onAnswer(part.toolCallId, result)}
+          />
+        );
+      }
       return (
         // Auto-open on error so the failure is visible without a click.
         <Tool defaultOpen={part.state === 'output-error'}>
