@@ -30,6 +30,13 @@ import { getSandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import {
   type AgentProps,
+  type Sandbox,
+  createBashTool,
+  createEditTool,
+  createGlobTool,
+  createGrepTool,
+  createReadTool,
+  createWriteTool,
   useAgentStart,
   useInitialData,
   useModel,
@@ -77,6 +84,47 @@ type Env = {
 /** Sessions whose bundle is missing (expired TTL, pre-ingest message). */
 const DEFAULT_INSTRUCTIONS =
   'You are a helpful assistant. Use the skills available in your workspace for any task they cover.';
+
+/**
+ * Floor for the bash tool's model-supplied `timeout` (seconds). The model
+ * guesses this number and guesses low — a 700s guess cut off a live
+ * multi-minute deploy (the tool kills the command and synthesizes exit 124) —
+ * so values below the floor are raised to it. An omitted timeout stays
+ * unlimited; the submission durability timeout is the backstop either way.
+ */
+const BASH_TIMEOUT_FLOOR_SECONDS = 1200;
+
+/**
+ * The framework's standard six-tool set (SandboxFactory.tools), with bash
+ * wrapped so the floor is applied BEFORE Flue converts the parameter — it
+ * feeds both kill paths (Flue's own timer and the container-side kill), so
+ * clamping any later (e.g. at Sandbox.exec) would leave Flue's timer on the
+ * model's raw guess.
+ */
+function sandboxToolsWithBashFloor(sandbox: Sandbox) {
+  const bash = createBashTool(sandbox);
+  const execute: typeof bash.execute = (toolCallId, params, signal, onUpdate) =>
+    bash.execute(
+      toolCallId,
+      typeof params.timeout === 'number'
+        ? { ...params, timeout: Math.max(params.timeout, BASH_TIMEOUT_FLOOR_SECONDS) }
+        : params,
+      signal,
+      onUpdate,
+    );
+  return [
+    createReadTool(sandbox),
+    createWriteTool(sandbox),
+    createEditTool(sandbox),
+    {
+      ...bash,
+      description: `${bash.description} Timeout values below ${BASH_TIMEOUT_FLOOR_SECONDS} seconds are raised to the ${BASH_TIMEOUT_FLOOR_SECONDS}-second minimum.`,
+      execute,
+    },
+    createGrepTool(sandbox),
+    createGlobTool(sandbox),
+  ];
+}
 
 /**
  * The per-session agent identity the render needs but cannot await from KV:
@@ -362,6 +410,7 @@ export function Main({ id }: AgentProps) {
           loadBundle,
           provisionWorkspace,
         ),
+      tools: sandboxToolsWithBashFloor,
     },
     { cwd: '/workspace' },
   );
