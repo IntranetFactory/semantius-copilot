@@ -8,10 +8,6 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
-## Unreleased: truncation-proof blueprint writes (parts protocol) + bash file-content discipline
-
-2026-08-12. Companion to the analyst's parts-protocol change (see its CHANGELOG for the incident). Stage 13 gains an explicit write sequence built on the shared protocol (`../semantius-admin/references/parts-protocol.md`, new): the blueprint is emitted as ≤ ~4 KB sentinel-terminated parts (manifest first, fresh folder per attempt), verified, assembled content-free to a candidate, gated (the resident Pre-save verification and `consistency-check.ts` now run against the candidate), then `mv`ed into `semantius/blueprints/`. Blueprint variant: the §2 Mermaid is legitimately hand-built per `stage-5-mermaid.md`, so the diagram section is simply one of the parts — no placeholder fence. The Pre-save table gains a parts-protocol completeness row. New resident "Bash file-content discipline" section: heredocs banned outright in tool-emitted bash (truncation → open-stdin hang); fail-fast pipes for small ASCII payloads; Write-tool files or Bun scripts for everything else. Process changes only — no blueprint-shape change, no version bump.
-
 ## Unreleased: catalog-surface elicitation moved to Stage 13; `description` / `license` become publish-only
 
 2026-07-23. Stage 1 asked the user for buyer-facing marketing copy (`tagline`, `description`), a `license`, and a `module_kind` before a single entity existed — yet the `hiring-starter` reference description literally enumerates the entity list ("postings, candidates, applications, interviews, and offers"), which cannot be written well before Stage 3, and `module_kind`'s defaults are defined by §3 role composition, which doesn't exist yet either. Separately, `description` and `license` are catalog-publication metadata that internal-only blueprints never need.

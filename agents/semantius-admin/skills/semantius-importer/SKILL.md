@@ -82,10 +82,6 @@ That file is the distilled subset of `use-semantius` this workflow needs: CLI fo
 | Big payloads | Pipe JSON via stdin (`... | semantius call crud postgrestRequest`); the CLI reads stdin when no JSON argument is given. The "always pass inline JSON" warning is about interactive shells with an empty stdin, not scripts that pipe | cli-usage.md → Passing Arguments |
 | Format vocabulary | `enum` (with `enum_values`), never `select`; monetary values are `number` + `precision` | data-modeling.md |
 
-### Bash file-content discipline
-
-**Bash never carries file content.** No heredocs in tool-emitted bash, ever — not `cat > file <<EOF` to write a file, not `semantius call … <<'JSON'` to feed the CLI — and no multi-KB `printf`/`echo` bodies. A generation cut mid-heredoc leaves the command blocked on stdin indefinitely (a live session wedged for ~55 minutes exactly this way), while a truncated pipe form fails immediately as a visible bash syntax error. File content goes through the Write tool — `mapping.json` on a wide CSV is chunked per [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md) (see schema-mapping.md section 8). Small inline payloads (≤ ~1 KB, ASCII, no apostrophes/backticks) use the fail-fast pipe form `printf '%s' '…' | semantius call …`; anything larger or with hazardous quoting goes through a file (`semantius call … < payload.json`) or a Bun script — which is already this skill's standard path (the "Big payloads" row above and the Stage 4 payload-hygiene rule). PowerShell here-strings (`@'…'@`) fall under the same ban. A truncated generation is an expected, recoverable event: rewrite the affected part or payload file, never retry as a heredoc.
-
 ---
 
 ## Workflow

@@ -25,15 +25,15 @@
     {
       "id": 3,
       "name": "seed-records-sequential-cli-calls",
-      "prompt": "Write a bash script that: creates 3 categories (Electronics, Clothing, Food) in the 'categories' entity, captures each new record's ID from the response, then creates 2 products per category (6 total) in the 'products' entity where each product references its parent category. Use stdin pipes or payload files for the JSON (never heredocs) and jq to extract IDs. Handle errors with set -e.",
-      "expected_output": "A complete bash script using jq to capture IDs. Pattern: ELEC_ID=$(printf '%s' '{...}' | semantius call crud postgrestRequest | jq -r '.[0].id') for each category, then 6 product create calls each embedding the correct category ID. Feeds JSON via stdin pipes (printf '%s' '...' | semantius call ...) or payload files (semantius call ... < file.json) — never heredoc <<EOF syntax. Has set -e at the top. Total of 9 create calls (3 categories + 6 products). Explains that category IDs from the first 3 responses must be captured before the product calls.",
+      "prompt": "Write a bash script that: creates 3 categories (Electronics, Clothing, Food) in the 'categories' entity, captures each new record's ID from the response, then creates 2 products per category (6 total) in the 'products' entity where each product references its parent category. Use heredocs for the JSON and jq to extract IDs. Handle errors with set -e.",
+      "expected_output": "A complete bash script using jq to capture IDs. Pattern: ELEC_ID=$(semantius call crud postgrestRequest ... | jq -r '.[0].id') for each category, then 6 product create calls each embedding the correct category ID. Uses heredoc <<EOF syntax. Has set -e at the top. Total of 9 create calls (3 categories + 6 products). Explains that category IDs from the first 3 responses must be captured before the product calls.",
       "assertions": [
         "Uses set -e or equivalent error handling",
         "Captures category record IDs from create responses using jq",
         "Creates 3 category records",
         "Creates 6 product records (2 per category)",
         "Each product creation embeds the correct captured category ID",
-        "Uses stdin pipe or payload file for clean multi-line JSON (never heredoc <<EOF, not inline escaped JSON)",
+        "Uses heredoc <<EOF or pipe for clean multi-line JSON (not inline escaped JSON)",
         "Total CLI call count is 9 or more",
         "Correctly references the right category ID variable for each pair of products"
       ],
@@ -58,15 +58,15 @@
     {
       "id": 5,
       "name": "shell-script-create-entity-and-fields-with-captured-ids",
-      "prompt": "Write a shell script that creates a new 'suppliers' entity in the existing 'inventory' module, captures the module ID first, then immediately creates 3 fields on it: email, phone, and country. Use jq throughout to extract IDs, feed JSON via stdin pipes or payload files (never heredocs), and end by printing the UI link.",
-      "expected_output": "A complete bash script: MODULE_ID=$(semantius call crud read_module '{\"filters\":\"name=eq.inventory\"}' | jq -r '.[0].id'), then create_entity call storing result in a variable, then 3 create_field calls for email (format:email), phone (format:string), country (format:string). Does NOT create supplier_name field because it is the label_column. Captures the UI base from getCurrentUser (UI_BASEURL=$(semantius call crud getCurrentUser | jq -r .ui_baseurl)) and ends by echoing $UI_BASEURL/inventory/suppliers — never a hardcoded host. Feeds every JSON payload via stdin pipe or payload file, never a heredoc.",
+      "prompt": "Write a shell script that creates a new 'suppliers' entity in the existing 'inventory' module, captures the module ID first, then immediately creates 3 fields on it: email, phone, and country. Use jq throughout to extract IDs, use heredocs for JSON, and end by printing the UI link.",
+      "expected_output": "A complete bash script: MODULE_ID=$(semantius call crud read_module '{\"filters\":\"name=eq.inventory\"}' | jq -r '.[0].id'), then create_entity call storing result in a variable, then 3 create_field calls for email (format:email), phone (format:string), country (format:string). Does NOT create supplier_name field because it is the label_column. Captures the UI base from getCurrentUser (UI_BASEURL=$(semantius call crud getCurrentUser | jq -r .ui_baseurl)) and ends by echoing $UI_BASEURL/inventory/suppliers — never a hardcoded host. Uses heredocs throughout.",
       "assertions": [
         "Reads existing inventory module to capture its ID with jq",
         "create_entity call uses the captured module ID",
         "Does NOT call create_field for the label_column field (auto-generated)",
         "Creates exactly 3 additional fields: email, phone, country",
         "email field uses format:email",
-        "Uses stdin pipe or payload file for all JSON payloads (never heredoc)",
+        "Uses heredoc <<EOF or pipe for all JSON payloads",
         "Script includes error handling",
         "Ends by deriving ui_baseurl from getCurrentUser and printing the {ui_baseurl}/inventory/suppliers URL for the new entity"
       ],

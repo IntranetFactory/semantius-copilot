@@ -2,13 +2,6 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
-## 1.4
-
-Truncation-proof `mapping.json` writes and the bash file-content discipline (companion to the analyst's parts-protocol change; see its CHANGELOG for the incident).
-
-- On a wide CSV, `mapping.json` can exceed the ~4 KB chunk cap, and a generation cut mid-`Write` would ship a silently partial mapping. Section 8 of schema-mapping.md now routes over-cap mappings through the shared parts protocol (`../semantius-admin/references/parts-protocol.md`, new): manifest-first parts under `parts/mapping/` in the run folder, sentinel + verification pass, content-free assembly to `candidate.json`, a deterministic `JSON.parse` + column-count gate, then `mv` to `mapping.json`. Below the cap, a single `Write` stays fine; review-loop changes are capped `Edit`s either way.
-- New resident "Bash file-content discipline" section in SKILL.md: bash never carries file content; heredocs are banned outright in tool-emitted bash (a truncated heredoc blocks on stdin indefinitely; a truncated pipe fails fast as a syntax error); small ASCII payloads use `printf '%s' '…' | semantius call …`; larger or quote-hazardous payloads go through Write-tool files or Bun scripts — already this skill's standard path. The `import.template.ts` copy is unaffected (deterministic, byte-for-byte, never model-generated).
-
 ## 1.3
 
 Run workspace moved out of the OS temp directory.

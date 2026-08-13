@@ -223,8 +223,6 @@ The platform computes nullability from `format`: only `reference`, `date`, and `
 
 The review loop's output and the **single runtime input** for every script in the run folder: `render-plan.ts` renders the mapping table and plan facts from it, `create-fields.ts` creates fields from it, `import.ts` imports by it. One entry per CSV column plus the shared config — nothing about the run is stated anywhere else, so the rendered plan and what actually executes can never disagree.
 
-**Writing it (wide CSVs → parts protocol).** `mapping.json` is model-emitted and grows with column count; on a wide CSV it exceeds the ~4 KB chunk cap, and a generation cut mid-`Write` would ship a silently partial mapping. When the file would exceed the cap, write it via the shared parts protocol ([`../../semantius-admin/references/parts-protocol.md`](../../semantius-admin/references/parts-protocol.md)): parts under `parts/mapping/` in the run folder (manifest first, ~4 KB per part split at column-entry boundaries, sentinel line per part, verification pass), assemble to `parts/mapping/candidate.json`, then gate the candidate with a deterministic parse plus a shape check — `bun -e 'const m = await Bun.file("parts/mapping/candidate.json").json(); if (m.columns.length !== <introspected column count>) throw new Error("column count mismatch")'` — and only then `mv` it to `mapping.json`. A truncated part is rewritten alone, never the whole file, and never via a bash heredoc. Below the cap, a single `Write` is fine as today; either way, every review-loop change is an `Edit` obeying the cap, re-rendered with `bun run render-plan.ts`.
-
 ```json
 {
   "table": "products",

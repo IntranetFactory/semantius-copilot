@@ -112,6 +112,8 @@ async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown
         instructions: bundle.instructions,
         ...(bundle.model ? { model: bundle.model } : {}),
         ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
+        ...(typeof bundle.maxTokens === 'number' ? { maxTokens: bundle.maxTokens } : {}),
+        ...(typeof bundle.contextWindow === 'number' ? { contextWindow: bundle.contextWindow } : {}),
       },
     };
   } catch {

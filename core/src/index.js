@@ -12,6 +12,8 @@ export {
   validateAgentConfig,
   mergeInstructions,
   normalizeModelSpecifier,
+  resolveCatalogModel,
+  applyModelLimits,
   KNOWN_MODEL_PROVIDERS,
   AGENT_LIMITS,
 } from './agent.js';

@@ -1,0 +1,90 @@
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index c21819049689124caf8ce3440c9d4e12902285c2..1387b936fe792179e31a37f0f73ed34797d1550c 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -4,7 +4,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+ import { shortHash } from "../utils/hash.js";
+ import { headersToRecord } from "../utils/headers.js";
+-import { parseStreamingJson } from "../utils/json-parse.js";
++import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+ import { getProviderEnvValue } from "../utils/provider-env.js";
+ import { retryProviderRequest } from "../utils/provider-retry.js";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+@@ -200,7 +200,22 @@ export const stream = (model, context, options) => {
+                         }
+                     }
+                     else {
+-                        block.arguments = parseStreamingJson(block.partialArgs);
++                        // PATCH (semantius-copilot): providers do not reliably report
++                        // finish_reason "length" when they cut output, and the streaming
++                        // salvage parser silently turns a truncated argument buffer into
++                        // an executable (incomplete) call. Complete-parse first (repair
++                        // handles complete-but-quirky JSON: raw control chars, bad
++                        // escapes); only when the buffer needs the partial-JSON salvage
++                        // is it flagged, so the agent loop can fail the call instead of
++                        // executing it (see the pi-agent-core patch).
++                        const rawArgs = block.partialArgs ?? "";
++                        try {
++                            block.arguments = rawArgs.trim() === "" ? {} : parseJsonWithRepair(rawArgs);
++                        }
++                        catch {
++                            block.argumentsTruncated = true;
++                            block.arguments = parseStreamingJson(rawArgs);
++                        }
+                     }
+                     // Finalize in-place and strip the scratch buffers so replay only
+                     // carries parsed arguments.
+@@ -525,6 +540,12 @@ function buildParams(model, context, options, compat = getCompat(model), cacheRe
+     if (compat.supportsUsageInStreaming !== false) {
+         params.stream_options = { include_usage: true };
+     }
++    // PATCH (semantius-copilot): OpenRouter usage accounting — makes the final usage
++    // chunk carry the BILLED cost (usage.cost, USD); consumed in
++    // parseChunkUsage below. OpenRouter-only request field.
++    if (model.baseUrl.includes("openrouter.ai")) {
++        params.usage = { include: true };
++    }
+     if (compat.supportsStore) {
+         params.store = false;
+     }
+@@ -1085,6 +1106,13 @@ function parseChunkUsage(rawUsage, model) {
+         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+     };
+     calculateCost(model, usage);
++    // PATCH (semantius-copilot): prefer the provider's billed amount (OpenRouter
++    // usage.cost, requested via `usage: { include: true }` above) over the
++    // catalog estimate for the TOTAL. Component costs stay catalog-derived —
++    // OpenRouter only reports the total.
++    if (typeof rawUsage.cost === "number" && rawUsage.cost > 0) {
++        usage.cost.total = rawUsage.cost;
++    }
+     return usage;
+ }
+ function mapStopReason(reason) {
+diff --git a/dist/api/simple-options.js b/dist/api/simple-options.js
+index d1ec6a3a543fabc140c820bf0e8ae55d33aa0b1a..6b7cf2e9c8ea806ebad2fb4ed839b6284af4bd16 100644
+--- a/dist/api/simple-options.js
++++ b/dist/api/simple-options.js
+@@ -4,8 +4,19 @@ const MIN_MAX_TOKENS = 1;
+ export function clampMaxTokensToContext(model, context, maxTokens) {
+     if (model.contextWindow <= 0)
+         return Math.max(MIN_MAX_TOKENS, maxTokens);
+-    const available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS;
+-    return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
++    const contextTokens = estimateContextTokens(context).tokens;
++    const available = model.contextWindow - contextTokens - CONTEXT_SAFETY_TOKENS;
++    // PATCH (semantius-copilot): context overflow used to be silently floored to
++    // max_tokens: 1 — a uselessly truncated request whose output the loop then
++    // acts on. Fail loudly instead: the throw happens inside the stream()
++    // try-block (or surfaces via the Agent's run-failure handler), so it
++    // becomes an error stop reason, not a corrupt artifact.
++    if (available < MIN_MAX_TOKENS) {
++        throw new Error(`Context overflow: the conversation (~${contextTokens} tokens + ${CONTEXT_SAFETY_TOKENS} safety margin) ` +
++            `exceeds the model's context window (${model.contextWindow} tokens); no output budget remains. ` +
++            `Compact the conversation or start a new session.`);
++    }
++    return Math.min(maxTokens, available);
+ }
+ export function buildBaseOptions(model, context, options, apiKey) {
+     return {

@@ -7,7 +7,7 @@
   "scripts": {
     "bundle": "node scripts/bundle.mjs",
     "smoke": "node scripts/node-smoke.mjs",
-    "test": "node scripts/admin.test.mjs",
+    "test": "node scripts/admin.test.mjs && node scripts/model-limits.test.mjs",
     "dev:b": "pnpm --filter backend-b dev",
     "dev:frontend": "pnpm --filter frontend dev",
     "build:b": "pnpm --filter backend-b build",
@@ -17,6 +17,7 @@
     "deploy:agents": "node scripts/deploy-agent.mjs --all",
     "deploy": "pnpm deploy:b && node scripts/deploy-agent.mjs --all && pnpm deploy:frontend",
     "logs": "pnpm --filter backend-b logs",
+    "tail": "npx wrangler tail semantius-copilot-backend-b",
     "mint-token": "node scripts/mint-token.mjs",
     "acceptance": "node scripts/acceptance.mjs",
     "sessions": "node scripts/session-costs.mjs",

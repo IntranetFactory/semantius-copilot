@@ -458,6 +458,8 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
     agentName: bundle.agentName,
     model: bundle.model,
     modelBaseUrl: bundle.modelBaseUrl,
+    maxTokens: bundle.maxTokens,
+    contextWindow: bundle.contextWindow,
   });
   return c.json({
     ok: true,
@@ -519,6 +521,8 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     instructions: bundle.instructions,
     ...(bundle.model ? { model: bundle.model } : {}),
     ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
+    ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
+    ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
     ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });

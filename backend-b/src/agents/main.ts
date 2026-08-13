@@ -99,6 +99,10 @@ type AgentMeta = {
   instructions: string;
   model?: string;
   modelBaseUrl?: string;
+  /** agent.jsonc max_tokens/context_window — explicit model limits, winning
+   * over catalog metadata (see AgentLlm in ../llm.ts). */
+  maxTokens?: number;
+  contextWindow?: number;
   binding: string;
   /**
    * Explicit skill catalog (name + SKILL.md description) mounted via
@@ -190,6 +194,8 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
     instructions: seed.instructions,
     ...(typeof seed.model === 'string' ? { model: seed.model } : {}),
     ...(typeof seed.modelBaseUrl === 'string' ? { modelBaseUrl: seed.modelBaseUrl } : {}),
+    ...(typeof seed.maxTokens === 'number' ? { maxTokens: seed.maxTokens } : {}),
+    ...(typeof seed.contextWindow === 'number' ? { contextWindow: seed.contextWindow } : {}),
     ...(skillCatalog && skillCatalog.length > 0 ? { skillCatalog } : {}),
     binding,
   };
@@ -396,6 +402,8 @@ export function Main({ id }: AgentProps) {
         instructions: bundle.instructions,
         ...(bundle.model ? { model: bundle.model } : {}),
         ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
+        ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
+        ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
         ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
         binding,
       });

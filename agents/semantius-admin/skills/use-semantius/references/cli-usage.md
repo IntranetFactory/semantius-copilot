@@ -151,17 +151,29 @@ semantius call crud read_entity '{"filters": "table_name=eq.products"}'
 
 ### Stdin (preferred for complex or multi-line JSON)
 ```bash
-# Pipe — fail-fast: a truncated command is a visible shell syntax error, never a hang
-printf '%s' '{"data": {"name": "My Record"}}' | semantius call crud create_entity
+# Pipe
+echo '{"data": {"name": "My Record"}}' | semantius call crud create_entity
 
-# From a file (payload written with the Write tool)
-semantius call crud create_field < payload.json
-cat payload.json | semantius call crud create_entity
+# Heredoc — no '-' needed with call subcommand
+semantius call crud create_field <<EOF
+{
+  "data": {
+    "table_name": "products",
+    "field_name": "price",
+    "title": "Price",
+    "format": "number",
+    "precision": 2,
+    "width": "auto",
+    "input_type": "default"
+  }
+}
+EOF
+
+# From a file
+cat args.json | semantius call crud create_entity
 ```
 
 **Why stdin?** Shell interpretation of `{}`, quotes, and special characters requires careful escaping. Stdin bypasses shell parsing entirely.
-
-**No heredocs.** Never feed the CLI with `<<EOF` / `<<'JSON'` in tool-emitted bash: a generation cut before the terminator line leaves the command blocked on stdin indefinitely (a live session hung ~55 minutes this way), and the outer harness quoting layer can corrupt the body before bash ever parses it. Keep inline pipes to ~1 KB of plain ASCII with no apostrophes or backticks; larger or quote-hazardous payloads go through a file (written with the Write tool, chunked per the parts protocol when over ~4 KB) or a Bun script — see the modeler's data-fidelity rules. PowerShell here-strings (`@'…'@`) fall under the same rule.
 
 ---
 

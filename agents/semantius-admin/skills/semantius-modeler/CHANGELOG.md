@@ -8,16 +8,6 @@ Entries below are newest first.
 
 ---
 
-## Unreleased: inline heredocs banned outright; generated scripts over ~4 KB go through the parts protocol
-
-2026-08-12. Companion to the analyst's parts-protocol change (see its CHANGELOG for the incident: a truncated heredoc generation blocked on stdin ~55 minutes). Three changes to the data-fidelity section and Stage 6:
-
-1. The harness-quoting bullet upgrades from "heredocs are not enough" to an outright **ban on heredocs in tool-emitted bash**, with the second (independent) reason documented: a generation cut before the terminator hangs on stdin indefinitely, while a truncated pipe form fails immediately as a syntax error. The old "inline heredoc is a fallback for short ASCII-only payloads" paragraph and its `<<'JSON'` example are replaced by the fail-fast pipe form (`printf '%s' '…' | semantius call …`, ≤ ~1 KB, ASCII only). PowerShell here-strings fall under the same ban.
-2. The canonical write-a-script-then-run-it pattern now routes any generated script whose content exceeds ~4 KB (deploy scripts carrying many entities' descriptions, most seed scripts) through the shared parts protocol (`../semantius-admin/references/parts-protocol.md`, new): manifest, sentinel-terminated parts under `.tmp_deploy/parts/<slug>/`, verification pass, content-free assembly to a candidate, syntax gate, `mv` into place — a mid-stream truncation costs one part, not the whole file.
-3. `stage-6-sample-data.md` gets the seed-script walkthrough: part 01 carries imports + config, one part per entity block, the final part ends with `assertSeedCounts(...)` so the tail check doubles as proof the count guard survived assembly; `bun build` on the candidate is the syntax gate.
-
-Process changes only — no spec contract change, `EXPECTED_MAJOR` unchanged.
-
 ## Unreleased: Stage 5b stamps the deployed module version back into the spec (drift gate)
 
 2026-07-05. New **Stage 5b** in `stage-5-verify.md`: on a clean deploy, after all Stage 4 writes settle, read the platform-maintained `modules.version` (monotonic integer, bumped by the platform on any owned-schema change) + `modules.version_date` and upsert them into the spec front-matter as `deployed_version` / `deployed_version_date`, plus `deployed_related_versions` (the live `version` of each `reuse-from` / `promote-to-master` source module). This is the **only** write the modeler makes to the spec, and only on a clean deploy — an in-place front-matter upsert, nothing else touched. Graceful no-op when the platform predates the `version` column. Pairs with the analyst's new 2a.1 gate, which reads `deployed_version` to answer "did prod drift since deploy?" in one read instead of deep-inspecting every entity. Additive / behavioral; no spec-shape break, `EXPECTED_MAJOR` stays `5`.

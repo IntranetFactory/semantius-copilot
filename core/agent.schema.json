@@ -23,6 +23,18 @@
       "pattern": "^https?://",
       "description": "Overrides the provider base URL for this agent (an OpenAI-compatible endpoint). Auth still uses the backend's LLM_API_KEY secret."
     },
+    "max_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000000,
+      "description": "Output-token cap for this agent's model, winning over catalog metadata. For models no catalog knows (custom endpoints, models newer than the pinned pi-ai catalog): a catalog miss otherwise runs on a conservative placeholder whose 8192-token cap truncates long single-pass responses. Dated slugs of catalog models (e.g. '-0731') do NOT need this — their metadata resolves via the undated base entry."
+    },
+    "context_window": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000000,
+      "description": "Context-window size (tokens) for this agent's model, winning over catalog metadata. Governs the compaction threshold and the output-budget clamp; the catalog-miss placeholder is 128000. Only useful together with models no catalog knows — see max_tokens."
+    },
     "proxy_whitelist": {
       "type": "array",
       "maxItems": 32,

@@ -101,9 +101,9 @@ Every string the deployer extracts from the model and sends to Semantius (`descr
 - Double-quoting the JSON (`"{...}"`) makes bash evaluate backticks (`` `cmd` ``) as command substitution. **Disastrous.**
 - Single-quoting the JSON (`'{...}'`) breaks the moment any value contains a single quote / apostrophe.
 - Escaping is fragile and easy to get wrong field-by-field.
-- **Heredocs (`<<'EOF'`) inside an *inline* Bash invocation are BANNED, not just discouraged.** Two independent reasons. Quoting: the agent harness transports the entire Bash command as a string through its own quoting layer; an apostrophe inside a heredoc body can still trip the outer parser before bash ever sees the heredoc as a heredoc. Truncation: a model-emitted generation can be cut mid-stream at any point, and a heredoc cut before its terminator leaves the command blocked on stdin **indefinitely** — a live session wedged for ~55 minutes exactly this way. A truncated pipe form (`printf '%s' '…' | semantius call …`) fails immediately as a visible syntax error instead; a heredoc hangs. (Heredocs inside a *file on disk* that bash then reads are technically safe — bash hits EOF and errors instead of hanging — but no template here uses them; keep the rule simple: no heredocs in tool-emitted bash, period. PowerShell here-strings `@'…'@` fall under the same ban.)
+- **Heredocs (`<<'EOF'`) inside an *inline* Bash invocation are NOT enough.** The agent harness transports the entire Bash command as a string through its own quoting layer; an apostrophe inside a heredoc body can still trip the outer parser before bash ever sees the heredoc as a heredoc. Heredocs are safe inside a *file* that bash then reads, not inside a command argument bash is being told to evaluate.
 
-**Canonical pattern: write a script file with the Write tool, then run it.** This is the only form that fully decouples the model's text from any shell quoting layer. The script file is opaque bytes to the harness; the runtime reads it from disk and parses string literals locally. **A generated script whose content exceeds ~4 KB (a deploy script carrying many entities' full descriptions easily does; seed scripts often do) is written via the shared parts protocol** — manifest, ≤ ~4 KB sentinel-terminated parts under `.tmp_deploy/parts/<slug>/`, verification pass, deterministic assembly to a candidate, syntax gate, then `mv` into place — so a mid-stream truncation costs one part, not the whole file. See [`../semantius-admin/references/parts-protocol.md`](../semantius-admin/references/parts-protocol.md) and the seed-script walkthrough in [`references/stage-6-sample-data.md`](references/stage-6-sample-data.md).
+**Canonical pattern: write a script file with the Write tool, then run it.** This is the only form that fully decouples the model's text from any shell quoting layer. The script file is opaque bytes to the harness; the runtime reads it from disk and parses string literals locally.
 
 **Use Bun (TypeScript), not Python.** Bun is a native cross-platform runtime — the same `.ts` file runs identically under PowerShell, Git Bash, macOS, and Linux without path-mapping or interpreter-shim issues. Python is forbidden in this skill: Windows `python3` may not be on `PATH`, `/tmp/` resolves differently between Git Bash and Windows-side Python, and subprocess piping behaves differently across shells. Bun avoids all of that.
 
@@ -140,13 +140,13 @@ bun run <cwd>/.tmp_deploy/deploy_xxx.ts
 
 The model's text lives inside a TypeScript string literal in a file on disk; it is serialized to JSON by `JSON.stringify` (which never strips backticks, apostrophes, em-dashes, or Unicode); the JSON is fed to `semantius` over stdin as raw bytes by `Bun.spawn`. No shell quoting layer ever sees the text.
 
-**Inline pipe is the fallback for short ASCII-only payloads only.** When the payload is ≤ ~1 KB and contains no apostrophes, backticks, or Unicode, a fail-fast pipe is fine — if the generation is cut mid-payload, bash reports a syntax error immediately instead of hanging:
+**Inline heredoc is a fallback for short ASCII-only payloads only.** When the payload is small and contains no apostrophes, backticks, or Unicode, an inline heredoc is fine:
 
 ```bash
-printf '%s' '{"data":{"module_name":"ATS","module_slug":"ats","description":"Applicant Tracking System","module_type":"domain"}}' | semantius call crud create_module
+semantius call crud create_module <<'JSON'
+{"data":{"module_name":"ATS","module_slug":"ats","description":"Applicant Tracking System","module_type":"domain"}}
+JSON
 ```
-
-Never an inline heredoc (`<<'JSON'` / `<<EOF`), whatever the payload — see the ban and its two reasons above. Anything larger or with hazardous quoting goes through a file: the Bun-script pattern above, or a payload file written with the Write tool (next paragraph).
 
 **Other supported transport forms (when the file already exists on disk, e.g. produced by an earlier Write call):**
 

@@ -7,11 +7,16 @@
  * without clicking through the frontend: send a turn here, then check the
  * Braintrust `semantius-copilot` logs / Arize `semantius-copilot` project for the trace.
  *
- *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}'] [--session=<id>]
+ *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}'] [--session=<id>] [--agent=<name>] [--deadline=<seconds>]
  *
  * --session=<id> resumes an EXISTING session instead of ingesting a new one —
  * the tool for cross-turn persistence checks (workspace backup/restore across
  * a container sleep needs a write turn and a later read turn on one session).
+ * --agent=<name> drives another agents/ definition (default
+ * hoth-trip-planner); its bundle must exist in dist-bundle/ (`pnpm bundle`)
+ * and be deployed. --deadline=<seconds> extends the settle wait (default 180)
+ * for turns that legitimately run long — e.g. the model-limits regression's
+ * single-shot long write (fix_model_limits_plan.md).
  *
  * Talks the same wire protocol as the frontend FlueClient (raw fetch, like
  * acceptance.mjs): name-based ingest ({ agentName } — the trip-planner
@@ -62,7 +67,8 @@ async function postJson(url, body) {
   return text ? JSON.parse(text) : undefined;
 }
 
-const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', 'hoth-trip-planner.agent.json'), 'utf8'));
+const agentName = args.find((arg) => arg.startsWith('--agent='))?.slice('--agent='.length) ?? 'hoth-trip-planner';
+const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', `${agentName}.agent.json`), 'utf8'));
 console.log(`minted semantius token for org ${semantiusToken.slice(0, semantiusToken.indexOf(':'))}`);
 let sessionId = args.find((arg) => arg.startsWith('--session='))?.slice('--session='.length);
 if (sessionId) {
@@ -90,6 +96,8 @@ const seed = {
   instructions: bundle.instructions,
   ...(bundle.model ? { model: bundle.model } : {}),
   ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
+  ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
+  ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
   ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
   ...(payload !== undefined ? { payload } : {}),
 };
@@ -101,7 +109,7 @@ const admission = await postJson(conversationUrl, sendBody);
 const submissionId = admission?.submissionId;
 if (!submissionId) throw new Error(`send admission carried no submissionId: ${JSON.stringify(admission)}`);
 
-const DEADLINE_MS = 180_000;
+const DEADLINE_MS = 1000 * Number(args.find((arg) => arg.startsWith('--deadline='))?.slice('--deadline='.length) ?? 180);
 const start = Date.now();
 for (;;) {
   await new Promise((resolve) => setTimeout(resolve, 3000));

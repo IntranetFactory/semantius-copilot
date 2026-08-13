@@ -168,8 +168,6 @@ semantius call crud getCurrentUser '{}'     # inline JSON, never blocks
 
 Never invoke a no-argument `semantius call ...` bare on Windows/PowerShell without one of the two forms above.
 
-**Never feed the CLI with a heredoc (`<<EOF`) in tool-emitted bash.** A generation cut before the terminator leaves the command blocked on stdin indefinitely — the same open-stdin hang as above, self-inflicted. Use a fail-fast pipe for small ASCII payloads (`printf '%s' '{...}' | semantius call …`) or a file for anything larger or carrying apostrophes/backticks/Unicode (`semantius call … < payload.json`); see `references/cli-usage.md` → Passing Arguments.
-
 Both `info <server> <tool>` and `info <server>/<tool>` work interchangeably.
 
 ---

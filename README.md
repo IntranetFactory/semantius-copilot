@@ -339,17 +339,44 @@ as if instructions or skills are missing.
   installed) and force-closes orphaned Cloudflare trace spans.
 - pnpm, Docker (for building the sandbox container image), a Cloudflare account with
   **Workers Paid + Containers** and **Workers AI** enabled.
-- Three dependency patches under `patches/` (applied automatically by `pnpm install`):
-  - `@earendil-works/pi-ai` — OpenRouter **billed** cost: adds the
-    OpenRouter-only `usage: { include: true }` request field (usage
-    accounting) and prefers the returned inline `usage.cost` over the
-    model-catalog estimate for `cost.total` in `parseChunkUsage`
-    (`dist/api/openai-completions.js`). Stock pi-ai never requests
-    accounting and discards the field, so every downstream cost —
-    conversation metadata, Braintrust, `pnpm sessions`, Arize `llm.cost.*` —
-    was a catalog estimate. No-op for non-OpenRouter providers and when
-    OpenRouter omits the field. Keyed to the exact pi-ai version — on a
-    bump, re-create (same two edits) or drop if upstream keeps the field.
+- Four dependency patches under `patches/` (applied automatically by `pnpm install`):
+  - `@earendil-works/pi-ai` (0.83.0 — backend B depends on `^0.83.0`
+    explicitly so it shares the SAME pi-ai copy and catalog as
+    `@flue/runtime`; the 0.81.1 copy it used before shipped a stale catalog
+    whose `deepseek/deepseek-v4-flash` entry capped output at 4096 tokens,
+    see fix_model_limits_plan.md). Four hunks:
+    - OpenRouter **billed** cost: adds the OpenRouter-only
+      `usage: { include: true }` request field (usage accounting) and
+      prefers the returned inline `usage.cost` over the model-catalog
+      estimate for `cost.total` in `parseChunkUsage`
+      (`dist/api/openai-completions.js`). Stock pi-ai never requests
+      accounting and discards the field, so every downstream cost —
+      conversation metadata, Braintrust, `pnpm sessions`, Arize `llm.cost.*` —
+      was a catalog estimate. No-op for non-OpenRouter providers and when
+      OpenRouter omits the field.
+    - Context overflow is **loud** (`dist/api/simple-options.js`): stock
+      `clampMaxTokensToContext` silently floors the output budget at
+      `max_tokens: 1` once the conversation exceeds the model's context
+      window — a uselessly truncated request whose output the loop then
+      acts on. The patch throws a "Context overflow" error instead, which
+      surfaces as an error stop reason in the session.
+    - Truncated tool-call detection (`dist/api/openai-completions.js`
+      `finishBlock`): providers do not reliably report `finish_reason:
+      "length"` when they cut output (the 2026-08-12 incident), and the
+      streaming salvage parser silently turned a truncated argument buffer
+      into an executable (incomplete) call. The patch complete-parses first
+      (`parseJsonWithRepair`, so complete-but-quirky JSON stays unflagged)
+      and sets `argumentsTruncated` on the block when only the partial-JSON
+      salvage could parse it — consumed by the pi-agent-core patch below.
+    Keyed to the exact pi-ai version — on a bump, re-create (same four
+    edits, dropping any that upstream fixed).
+  - `@earendil-works/pi-agent-core` (0.83.0) — the agent loop's truncation
+    guard (`dist/agent-loop.js`) stock keys ONLY on `stopReason ===
+    "length"`, i.e. on the provider's honesty; the patch extends it to also
+    fail the tool batch when any call carries `argumentsTruncated` (set by
+    the pi-ai patch above), routing into the existing
+    `failToolCallsFromTruncatedMessage` — the model gets a "re-issue with
+    complete arguments" tool error instead of a silently corrupt artifact.
   - `@flue/runtime` — `mergeSkillCatalog` again lets a workspace-discovered
     skill silently override a same-name `useSkill()` definition instead of
     throwing. Backend B delivers every bundle skill on BOTH legs by design

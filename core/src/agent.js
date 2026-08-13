@@ -14,6 +14,8 @@
  * @property {string} instructions merged agent.jsonc instructions + INSTRUCTIONS.md
  * @property {string} [model]      normalized provider/model specifier
  * @property {string} [modelBaseUrl] OpenAI-compatible endpoint override
+ * @property {number} [maxTokens]  output-token cap override (wins over catalog metadata)
+ * @property {number} [contextWindow] context-window override in tokens (wins over catalog metadata)
  * @property {string[]} [proxyWhitelist] egress allow list (host/URL globs), unioned at
  *   egress with the org's own list; DENY-ALL when both are absent/empty
  * @property {AgentWelcome} [welcome] welcome card shown by the chat UI while a conversation is empty
@@ -49,6 +51,10 @@ export const AGENT_LIMITS = {
   maxAgentTotalBytes: 4 * 1024 * 1024,
   maxBaseUrlChars: 512,
   maxWhitelistHosts: 32,
+  // Sanity ceiling for max_tokens/context_window overrides — generous enough
+  // for any plausible model (100M tokens), small enough to catch unit slips
+  // (bytes, characters) at bundle time.
+  maxModelLimitTokens: 100_000_000,
 };
 
 /** Per-string caps on the welcome card. Deliberately no caps on the NUMBER of
@@ -172,19 +178,88 @@ export function normalizeModelSpecifier(model) {
 }
 
 /**
+ * Trailing date suffix on a pinned model slug (`-0731` in
+ * `deepseek/deepseek-v4-flash-0731`): 3-4 digits so `-0731`/`-2024` style
+ * pins match but semver-ish tails (`-v2`, `-32b`) don't.
+ */
+const DATED_SLUG_SUFFIX_RE = /-\d{3,4}$/;
+
+/**
+ * Catalog lookup with a dated-slug metadata fallback. Model catalogs usually
+ * carry only the undated slug (`deepseek/deepseek-v4-flash`), while deploys
+ * pin dated snapshots (`…-0731`) — on the exact-id miss the pinned model used
+ * to run with a synthesized conservative placeholder (128k window, 8k output
+ * cap) that truncated long single-pass writes (incident 2026-08-12). The
+ * fallback strips the date suffix and reuses the base entry's metadata while
+ * keeping the ORIGINAL dated id as the request model id, so pinning costs
+ * nothing.
+ *
+ * @template {{ id: string, name: string }} T
+ * @param {T[]} models catalog entries
+ * @param {string} modelId the requested model id (possibly a dated slug)
+ * @returns {{ entry: T | undefined, exact: boolean }} `exact` distinguishes a
+ *   verbatim catalog hit (entry usable as-is against the stock provider) from
+ *   a dated-slug fallback (entry synthesized: base metadata, dated id).
+ */
+export function resolveCatalogModel(models, modelId) {
+  const exact = models.find((m) => m.id === modelId);
+  if (exact) return { entry: exact, exact: true };
+  const base = modelId.replace(DATED_SLUG_SUFFIX_RE, '');
+  if (base !== modelId) {
+    const baseEntry = models.find((m) => m.id === base);
+    if (baseEntry) return { entry: { ...baseEntry, id: modelId, name: modelId }, exact: false };
+  }
+  return { entry: undefined, exact: false };
+}
+
+/**
+ * Apply an agent's explicit token-limit overrides (agent.jsonc `max_tokens` /
+ * `context_window`) to a model catalog entry. Explicit overrides win over
+ * whatever the entry carries — catalog metadata, dated-slug fallback, or the
+ * conservative placeholder — because they exist precisely for models no
+ * catalog knows.
+ *
+ * @template {{ maxTokens: number, contextWindow: number }} T
+ * @param {T} entry
+ * @param {{ maxTokens?: number, contextWindow?: number } | null | undefined} limits
+ * @returns {T}
+ */
+export function applyModelLimits(entry, limits) {
+  return {
+    ...entry,
+    ...(limits?.maxTokens !== undefined ? { maxTokens: limits.maxTokens } : {}),
+    ...(limits?.contextWindow !== undefined ? { contextWindow: limits.contextWindow } : {}),
+  };
+}
+
+/**
+ * Shared check for the max_tokens/context_window override values (agent.jsonc
+ * snake_case keys and bundle camelCase fields alike).
+ *
+ * @param {unknown} value
+ * @param {string} label
+ */
+function checkTokenLimit(value, label) {
+  if (value === undefined) return;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > AGENT_LIMITS.maxModelLimitTokens) {
+    throw new BundleValidationError(`${label} must be an integer between 1 and ${AGENT_LIMITS.maxModelLimitTokens}`);
+  }
+}
+
+/**
  * Validate a parsed agent.jsonc against the contract in
  * agents/agent.schema.json. Unknown keys are rejected so typos and
  * not-yet-supported keys (future egress allow list etc.) fail at bundle time.
  *
  * @param {unknown} raw
- * @returns {{ instructions?: string, model?: string, model_base_url?: string, welcome?: AgentWelcome }}
+ * @returns {{ instructions?: string, model?: string, model_base_url?: string, max_tokens?: number, context_window?: number, welcome?: AgentWelcome }}
  */
 export function validateAgentConfig(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BundleValidationError('agent.jsonc must be a JSON object');
   }
   const config = /** @type {Record<string, unknown>} */ (raw);
-  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'proxy_whitelist', 'welcome'];
+  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'max_tokens', 'context_window', 'proxy_whitelist', 'welcome'];
   for (const key of Object.keys(config)) {
     if (!allowed.includes(key)) {
       throw new BundleValidationError(`agent.jsonc has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
@@ -199,6 +274,8 @@ export function validateAgentConfig(raw) {
   if (config.model_base_url !== undefined && (typeof config.model_base_url !== 'string' || !/^https?:\/\//.test(config.model_base_url))) {
     throw new BundleValidationError('agent.jsonc "model_base_url" must be an http(s) URL when present');
   }
+  checkTokenLimit(config.max_tokens, 'agent.jsonc "max_tokens"');
+  checkTokenLimit(config.context_window, 'agent.jsonc "context_window"');
   if (config.proxy_whitelist !== undefined) {
     validateWhitelist(config.proxy_whitelist, 'agent.jsonc "proxy_whitelist"');
   }
@@ -275,6 +352,8 @@ export function validateAgentBundle(raw) {
       throw new BundleValidationError('modelBaseUrl must be an http(s) URL');
     }
   }
+  checkTokenLimit(bundle.maxTokens, 'maxTokens');
+  checkTokenLimit(bundle.contextWindow, 'contextWindow');
   if (bundle.proxyWhitelist !== undefined) {
     validateWhitelist(bundle.proxyWhitelist, 'proxyWhitelist');
   }

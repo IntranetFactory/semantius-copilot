@@ -16,5 +16,6 @@ allowBuilds:
   workerd: true
 patchedDependencies:
   '@durable-streams/client@0.2.6': patches/@durable-streams__client@0.2.6.patch
-  '@earendil-works/pi-ai@0.81.1': patches/@earendil-works__pi-ai@0.81.1.patch
+  '@earendil-works/pi-agent-core@0.83.0': patches/@earendil-works__pi-agent-core@0.83.0.patch
+  '@earendil-works/pi-ai@0.83.0': patches/@earendil-works__pi-ai@0.83.0.patch
   '@flue/runtime@2.0.3': patches/@flue__runtime@2.0.3.patch

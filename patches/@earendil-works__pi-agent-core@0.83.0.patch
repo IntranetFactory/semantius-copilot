@@ -1,0 +1,17 @@
+diff --git a/dist/agent-loop.js b/dist/agent-loop.js
+index 5b5da787a637df62dfd944f92a45fc9cb945eac3..522c1fbcda4bc079383a425e3d290cc231f04c77 100644
+--- a/dist/agent-loop.js
++++ b/dist/agent-loop.js
+@@ -118,7 +118,11 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+                 // A "length" stop means the output was cut off by the token limit, so
+                 // every tool call in the message may carry truncated arguments. Fail
+                 // them all instead of executing potentially borked calls.
+-                const executedToolBatch = message.stopReason === "length"
++                // PATCH (semantius-copilot): providers do not reliably report the
++                // "length" stop when they cut output — also fail the batch when any
++                // call's argument buffer only parsed via the streaming salvage
++                // parser (argumentsTruncated, set by the pi-ai finishBlock patch).
++                const executedToolBatch = message.stopReason === "length" || toolCalls.some((c) => c.argumentsTruncated)
+                     ? await failToolCallsFromTruncatedMessage(toolCalls, emit)
+                     : await executeToolCalls(currentContext, message, config, signal, emit);
+                 toolResults.push(...executedToolBatch.messages);

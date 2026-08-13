@@ -40,6 +40,9 @@ export type AgentSeed = {
   instructions: string;
   model?: string;
   modelBaseUrl?: string;
+  /** agent.jsonc max_tokens/context_window — explicit model limits the backend applies over catalog metadata. */
+  maxTokens?: number;
+  contextWindow?: number;
   /** Explicit skill catalog (name + description) so turn 1 mounts skills via useSkill(). */
   skillCatalog?: Array<{ name: string; description: string }>;
 };
