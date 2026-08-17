@@ -2,6 +2,15 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## 1.4
+
+Bulk field creation: one `create_field` call instead of one per column.
+
+- The crud server (postgrest-mcp "array inserts") and the CLI ("add array support") now take `data` on every typed `create_*` as one object **or an array** (items may have different keys — the server sends `?columns=<union>` with `Prefer: missing=default`; one request, one transaction, all-or-nothing; the response is always an array), and `id` / `table_name` on `update_*` / `delete_*` as a value or an array. `--single` is rejected (`SINGLE_ARRAY_INPUT`) with any array argument. Platform golden rule: more than one record of the same kind pending → ONE call.
+- `references/create-fields.ts` rewritten around that: every `disposition: "create"` column goes into **one bulk `create_field` call** (up to 100 per call; the pool-of-5 concurrency runner is gone). Kept: `mapping.json` in, `--dry-run` (now prints the exact `{ "data": [ … ] }` payload per call), read-before-create idempotency, exit-3 retry with 1s/3s/9s backoff (now per call, and re-reading the live fields before each retry so rows that landed despite a lost response are never resent), fail-fast on exit 4/5, the `ok / failed / skipped-exists / not-run` result table, exit codes 0/1/5. New: after the calls succeed the live fields are re-read and every requested name must be present; a failed call is reported as "nothing from this call landed" (one transaction) with the platform's first stderr line, and there is deliberately no per-field fallback loop. Verified live: 6 heterogeneous fields in one call, re-run issues zero calls.
+- Both baseline permissions of a new module go out in one `create_permission` call (SKILL.md Stage 4 step 1, importer-essentials.md module block).
+- Docs aligned: SKILL.md Stage 4 step 3 and the safety-net table (new "Several records of one kind" row; the `postgrestRequest` row now says the typed tools take mixed-key arrays while the raw path still needs uniform keys or `?columns=` with NULL for omitted keys), import-script-template.md (runner contract, design rule 4), importer-essentials.md (response shapes, order line, fields example as an array), schema-mapping.md section 2 ("one bulk call" instead of "concurrently"), README.
+
 ## 1.3
 
 Run workspace moved out of the OS temp directory.

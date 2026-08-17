@@ -174,9 +174,9 @@ With both gates passed (version + consistency), extract the rest:
 
 > **Label-column uniqueness (parallel to Title correction, mandatory when marked):** the `label_column` field is auto-created by `create_entity`, so a `unique` marker on it (the common case: a natural-key label such as `contract_number`, `application_name`) cannot ride a `create_field`. After `create_entity`, when the spec's label-column row carries `unique`, issue `update_field` on `<table_name>.<label_column>` with `unique_value: true` in the same post-create pass as the title correction. Stage 5 round-trips `unique_value`, so a missed stamp surfaces there rather than as silent live drift (a natural key with no DB uniqueness).
 
-### Self-References
+### Self-References and forward references
 
-Fields that reference their own entity (e.g., `campaign.parent_campaign_id → campaigns`) must be created in a second pass after all entities exist. Flag them during parsing.
+Fields that reference their own entity (e.g., `campaign.parent_campaign_id → campaigns`) or an entity declared later in §3 need no special flag and no second pass: Stage 4c creates **every** entity of the spec (one `create_entity` call) before Stage 4d creates any field, so every in-spec `reference_table` already exists when its field is created. Parse them like any other FK.
 
 ---
 

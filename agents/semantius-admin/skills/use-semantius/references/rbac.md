@@ -30,30 +30,31 @@ Never use free-form names like `"can_edit"` or `"admin"`, always scope to a modu
 
 ## Step-by-Step: Full RBAC Setup for a New Module
 
+Every step below writes a **set** of records of one kind, so each is **one** call with an array in `data` (Golden Rule 7): both permissions in one `create_permission`, both roles in one `create_role`, both grants in one `create_role_permission`. Duplicate-check each set with one `read_*` using an `in.(...)` filter first (`read_permission '{"filters": "permission_name=in.(crm:read,crm:manage)"}'`); resolve ids from that read, never from the create response.
+
 ### 1. Create Permissions
 
 ```bash
-# Baseline: always create both read and manage
+# Baseline: always create both read and manage — in ONE call
 semantius call crud create_permission '{
-  "data": {
-    "permission_name": "crm:read",
-    "description": "Read CRM data",
-    "module_id": 3
-  }
-}'
-
-semantius call crud create_permission '{
-  "data": {
-    "permission_name": "crm:manage",
-    "description": "Create, update, and delete CRM data",
-    "module_id": 3
-  }
+  "data": [
+    {
+      "permission_name": "crm:read",
+      "description": "Read CRM data",
+      "module_id": 3
+    },
+    {
+      "permission_name": "crm:manage",
+      "description": "Create, update, and delete CRM data",
+      "module_id": 3
+    }
+  ]
 }'
 ```
 
 ### 2. Set Up Permission Hierarchy (optional but recommended)
 
-Make `crm:manage` implicitly include `crm:read`, so assigning `manage` is sufficient:
+Make `crm:manage` implicitly include `crm:read`, so assigning `manage` is sufficient (with an admin tier, both edges — `admin → manage` and `manage → read` — go in one call):
 
 ```bash
 semantius call crud create_permission_hierarchy '{
@@ -72,46 +73,42 @@ The role fields are **`role_name`** (the human display name) and **`slug`** (sna
 - **`origin: "model"`** — marks it deployer-provisioned. Omit it and the role defaults to **`origin: "user"`** (admin-created), the wrong provenance for a deployed role. (`model_master` for a master-module scaffold; see the modeler skill.)
 
 ```bash
-# Viewer role — read only
+# Viewer (read only) and manager (full access) roles — in ONE call
 semantius call crud create_role '{
-  "data": {
-    "role_name": "CRM Viewer",
-    "slug": "crm_viewer",
-    "description": "Can view CRM data",
-    "module_id": 3,
-    "origin": "model"
-  }
-}'
-
-# Manager role — full access
-semantius call crud create_role '{
-  "data": {
-    "role_name": "CRM Manager",
-    "slug": "crm_manager",
-    "description": "Can manage all CRM data",
-    "module_id": 3,
-    "origin": "model"
-  }
+  "data": [
+    {
+      "role_name": "CRM Viewer",
+      "slug": "crm_viewer",
+      "description": "Can view CRM data",
+      "module_id": 3,
+      "origin": "model"
+    },
+    {
+      "role_name": "CRM Manager",
+      "slug": "crm_manager",
+      "description": "Can manage all CRM data",
+      "module_id": 3,
+      "origin": "model"
+    }
+  ]
 }'
 ```
 
 ### 4. Grant Permissions to Roles
 
 ```bash
-# Grant crm:read to crm_viewer
+# crm:read → crm_viewer, crm:manage → crm_manager (inherits crm:read via hierarchy) — in ONE call
 semantius call crud create_role_permission '{
-  "data": {
-    "role_id": <crm_viewer id>,
-    "permission_id": <crm:read id>
-  }
-}'
-
-# Grant crm:manage to crm_manager (inherits crm:read via hierarchy)
-semantius call crud create_role_permission '{
-  "data": {
-    "role_id": <crm_manager id>,
-    "permission_id": <crm:manage id>
-  }
+  "data": [
+    {
+      "role_id": <crm_viewer id>,
+      "permission_id": <crm:read id>
+    },
+    {
+      "role_id": <crm_manager id>,
+      "permission_id": <crm:manage id>
+    }
+  ]
 }'
 ```
 
@@ -184,19 +181,31 @@ When a user gets "permission denied":
 
 ## Updating RBAC
 
-### Add a permission to an existing role
+### Add permissions to an existing role
 ```bash
+# One permission
 semantius call crud create_role_permission '{
   "data": {"role_id": 5, "permission_id": 12}
 }'
+# Several permissions (or several roles) — ONE call
+semantius call crud create_role_permission '{
+  "data": [{"role_id": 5, "permission_id": 12}, {"role_id": 5, "permission_id": 13}, {"role_id": 6, "permission_id": 12}]
+}'
 ```
 
-### Remove a permission from a role
+### Remove permissions from a role
 ```bash
-# Find the role_permission record first
-semantius call crud read_role_permission '{"filters": "role_id=eq.5&permission_id=eq.12"}'
-# Then delete by id
-semantius call crud delete_role_permission '{"id": "<id>"}'
+# Find the role_permission record(s) first
+semantius call crud read_role_permission '{"filters": "role_id=eq.5&permission_id=in.(12,13)"}'
+# Then delete by id — several ids in one call
+semantius call crud delete_role_permission '{"id": ["<id-1>", "<id-2>"]}'
+```
+
+### Assign several users to a role (or several roles to a user) — one `create_user_role` call
+```bash
+semantius call crud create_user_role '{
+  "data": [{"user_id": 17, "role_id": <crm_manager id>}, {"user_id": 18, "role_id": <crm_manager id>}]
+}'
 ```
 
 > ⚠️ Removing permissions from roles may revoke access for all users in that role. Check impact before proceeding.

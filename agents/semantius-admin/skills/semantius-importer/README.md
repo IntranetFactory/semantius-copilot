@@ -10,7 +10,7 @@ Imports a CSV file into Semantius: introspect the file's schema with the CLI's b
 - **Target-entity selection**: when no table matches, candidates are ranked by name similarity and field overlap and the user chooses create-new vs use-existing.
 - **Batched import**: streaming `csv-parse`, uniform-key batches via stdin-piped `postgrestRequest`, retries, per-row coercion validation, `failed-batches.json`, count verification against the server and against the introspection's `record_count`. The script ships as a real file (`references/import.template.ts`) copied byte-for-byte into the run folder; it reads all run configuration from `mapping.json` at startup — no hand transcription, no per-run placeholders.
 - **Deterministic plan rendering**: `references/render-plan.ts` prints the mapping table and every plan count straight from `mapping.json`, so the reviewed table, the pre-write plan, and what executes always agree.
-- **Parallel field creation**: `references/create-fields.ts` creates fields with a concurrency pool of 5 and explicit `field_order` in increments of 10 starting at 30 (10 and 20 belong to each entity's auto-created fields; the platform preserves explicit order, so creation order carries no meaning). Idempotent (skips existing fields), fail-fast, and loud: per-field exit code and stderr in a result table, nothing swallowed.
+- **Bulk field creation**: `references/create-fields.ts` creates all new fields in **one `create_field` call** (`data` is an array of the field objects, up to 100 per call; the typed tool takes items with different keys and inserts them in one transaction) with explicit `field_order` in increments of 10 starting at 30 (10 and 20 belong to each entity's auto-created fields; the platform preserves explicit order, so the position in the array carries no meaning). Idempotent (skips existing fields; a re-run issues zero calls), verified by re-read, fail-fast, and loud: per-field status and the platform's stderr in a result table, nothing swallowed. Both baseline permissions of a new module likewise go out in one `create_permission` call.
 - **Write modes** (prompted, recorded in `mapping.json` as `on_exists`):
   - `insert` — only new rows are written; rows whose natural key already exists are skipped.
   - `update` — existing records are synchronized with the CSV: unchanged rows are left untouched, changed rows are updated (per-row `PATCH` after a local diff), new rows are batch-inserted. Requires a unique natural key (`unique_value: true` field).
@@ -71,7 +71,7 @@ references/importer-essentials.md     Step 0 hard-gate read: distilled use-seman
 references/schema-mapping.md          csvschema contract + mapping/decision rules + mapping.json contract
 references/import-script-template.md  run workspace, design rules, mapping.json checklist
 references/import.template.ts         the import script (copied byte-for-byte as import.ts)
-references/create-fields.ts           parallel create_field runner (concurrency 5, fail-fast, --dry-run)
+references/create-fields.ts           bulk create_field runner (one array call per ≤100 fields, fail-fast, --dry-run)
 references/render-plan.ts             renders the mapping table + plan facts from mapping.json
 evals/trigger-eval.json               trigger boundary cases
 evals/quirks.csv, evals/move-mode.csv introspection fixtures (id/enum/bool/email/url/move quirks)

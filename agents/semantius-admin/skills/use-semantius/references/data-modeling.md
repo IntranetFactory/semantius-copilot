@@ -19,18 +19,20 @@ This file covers the schema mechanics: modules, entities, fields, relationships,
 **Always follow this sequence, never skip steps:**
 
 ```
-Module → Permissions → (update_module to wire permission refs) → Entity → Fields
+Module → Permissions (one call) → (update_module to wire permission refs) → ALL Entities (one call) → Fields (one call per entity)
 ```
 
+**Batch every step that writes more than one record of a kind** (Golden Rule 7): both baseline permissions in one `create_permission`, every entity of the model in one `create_entity`, all of an entity's fields in one `create_field`. `data` is an array on every `create_*`; items may have different keys; the response is an array. And **create every entity before any field**: a field's `reference_table` (another entity of the model, or the entity itself) must exist when the field is created, which the entities-first order guarantees — no second pass for cross-references or self-references.
+
 1. **Resolve/create module**, `read_module`, then `create_module` if needed. (Chicken-and-egg: the module's `view_permission` / `manage_permission_id` point at permissions that don't exist yet, so create the module first and wire them back in step 3.)
-2. **Resolve/create permissions**, `read_permission`, then `create_permission` if needed
+2. **Resolve/create permissions**, one `read_permission` with `permission_name=in.(<slug>:read,<slug>:manage)`, then one `create_permission` call carrying the missing ones
 3. **Wire the module's permission references with `update_module`.** `create_module` leaves `view_permission` at the platform default (`user:read`) and `manage_permission_id` / `admin_permission_id` null. Once the permissions exist, point the module at them — skip this and the module header shows `user:read` and the manage/admin pickers are empty:
    ```bash
    semantius call crud update_module '{"id": <module_id>, "data": {"view_permission": "<slug>:read", "manage_permission_id": <id of <slug>:manage>}}'
    ```
    **Mind the column types:** `view_permission` is a **text** column holding the permission *name* (`<slug>:read`); `manage_permission_id` and `admin_permission_id` are **numeric FK** columns holding the permission *id*. The default-role columns wire the same way once roles exist: `default_viewer_role_id` / `default_manager_role_id` / `default_admin_role_id` are numeric role-id FKs (see `rbac.md`).
-4. **Create entity**, `create_entity` with `module_id`, `view_permission`, `edit_permission`
-5. **Add fields**, `create_field` for each domain attribute (not the auto-generated ones)
+4. **Create the entities**, one `create_entity` call whose `data` array carries every entity of the model (each with `module_id`, `view_permission`, `edit_permission`); one `read_entity` with `table_name=in.(...)` first
+5. **Add fields**, per entity, one `create_field` call whose `data` array carries every domain attribute of that entity (not the auto-generated ones); the FK targets all exist by now
 
 ---
 
@@ -50,11 +52,13 @@ A module has two name fields with distinct jobs:
 semantius call crud read_module '{"filters": "module_slug=eq.crm"}'
 ```
 
-**Create module + baseline permissions (always both):**
+**Create module + baseline permissions (always both, in ONE `create_permission` call):**
 ```bash
 semantius call crud create_module '{"data": {"module_name": "CRM", "module_slug": "crm", "description": "Customer Relationship Management"}}'
-semantius call crud create_permission '{"data": {"permission_name": "crm:read", "description": "Read CRM data", "module_id": <id>}}'
-semantius call crud create_permission '{"data": {"permission_name": "crm:manage", "description": "Manage CRM data", "module_id": <id>}}'
+semantius call crud create_permission '{"data": [
+  {"permission_name": "crm:read", "description": "Read CRM data", "module_id": <id>},
+  {"permission_name": "crm:manage", "description": "Manage CRM data", "module_id": <id>}
+]}'
 ```
 
 The `description` field is a compact tagline (≤40 chars) shown beside `module_name` in the selector chip, for acronyms, the plain English expansion (`CRM` → `Customer Relationship Management`); for non-acronyms a 2-4 word disambiguating phrase. Long-form prose belongs elsewhere, not on the module record.
@@ -376,50 +380,47 @@ When to set `cube_type` explicitly:
 
 ### Example: Add Fields to an Entity
 
+All new fields of an entity go into **one** `create_field` call — `data` is an array, and the items may carry different keys (`searchable` on one, `precision` on another, `enum_values` + `default_value` on a third; a key omitted from an item takes the column default). One request, one transaction, one array back:
+
 ```bash
-# Searchable text field
 semantius call crud create_field '{
-  "data": {
-    "table_name": "products",
-    "field_name": "description",
-    "title": "Description",
-    "format": "text",
-    "width": "default",
-    "input_type": "default",
-    "field_order": 2,
-    "searchable": true
-  }
-}'
-
-# Numeric field
-semantius call crud create_field '{
-  "data": {
-    "table_name": "products",
-    "field_name": "price",
-    "title": "Price",
-    "format": "number",
-    "precision": 2,
-    "width": "default",
-    "input_type": "default",
-    "field_order": 3
-  }
-}'
-
-# Enum/dropdown — required, so include default_value to backfill existing rows
-semantius call crud create_field '{
-  "data": {
-    "table_name": "products",
-    "field_name": "workflow_state",
-    "title": "Workflow State",
-    "format": "enum",
-    "enum_values": ["draft", "active", "discontinued"],
-    "default_value": "draft",
-    "width": "default",
-    "input_type": "required",
-    "field_order": 4
-  }
+  "data": [
+    {
+      "table_name": "products",
+      "field_name": "description",
+      "title": "Description",
+      "format": "text",
+      "width": "default",
+      "input_type": "default",
+      "field_order": 30,
+      "searchable": true
+    },
+    {
+      "table_name": "products",
+      "field_name": "price",
+      "title": "Price",
+      "format": "number",
+      "precision": 2,
+      "width": "default",
+      "input_type": "default",
+      "field_order": 40
+    },
+    {
+      "table_name": "products",
+      "field_name": "workflow_state",
+      "title": "Workflow State",
+      "format": "enum",
+      "enum_values": ["draft", "active", "discontinued"],
+      "default_value": "draft",
+      "width": "default",
+      "input_type": "required",
+      "field_order": 50
+    }
+  ]
 }'
 ```
+
+Three separate `create_field` calls for the three fields would be three round trips with no atomicity — the failure the batching rule (Golden Rule 7) names. Duplicate check first, in one read: `read_field '{"filters": "table_name=eq.products&field_name=in.(description,price,workflow_state)"}'`.
 
 ### All Field Properties
 
@@ -514,14 +515,14 @@ semantius call crud create_field '{
 Create a junction entity and add a `parent` field for **each** leg (two for a binary junction, three or more for an N-ary one):
 
 ```bash
-# Create junction entity
+# Create junction entity (products and tags already exist — entities before fields)
 semantius call crud create_entity '{"data": {"table_name": "product_tags", ...}}'
 
-# FK to products
-semantius call crud create_field '{"data": {"table_name": "product_tags", "field_name": "product_id", "format": "parent", "reference_table": "products", "reference_delete_mode": "cascade", "width": "default", "input_type": "default"}}'
-
-# FK to tags
-semantius call crud create_field '{"data": {"table_name": "product_tags", "field_name": "tag_id", "format": "parent", "reference_table": "tags", "reference_delete_mode": "cascade", "width": "default", "input_type": "default"}}'
+# Both parent legs in ONE create_field call
+semantius call crud create_field '{"data": [
+  {"table_name": "product_tags", "field_name": "product_id", "format": "parent", "reference_table": "products", "reference_delete_mode": "cascade", "width": "default", "input_type": "default"},
+  {"table_name": "product_tags", "field_name": "tag_id", "format": "parent", "reference_table": "tags", "reference_delete_mode": "cascade", "width": "default", "input_type": "default"}
+]}'
 ```
 
 > **Do not set `label_column` on a junction.** `label_column` is optional — the live `create_entity` requires only `table_name`, `singular_label`, `module_id` — and a junction has no natural label field: the platform composes `_label` from the `parent` legs automatically. Setting `label_column` to `id` (or any auto-generated column — `label`, `created_at`, `updated_at`) makes `create_entity` fail with *column 'id' specified more than once*, because that column already exists. Omit `label_column` (as the example above does), and likewise omit `label_parent`.
@@ -620,14 +621,15 @@ semantius call crud delete_entity '{"table_name": "<table_name>"}'
 
 ## Agent Workflow Tips
 
-1. **Always read before writing**, Before any `create_*`, call `read_*` to check for existing records. E.g., always call `read_entity` filtering by `table_name` before `create_entity`.
-2. **Resolve prerequisites in order**, Module → Permissions → Entity → Fields. Never skip steps.
-3. **Be conversational**, Explain what you're creating and why, especially for module/permission scaffolding the user may not have explicitly requested.
-4. **Validate semantic correctness**, Does the model make sense for the user's domain?
-5. **Ask for clarification when needed**, If a user says "add contacts", confirm what fields they need before creating anything.
-6. **Warn before risky changes**, Alert the user to medium/high-risk changes and wait for confirmation before executing.
-7. **Suggest next steps**, After creating an entity, suggest related entities, missing fields, or useful roles.
-8. **Provide link to UI**, After creating or updating entities/fields, provide: `{ui_baseurl}/{module_slug}/{table_name}` (get `ui_baseurl` from `getCurrentUser` — never hardcode the org host; URL paths use the lowercase `module_slug`, never the display `module_name`). For a specific record, append the id: `{ui_baseurl}/{module_slug}/{table_name}/{id}`.
+1. **Always read before writing**, Before any `create_*`, call `read_*` to check for existing records. E.g., always call `read_entity` filtering by `table_name` before `create_entity`. For a bulk create, one `read_*` with an `in.(...)` filter covers all items.
+2. **Resolve prerequisites in order**, Module → Permissions → all Entities → Fields. Never skip steps; every entity of the model exists before any field is created.
+3. **Batch related writes**, Put all fields of one entity, both baseline permissions of one module, all entities of one model, or all `role_permission` rows of one role into a single `create_*` call with an array in `data`; use an id array for `update_*` / `delete_*` across several records. Fewer calls, one transaction. N single-record calls where one array call would do is a mistake.
+4. **Be conversational**, Explain what you're creating and why, especially for module/permission scaffolding the user may not have explicitly requested.
+5. **Validate semantic correctness**, Does the model make sense for the user's domain?
+6. **Ask for clarification when needed**, If a user says "add contacts", confirm what fields they need before creating anything.
+7. **Warn before risky changes**, Alert the user to medium/high-risk changes and wait for confirmation before executing.
+8. **Suggest next steps**, After creating an entity, suggest related entities, missing fields, or useful roles.
+9. **Provide link to UI**, After creating or updating entities/fields, provide: `{ui_baseurl}/{module_slug}/{table_name}` (get `ui_baseurl` from `getCurrentUser` — never hardcode the org host; URL paths use the lowercase `module_slug`, never the display `module_name`). For a specific record, append the id: `{ui_baseurl}/{module_slug}/{table_name}/{id}`.
 
 Use `wfts(simple)` on the `search_vector` column when the entity is searchable:
 
@@ -677,11 +679,13 @@ This separation matters because the two contexts have different defaults: schema
 
 ## Tool Priority Rule
 
-**Always use typed CRUD tools** (`create_*`, `read_*`, `update_*`, `delete_*`) for standard operations.
+**Always use typed CRUD tools** (`create_*`, `read_*`, `update_*`, `delete_*`) for standard operations — including bulk ones: `create_*` takes an array in `data`, `update_*` / `delete_*` take an array in `id` (`table_name` for entities).
 
 Only use `postgrestRequest` or `sqlToRest` for:
 - Complex multi-filter or aggregation queries not expressible through typed tools
-- Bulk updates across many existing records
+- A bulk mutation that must be selected by an arbitrary **filter** (not by a list of ids), e.g. `PATCH /fields?table_name=eq.products&format=eq.string`
+- An update where each row needs **different** values in one request (typed `update_*` applies the same `data` to every id)
+- Business-record rows in your own entity tables (Layer 2), where the array-body POST is the bulk form
 
 ---
 

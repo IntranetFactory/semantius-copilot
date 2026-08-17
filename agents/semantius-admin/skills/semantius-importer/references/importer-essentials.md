@@ -36,21 +36,20 @@ semantius info crud <tool>           # live JSON schema for any tool
 
 ## 2. Response shapes
 
-Every `crud` tool returns a JSON **array** by default — including `create_*`/`update_*` (`[{...}]`, not a bare object). Exit 0 with body `[]` means "found nothing", which is success at the protocol layer and not-found at the domain layer — always inspect the body.
+Every `crud` tool returns a JSON **array** by default — including `create_*`/`update_*` (`[{...}]`, not a bare object; a bulk call returns every affected row). Exit 0 with body `[]` means "found nothing", which is success at the protocol layer and not-found at the domain layer — always inspect the body.
 
-- **`--single`**: for reads that must resolve to exactly one row (unique-key lookups). Returns a bare object; exit 1 = none, 2 = ambiguous.
+- **`--single`**: for reads that must resolve to exactly one row (unique-key lookups). Returns a bare object; exit 1 = none, 2 = ambiguous. **Rejected (exit 1, `SINGLE_ARRAY_INPUT`) when `data` / `body` / `id` / `table_name` is an array** — bulk calls always answer with an array.
 - **Never read a new row's id off its own create response.** Re-read by natural key after the create.
 
 ## 3. Catalog writes, in mandatory order
 
-`read_*` before every `create_*` — if the read finds it, reuse it. Order: **Module → Permissions → wire module → Entity → Fields.**
+`read_*` before every `create_*` — if the read finds it, reuse it. Order: **Module → Permissions (one call) → wire module → Entity → Fields (one call).** **Batching rule:** every typed `create_*` takes `data` as one object **or an array** (items may have different keys; one request, one transaction, all-or-nothing); `update_*` / `delete_*` take an `id` array with the same `data` for all. Whenever more than one record of the same kind is pending — both baseline permissions, every new field of the entity — send them in ONE call. A loop of single-record calls is a mistake, not a style choice.
 
 ### Module (when the import needs a new one)
 
 ```bash
 semantius call crud create_module '{"data": {"module_name": "CRM", "module_slug": "crm", "description": "Customer Relationship Management"}}'
-semantius call crud create_permission '{"data": {"permission_name": "crm:read", "description": "Read CRM data", "module_id": <id>}}'
-semantius call crud create_permission '{"data": {"permission_name": "crm:manage", "description": "Manage CRM data", "module_id": <id>}}'
+semantius call crud create_permission '{"data": [{"permission_name": "crm:read", "description": "Read CRM data", "module_id": <id>}, {"permission_name": "crm:manage", "description": "Manage CRM data", "module_id": <id>}]}'
 semantius call crud update_module '{"id": <module_id>, "data": {"view_permission": "crm:read", "manage_permission_id": <id of crm:manage>}}'
 ```
 
@@ -71,8 +70,13 @@ semantius call crud create_entity '{"data": {"table_name": "products", "singular
 
 ### Fields
 
+All of an entity's new fields go into **one** `create_field` call — `data` is an array (the copied `create-fields.ts` runner builds and sends it; items may carry different keys, e.g. `precision` on one and `enum_values` on another):
+
 ```bash
-semantius call crud create_field '{"data": {"table_name": "products", "field_name": "price", "title": "Price", "format": "number", "precision": 2, "width": "default", "input_type": "default", "field_order": 30}}'
+semantius call crud create_field '{"data": [
+  {"table_name": "products", "field_name": "price", "title": "Price", "format": "number", "precision": 2, "width": "default", "input_type": "default", "field_order": 30},
+  {"table_name": "products", "field_name": "status", "title": "Status", "format": "enum", "enum_values": ["active", "discontinued"], "width": "default", "input_type": "default", "field_order": 40}
+]}'
 ```
 
 Properties the importer uses:
@@ -110,10 +114,10 @@ semantius call crud update_entity '{"table_name": "products", "data": {"descript
 | `path` | `/<table>` + PostgREST query string (`?status=eq.active&order=id&limit=1000&offset=0`) |
 | `body` | The record payload — the key is **`body`, never `data`** |
 
-- **Bulk insert = array body where every object carries the same keys.** Heterogeneous arrays are rejected with the misleading `PGRST102 Empty or invalid json` (a column-discovery constraint, not an encoding problem). Fill absent values explicitly per the empty-cell policy.
+- **Bulk insert = array body where every object carries the same keys.** Heterogeneous arrays are rejected with the misleading `PGRST102 Empty or invalid json` (a column-discovery constraint, not an encoding problem). Fill absent values explicitly per the empty-cell policy. (Adding `?columns=a,b` to the path lifts the same-keys rule but makes omitted keys NULL — no `missing=default` on this raw path — so the importer keeps uniform rows. Only the typed catalog tools accept ragged arrays.)
 - Row count: `GET /<table>?select=count` returns `[{"count": N}]`.
 - Update one row: `PATCH /<table>?<key>=eq.<value>` with the changed fields as `body`.
-- Do not send a `prefer` key: the current server strips it (`Prefer: return=representation` is fixed), so batched upsert is unavailable — see the README roadmap.
+- Do not send a `prefer` key: the tool has no such input (`Prefer: return=representation` is fixed), so batched upsert is unavailable — see the README roadmap.
 - Filter operators: `eq`, `neq`, `gt/gte/lt/lte`, `like`/`ilike`, `in.(a,b)`, `is.null`. Combine with `&` (a top-level comma is not AND — it silently matches nothing).
 
 ## 6. Deep links

@@ -57,7 +57,7 @@ Understanding which layer you're working with determines which tools to use:
 | `references/jsonlogic.md` | Layer 1, JsonLogic rules: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, dynamic `input_type_rule` (conditional readonly/hidden/required) |
 | `references/select-rule.md` | Layer 1, row-level security: `select_rule`, who sees which rows, REPLACE-vs-AND semantics, admin-lockout risk |
 | `references/rbac.md` | Layer 1, permissions, roles, user assignments, hierarchy |
-| `references/crud-tools.md` | Layer 1 typed tools + Layer 2 postgrestRequest/sqlToRest reference |
+| `references/crud-tools.md` | Layer 1 typed tools + Layer 2 postgrestRequest/sqlToRest reference; § "Bulk operations" (array `data` / `id`, one call per set of records) |
 | `references/cube-queries.md` | Layer 3, CubeJS query DSL, date filtering, analysis modes |
 | `references/cube-tools.md` | Layer 3, discover/validate/load/chart tool signatures |
 | `references/webhook-import.md` | Bulk import of records into Layer 2 via signed webhook |
@@ -80,6 +80,9 @@ Understanding which layer you're working with determines which tools to use:
 
 **Inserting, reading, updating, or deleting records in a single table?**
 → Layer 2, use `postgrestRequest`, see `references/crud-tools.md`
+
+**Creating, updating, or deleting several records of the same kind (many fields, many permissions, many rows)?**
+→ One call, never a loop: an array in `data` for `create_*`, an array in `id` / `table_name` for `update_*` / `delete_*`, an array `body` (uniform keys) for `postgrestRequest` POST. Golden Rule 7 and `references/crud-tools.md` § "Bulk operations"
 
 **Querying across multiple tables, aggregating, trending over time, top-N, metrics?**
 → Layer 3, use `cube`, read `references/cube-queries.md` + `references/cube-tools.md`
@@ -176,7 +179,7 @@ Both `info <server> <tool>` and `info <server>/<tool>` work interchangeably.
 
 ### `crud`: Schema Management + Record Operations (Layers 1 & 2)
 
-**Layer 1 typed tools** manage the semantic data model: `create_entity`, `create_field`, `create_module`, `create_permission`, `create_role`, etc. These operate on Semantius's own schema tables.
+**Layer 1 typed tools** manage the semantic data model: `create_entity`, `create_field`, `create_module`, `create_permission`, `create_role`, etc. These operate on Semantius's own schema tables. Every `create_*` takes `data` as one object **or an array of objects** (several fields, permissions, roles in one call), and every `update_*` / `delete_*` takes `id` (or `table_name` for entities) as one value **or an array**.
 
 **Layer 2 `postgrestRequest`** operates on your actual business data. Any entity you define becomes a PostgreSQL table accessible via PostgREST:
 ```bash
@@ -185,6 +188,9 @@ semantius call crud postgrestRequest '{"method":"GET","path":"/products?status=e
 
 # Insert a new order record
 semantius call crud postgrestRequest '{"method":"POST","path":"/orders","body":{"customer_id":"123","total":99.99}}'
+
+# Insert several records in ONE call — array body; every row carries the same keys (raw PostgREST rule)
+semantius call crud postgrestRequest '{"method":"POST","path":"/orders","body":[{"customer_id":"123","total":99.99},{"customer_id":"124","total":15.00}]}'
 
 # Update matching records
 semantius call crud postgrestRequest '{"method":"PATCH","path":"/products?category=eq.electronics","body":{"on_sale":true}}'
@@ -226,11 +232,13 @@ Full detail: `references/crud-tools.md` § `getCurrentUser`.
    - Before `create_permission` → run `read_permission` first
    - Before `create_role` → run `read_role` first
    - If the read returns results, use those IDs instead of creating duplicates. Only create if it returns empty.
-2. **Schema first**, Module → Permissions → Entity → Fields. Never skip steps.
+   - For a bulk create, **one** `read_*` with an `in.(...)` filter covers every item (`"filters": "field_name=in.(description,cost)&table_name=eq.services"`); never one `--single` read per record.
+2. **Schema first**, Module → Permissions → **all** Entities → Fields. Never skip steps, and create every entity of a model before any of its fields, so each field's `reference_table` (self-references included) already exists.
 3. **Never create auto-generated fields**, `id`, `label`, `created_at`, `updated_at`, and the `label_column` field are created automatically by `create_entity`.
 4. **`reference_table` mandates relational format**, Any field with `reference_table` MUST use `format: "reference"` or `format: "parent"`. No exceptions.
 5. **Warn before risky changes**, Renaming `table_name`/`field_name`, deleting entities/fields requires explicit user confirmation.
 6. **Surface a UI link whenever it helps the user**, after schema changes *and* after record operations (create / find / update). Pattern: `{ui_baseurl}/{module_slug}/{table_name}`, append `/{id}` for one record. See "Linking to the web UI" above for the rules (derive `ui_baseurl` from `getCurrentUser`; use the lowercase `module_slug`).
+7. **Always batch: one call per set of records, never a loop of single calls.** Whenever more than one record of the same kind is pending (several fields for an entity, several permissions for a module, several `role_permission` rows, several ids to update or delete, several rows for a table), send them **in one call**: pass an array in `data` to `create_*` (`'{"data": [{...}, {...}]}'`), or an array in `id` (`table_name` for entities) to `update_*` / `delete_*` (`'{"id": [4, 5, 6]}'`, the same `data` applied to every id). Array items do **not** need the same keys (a key omitted from one item takes the column default). One call is one request and one transaction (all-or-nothing); the response is always an array of the affected records. Keep a call to roughly 100 rows / ids. Issuing N single-record calls where one array call would do is a mistake. `postgrestRequest` also takes an array `body`, but under raw PostgREST rules (identical keys per item, or `?columns=` on the path with omitted keys becoming NULL). See `references/crud-tools.md` § "Bulk operations".
 
 ## Response handling: exit code is not enough
 
@@ -243,15 +251,18 @@ corrupts every dependent write.
 
 **This applies to every `crud` tool, not just `postgrestRequest`.**
 The typed Layer-1 tools return arrays too: `read_entity`,
-`read_module`, and the **`create_*` / `update_*`** tools all emit
-`[{...}]`, not a bare object. So `jq -r '.id'` on a `create_role`
-response fails with `Cannot index array with string` — index the
-array: `jq -r '.[0].id'`, or pass `--single` to get a bare object.
-Better still, do **not** read a new row's `id` off its own create
-response at all: the echoed representation is not a dependable
-carrier of the id/natural key. Re-read by natural key after the
-create (the modeler's `ensure` helper does exactly this), so the
-array-vs-object shape never reaches your `jq`.
+`read_module`, and the **`create_*` / `update_*` / `delete_*`** tools all
+emit `[{...}]`, not a bare object — and a bulk call (array `data`, array
+`id`) emits every affected record in that array. So `jq -r '.id'` on a
+`create_role` response fails with `Cannot index array with string` —
+index the array: `jq -r '.[0].id'`, or pass `--single` to get a bare
+object (single-record calls only; `--single` is rejected when `data` /
+`body` / `id` / `table_name` is an array). Better still, do **not** read
+a new row's `id` off its own create response at all: the echoed
+representation is not a dependable carrier of the id/natural key.
+Re-read by natural key after the create (the modeler's `ensure` /
+`ensureMany` helpers do exactly this — one `in.(...)` read for a whole
+batch), so the array-vs-object shape never reaches your `jq`.
 
 There are **two ways** to read against `crud`. Pick the one that
 matches the intent of the call:
@@ -351,7 +362,22 @@ A `POST` or `PATCH` that succeeds returns the inserted/updated rows
 not set that by default). A `DELETE` returns the deleted rows. So
 the same "exit 0 + `[]` means did-nothing" rule applies to writes
 that match zero rows: a PATCH with a filter that hits no rows
-succeeds silently. `--single` works on writes too (POST/PATCH that
-must affect exactly one row), and is the cleanest way to assert
-the change took effect. Always read back to verify when the
-operation is supposed to change state.
+succeeds silently. `--single` works on single-record writes too
+(POST/PATCH that must affect exactly one row), and is the cleanest
+way to assert the change took effect. Always read back to verify
+when the operation is supposed to change state.
+
+**Bulk writes answer with an array, never with `--single`.** A
+`create_*` with an array `data`, an `update_*` / `delete_*` with an
+array `id` (or `table_name`), or a `postgrestRequest` with an array
+`body` always returns the array of affected records — one element
+per row that landed. The CLI **rejects `--single` on such a call
+before sending it** (exit `1`, `SINGLE_ARRAY_INPUT`); on older CLIs
+the server refuses the `application/vnd.pgrst.object+json` Accept
+header for a multi-row result. Never pass an explicit
+`"accept": "application/vnd.pgrst.object+json"` with an array
+either. Assert a bulk write by its count (`jq 'length'` equals the
+number of rows sent) or by a follow-up `read_*` with an `in.(...)`
+filter. A bulk call is one transaction: if it fails, nothing from it
+landed — fix the cause and re-issue the one call; do not fall back
+to a loop of single-record calls.

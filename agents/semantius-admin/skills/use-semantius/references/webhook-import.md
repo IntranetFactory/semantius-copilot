@@ -1,8 +1,9 @@
 # Semantius Webhook Import Reference
 
-When importing many records from a CSV, Excel, or TXT file, use the webhook-based import rather than calling `create_*` tools one record at a time.
+When importing many records from a CSV, Excel, or TXT file, never insert them one record at a time. Two batched paths exist:
 
-> **Agent-driven import of a local CSV file?** Prefer the `semantius-importer` skill: it introspects the file's schema (`utils/get_csvschema`), creates or reuses the entity, and bulk-loads in batches via `postgrestRequest`. This reference covers the signed-webhook path — external systems pushing rows to a receiver endpoint, and imports that should flow through webhook receiver logs.
+- **Agent-driven load (the CLI is at hand):** `postgrestRequest` with an **array `body`** — one POST per batch of ~100–250 rows, every row carrying the same keys (see crud-tools.md § "Bulk insert via `postgrestRequest`"). For a local CSV, prefer the `semantius-importer` skill: it introspects the file's schema (`utils/get_csvschema`), creates or reuses the entity, and bulk-loads exactly this way, with retries and count verification built in.
+- **Signed webhook (this reference):** an external system pushes rows to a receiver endpoint, one HTTP request per row, and the rows flow through webhook receiver logs. Use it when the producer is not the agent (a SaaS integration, a nightly export job) or when the audit trail of receiver logs is wanted.
 
 ---
 
@@ -10,6 +11,7 @@ When importing many records from a CSV, Excel, or TXT file, use the webhook-base
 
 | Approach | Best for | Requires |
 |----------|----------|---------|
+| **`postgrestRequest` array body** (not a webhook) | The agent has the file and the CLI; fastest, batched, no receiver to set up — or just use `semantius-importer` | `semantius` CLI |
 | **Bun script** | Any file, clean code, fast | `bun` installed |
 | **Pure shell** (curl + openssl) | Simple CSVs, no extra deps | `curl`, `openssl`, `awk` or `node` |
 | **Python script** | Already have Python, complex transforms | `python3`, `requests` |
