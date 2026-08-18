@@ -7,7 +7,7 @@ Two core invariants govern every shape here (stated in full in SKILL.md, "Core i
 - **Single write gate:** after building a plan you run it; the admin fires no up-front "Proceed?" widget. The modeler shows its own summary and asks the only yes/no before each live-model write.
 - **The plan is the task list:** one task per pipeline step (`TaskCreate`, subjects from the Step 6.5 table), plus ONE lead-in sentence in chat. Never a numbered list in chat, never a code fence. Task mechanics live in [`task-tracking.md`](./task-tracking.md).
 
-The examples below show the tasks as bullet lists so you can read them; at runtime they are `TaskCreate` calls, and only the "Chat:" line is emitted as prose.
+The examples below show the tasks as bullet lists so you can read them; at runtime they are `TaskCreate` calls followed by `TaskUpdate ... addBlockedBy: [<previous task id>]` on every task after the first (the chain is the order), and only the "Chat:" line is emitted as prose.
 
 ---
 

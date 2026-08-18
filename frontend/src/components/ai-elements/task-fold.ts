@@ -17,6 +17,14 @@
  * it repairs on its side), `output` is what the tool returned. Only settled,
  * successful calls count — `output-error` parts and `success:false` updates
  * are skipped, so a rejected call never phantom-updates the panel.
+ *
+ * `blocks`/`blockedBy` hold the FULL dependency graph (the store's record,
+ * what TaskGet returns), not TaskList's projection: TaskList lists only
+ * still-open blockers, so it is merged additively — a link only ever appears
+ * (addBlocks/addBlockedBy, a TaskList/TaskGet mention) or vanishes with a
+ * deleted task; nothing removes one. The panel needs the full graph to keep
+ * its display order stable once blockers complete (`orderTasks`), and derives
+ * "still blocked" itself from the blockers' status.
  */
 
 export const TASK_TOOL_NAMES = ["TaskCreate", "TaskUpdate", "TaskList", "TaskGet"] as const;
@@ -81,11 +89,15 @@ const numericId = (id: string): number => {
   return Number.isNaN(n) ? Number.MAX_SAFE_INTEGER : n;
 };
 
+/** Two-sided, idempotent; both ends must exist (the store skips unknown ids
+ * too), and a task never blocks itself. */
 function link(tasks: Map<string, TrackedTask>, blocker: string, blocked: string) {
+  if (blocker === blocked) return;
   const a = tasks.get(blocker);
   const b = tasks.get(blocked);
-  if (a && !a.blocks.includes(blocked)) a.blocks = [...a.blocks, blocked];
-  if (b && !b.blockedBy.includes(blocker)) b.blockedBy = [...b.blockedBy, blocker];
+  if (!a || !b) return;
+  if (!a.blocks.includes(blocked)) a.blocks = [...a.blocks, blocked];
+  if (!b.blockedBy.includes(blocker)) b.blockedBy = [...b.blockedBy, blocker];
 }
 
 function unlinkEverywhere(tasks: Map<string, TrackedTask>, id: string) {
@@ -135,11 +147,15 @@ function applyUpdate(tasks: Map<string, TrackedTask>, input: unknown, output: un
   for (const other of asIdList(inp.addBlockedBy)) link(tasks, other, id);
 }
 
-/** A TaskList result is the file's truth: merge each listed task (it carries
- * no description/activeForm/blocks, so those are kept) and drop the rest. */
+/** A TaskList result is the file's truth for membership, subject, status and
+ * owner: merge each listed task (it carries no description/activeForm/blocks,
+ * so those are kept) and drop the rest. Its `blockedBy` is the still-OPEN
+ * subset, merged additively (see the header) once every listed task exists,
+ * so a blocker listed after its dependent still links. */
 function applyList(tasks: Map<string, TrackedTask>, output: unknown) {
   if (!isRecord(output) || !Array.isArray(output.tasks)) return;
   const seen = new Set<string>();
+  const links: Array<[blocker: string, blocked: string]> = [];
   for (const entry of output.tasks) {
     if (!isRecord(entry)) continue;
     const id = asId(entry.id);
@@ -153,12 +169,18 @@ function applyList(tasks: Map<string, TrackedTask>, output: unknown) {
     if (subject !== undefined) task.subject = subject;
     if (status !== undefined) task.status = status;
     if (owner !== undefined) task.owner = owner;
-    if (Array.isArray(entry.blockedBy)) task.blockedBy = asIdList(entry.blockedBy);
+    for (const blocker of asIdList(entry.blockedBy)) links.push([blocker, id]);
     tasks.set(id, task);
   }
-  for (const id of [...tasks.keys()]) if (!seen.has(id)) tasks.delete(id);
+  for (const id of [...tasks.keys()]) {
+    if (seen.has(id)) continue;
+    tasks.delete(id);
+    unlinkEverywhere(tasks, id);
+  }
+  for (const [blocker, blocked] of links) link(tasks, blocker, blocked);
 }
 
+/** TaskGet returns the full record; deps are merged additively like the rest. */
 function applyGet(tasks: Map<string, TrackedTask>, output: unknown) {
   if (!isRecord(output) || !isRecord(output.task)) return; // {task:null} = not found
   const entry = output.task;
@@ -172,9 +194,9 @@ function applyGet(tasks: Map<string, TrackedTask>, output: unknown) {
   if (subject !== undefined) task.subject = subject;
   if (description !== undefined) task.description = description;
   if (status !== undefined) task.status = status;
-  if (Array.isArray(entry.blocks)) task.blocks = asIdList(entry.blocks);
-  if (Array.isArray(entry.blockedBy)) task.blockedBy = asIdList(entry.blockedBy);
   tasks.set(id, task);
+  for (const other of asIdList(entry.blocks)) link(tasks, id, other);
+  for (const other of asIdList(entry.blockedBy)) link(tasks, other, id);
 }
 
 /**
@@ -205,6 +227,58 @@ export function foldTasks(messages: readonly MessageLike[]): TrackedTask[] {
     }
   }
   return [...tasks.values()].sort((a, b) => numericId(a.id) - numericId(b.id));
+}
+
+const byNumericId = (a: { id: string }, b: { id: string }) => numericId(a.id) - numericId(b.id);
+
+/**
+ * Display order: id order, with every task's blockers hoisted in front of it
+ * (a depth-first topological sort seeded in id order; blockers themselves
+ * visit in id order). Without dependencies this IS id order, so a list that
+ * never links reads exactly like Claude Code's. With them, work that must
+ * finish first shows first: the question tasks a skill creates mid-stage
+ * (later ids) and links ahead of the next stage sit above that stage instead
+ * of below every stage — no more "later rows done while earlier ones wait".
+ * The result depends only on ids and links, which only ever grow, so rows
+ * never jump on a status change. A cycle (the store does not forbid one) is
+ * broken at the back edge; unknown blocker ids are ignored.
+ */
+export function orderTasks(tasks: readonly TrackedTask[]): TrackedTask[] {
+  const byId = new Map(tasks.map((task) => [task.id, task] as const));
+  // Blockers per task, read from both sides (the fold keeps them in sync;
+  // a snapshot from elsewhere might not).
+  const blockers = new Map<string, Set<string>>();
+  const addBlocker = (blocked: string, blocker: string) => {
+    if (blocked === blocker) return;
+    let set = blockers.get(blocked);
+    if (!set) blockers.set(blocked, (set = new Set()));
+    set.add(blocker);
+  };
+  for (const task of tasks) {
+    for (const blocker of task.blockedBy) addBlocker(task.id, blocker);
+    for (const blocked of task.blocks) addBlocker(blocked, task.id);
+  }
+  const out: TrackedTask[] = [];
+  const state = new Map<string, "visiting" | "done">();
+  const visit = (task: TrackedTask) => {
+    if (state.has(task.id)) return; // done, or on the current path (cycle) — skip
+    state.set(task.id, "visiting");
+    const ids = [...(blockers.get(task.id) ?? [])].sort((a, b) => numericId(a) - numericId(b));
+    for (const id of ids) {
+      const blocker = byId.get(id);
+      if (blocker) visit(blocker);
+    }
+    state.set(task.id, "done");
+    out.push(task);
+  };
+  for (const task of [...tasks].sort(byNumericId)) visit(task);
+  return out;
+}
+
+/** The blockers of `task` that are not completed yet (TaskList's `blockedBy`
+ * semantics, derived from the full graph); an unknown blocker counts as open. */
+export function openBlockers(task: TrackedTask, tasks: readonly TrackedTask[]): string[] {
+  return task.blockedBy.filter((id) => tasks.find((other) => other.id === id)?.status !== "completed");
 }
 
 /** Completed / total counts and the percentage the progress bar shows. */

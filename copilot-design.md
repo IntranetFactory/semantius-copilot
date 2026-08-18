@@ -600,7 +600,24 @@ bar pinned above the composer (`task-progress.tsx`). Durable truth is history, s
 key-flip remount or model-context compaction re-derive the same panel; failed calls
 (`output-error`, `success:false`) never phantom-update it. No answer channel is needed — unlike
 AskUserQuestion these tools are fire-and-forget. Individual calls stay collapsed in the tool-call
-group.
+group. Row order (`orderTasks`): id order with every task's blockers hoisted in front of it — a
+depth-first topological sort seeded in id order. Without dependencies that is plain id order,
+like Claude Code's list; with them, work that must finish first shows first, so ledger `Q:` tasks
+(created mid-stage, hence later ids) that the skill links ahead of the next stage
+(`{"taskId":"<next stage>","addBlockedBy":[<Q ids>]}`) sit above that stage instead of below every
+stage — otherwise the panel shows later rows done while earlier ones wait. The order depends only
+on ids and links, which only ever grow, so rows never jump on a status change; the panel never
+resorts by status. For that the fold keeps the FULL graph: TaskList's `blockedBy` is the
+still-open subset and is merged additively (a link appears via addBlocks/addBlockedBy or a
+TaskList/TaskGet mention and vanishes only with a deleted task), and "(blocked by #n)" is derived
+from the blockers' status (`openBlockers`). No parent/child: the contract has none, and
+dependencies already give the model something real (TaskList's "pending, not blocked") where a
+`metadata.parent` convention would be display-only. Markers are Claude Code's checkbox glyphs
+(☐ pending, ☒ completed, struck through);
+`in_progress` is a static dotted square in bold that only turns into a spinner while the host's
+busy signal (the "Working…" strip) is on — status alone says nothing about activity: the ledger
+leaves a stage task and up to four `Q:` tasks `in_progress` across a paused AskUserQuestion
+turn, and Claude Code likewise never animates rows, only its global working spinner.
 
 **Mounting.** All agents, all channels (GitHub-issue conversations have session records too, so
 their file persists the same way); no per-agent flag — the tools are opt-in by the model, and an

@@ -13,16 +13,30 @@
  * Row semantics mirror Claude Code's TUI: an in_progress task shows its
  * `activeForm` ("Running tests") when it has one, otherwise the subject; a
  * completed task is struck through; a blocked task names its open blockers.
+ * Markers are checkbox glyphs like Claude Code's ☐ / ☒ (pending square,
+ * completed checked square); the in_progress marker is a static dotted square
+ * and only becomes a spinner while the agent is actually running (`running`,
+ * the host's busy signal). A task's status alone says nothing about activity:
+ * the ledger pattern leaves a stage task and up to four question tasks
+ * in_progress across a paused AskUserQuestion turn, and a spinner that keeps
+ * turning while the agent waits for the user promises work that is not
+ * happening.
+ *
+ * Rows are in `orderTasks` order (task-fold.ts): id order with each task's
+ * blockers hoisted in front of it, so dependency-linked work reads top-down
+ * even when it was created later; the `#id` label stays, it is how the model
+ * and the user refer to a task.
  */
 import {
-  CheckCircle2Icon,
   ChevronDownIcon,
-  CircleIcon,
   ListChecksIcon,
   LoaderCircleIcon,
+  SquareCheckBigIcon,
+  SquareDotIcon,
+  SquareIcon,
 } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -32,28 +46,46 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
-import { taskProgress, type TrackedTask } from "./task-fold";
+import { openBlockers, orderTasks, taskProgress, type TrackedTask } from "./task-fold";
 
 export type TaskProgressPanelProps = Omit<ComponentProps<"div">, "children"> & {
   /** The current list — `foldTasks(agent.messages)`. */
   tasks: readonly TrackedTask[];
   /** Initial open state (the user can toggle it). Default open. */
   defaultOpen?: boolean;
+  /**
+   * Whether the agent is running right now (the host's busy signal, the same
+   * one that shows "Working…"). Only then do in_progress rows spin; while the
+   * agent waits — for an AskUserQuestion answer or the next message — they
+   * show a static "current" marker. Default false.
+   */
+  running?: boolean;
 };
 
-const statusIcon = (status: TrackedTask["status"]) => {
+const statusIcon = (status: TrackedTask["status"], running: boolean) => {
   switch (status) {
     case "completed":
-      return <CheckCircle2Icon className="size-4 shrink-0 text-green-600" aria-label="completed" />;
+      return <SquareCheckBigIcon className="size-4 shrink-0 text-green-600" aria-label="completed" />;
     case "in_progress":
-      return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-primary" aria-label="in progress" />;
+      return running ? (
+        <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-primary" aria-label="in progress" />
+      ) : (
+        <SquareDotIcon className="size-4 shrink-0 text-primary" aria-label="in progress" />
+      );
     default:
-      return <CircleIcon className="size-4 shrink-0 text-muted-foreground" aria-label="pending" />;
+      return <SquareIcon className="size-4 shrink-0 text-muted-foreground" aria-label="pending" />;
   }
 };
 
-export const TaskProgressPanel = ({ tasks, defaultOpen = true, className, ...props }: TaskProgressPanelProps) => {
+export const TaskProgressPanel = ({
+  tasks,
+  defaultOpen = true,
+  running = false,
+  className,
+  ...props
+}: TaskProgressPanelProps) => {
   const [open, setOpen] = useState(defaultOpen);
+  const ordered = useMemo(() => orderTasks(tasks), [tasks]);
   if (tasks.length === 0) return null;
   const { completed, total, percent } = taskProgress(tasks);
   const active = tasks.find((task) => task.status === "in_progress");
@@ -89,24 +121,27 @@ export const TaskProgressPanel = ({ tasks, defaultOpen = true, className, ...pro
         </CollapsibleTrigger>
         <CollapsibleContent className="data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 outline-none data-[state=closed]:animate-out data-[state=open]:animate-in">
           <ul className="max-h-48 space-y-1 overflow-y-auto border-t px-3 py-2">
-            {tasks.map((task) => (
+            {ordered.map((task) => {
+              const blockers = task.status === "completed" ? [] : openBlockers(task, tasks);
+              return (
               <li
                 key={task.id}
                 className="flex min-w-0 items-start gap-2 leading-5"
                 title={task.description || undefined}
               >
-                <span className="mt-0.5">{statusIcon(task.status)}</span>
+                <span className="mt-0.5">{statusIcon(task.status, running)}</span>
                 <span className="shrink-0 text-muted-foreground text-xs leading-5">#{task.id}</span>
                 <span
                   className={cn(
-                    "min-w-0 flex-1 break-words",
+                    "min-w-0 flex-1 wrap-break-word",
                     task.status === "completed" && "text-muted-foreground line-through",
+                    task.status === "in_progress" && "font-medium",
                   )}
                 >
                   {task.status === "in_progress" ? (task.activeForm ?? task.subject) : task.subject}
-                  {task.blockedBy.length > 0 && task.status !== "completed" ? (
+                  {blockers.length > 0 ? (
                     <span className="ml-1 text-muted-foreground text-xs">
-                      (blocked by {task.blockedBy.map((id) => `#${id}`).join(", ")})
+                      (blocked by {blockers.map((id) => `#${id}`).join(", ")})
                     </span>
                   ) : null}
                 </span>
@@ -116,7 +151,8 @@ export const TaskProgressPanel = ({ tasks, defaultOpen = true, className, ...pro
                   </Badge>
                 ) : null}
               </li>
-            ))}
+              );
+            })}
           </ul>
         </CollapsibleContent>
       </Collapsible>

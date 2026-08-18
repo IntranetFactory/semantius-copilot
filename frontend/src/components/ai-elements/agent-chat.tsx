@@ -461,8 +461,10 @@ export function AgentChat({
         <div className="border-t p-3">
           {/* The task checklist sits topmost: it is the longest-lived thing here
               (the whole conversation) and must not jump when tips/strips come
-              and go beneath it. Renders nothing while there are no tasks. */}
-          <TaskProgressPanel tasks={tasks} />
+              and go beneath it. Renders nothing while there are no tasks.
+              `running` is the same busy signal as the "Working…" strip below,
+              so in_progress rows spin only while the agent actually runs. */}
+          <TaskProgressPanel tasks={tasks} running={showBusy} />
           {/* The clicked prompt's tip, above the transient strips: it outlives
               them (it stays until dismissed, including once the welcome card
               itself is gone), so the moving parts stay nearest the input. */}

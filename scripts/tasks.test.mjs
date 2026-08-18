@@ -30,7 +30,7 @@ import {
   serializeStore,
   updateTask,
 } from '../backend-b/src/tools/task-store.ts';
-import { foldTasks, taskProgress, TASK_TOOL_NAMES } from '../frontend/src/components/ai-elements/task-fold.ts';
+import { foldTasks, openBlockers, orderTasks, taskProgress, TASK_TOOL_NAMES } from '../frontend/src/components/ai-elements/task-fold.ts';
 
 let failures = 0;
 let total = 0;
@@ -173,9 +173,38 @@ folded = foldTasks([
   msg(part('TaskGet', { taskId: '10' }, { task: { id: '10', subject: 'J', description: 'full J', status: 'in_progress', blocks: [], blockedBy: ['9'] } })),
   msg(part('TaskGet', { taskId: '99' }, { task: null })),
 ]);
-check('fold: numeric sort, TaskGet merges description/status/deps, {task:null} ignored', eq(folded.map((t) => t.id), ['9', '10']) && folded[1].description === 'full J' && folded[1].status === 'in_progress' && eq(folded[1].blockedBy, ['9']));
+check('fold: numeric sort, TaskGet merges description/status/deps, {task:null} ignored', eq(folded.map((t) => t.id), ['9', '10']) && folded[1].description === 'full J' && folded[1].status === 'in_progress' && eq(folded[1].blockedBy, ['9']) && eq(folded[0].blocks, ['10']));
 check('fold: progress 1/2 = 50%', eq(taskProgress(folded), { completed: 1, total: 2, percent: 50 }));
 check('fold: empty conversation → no tasks', foldTasks([{ parts: [{ type: 'text', text: 'hi' }] }]).length === 0);
+
+// The dependency graph is kept in full: TaskList lists only still-open
+// blockers, so a completed blocker must not drop the link (the display order
+// depends on it); "still blocked" is derived from the blockers' status.
+folded = foldTasks([
+  msg(part('TaskCreate', { subject: 'Stage 1' }, { task: { id: '1', subject: 'Stage 1' } }), part('TaskCreate', { subject: 'Stage 2' }, { task: { id: '2', subject: 'Stage 2' } })),
+  msg(part('TaskCreate', { subject: 'Q: a' }, { task: { id: '3', subject: 'Q: a' } }), part('TaskCreate', { subject: 'Q: b' }, { task: { id: '4', subject: 'Q: b' } })),
+  msg(part('TaskUpdate', { taskId: '2', addBlockedBy: ['3', '4', '99'] }, { success: true, taskId: '2', updatedFields: ['blockedBy'] })),
+  msg(part('TaskUpdate', { taskId: '3', status: 'completed' }, { success: true, taskId: '3', updatedFields: ['status'] })),
+  msg(part('TaskList', {}, { tasks: [{ id: '1', subject: 'Stage 1', status: 'pending', blockedBy: [] }, { id: '2', subject: 'Stage 2', status: 'pending', blockedBy: ['4'] }, { id: '3', subject: 'Q: a', status: 'completed', blockedBy: [] }, { id: '4', subject: 'Q: b', status: 'pending', blockedBy: [] }] })),
+]);
+check('fold: TaskList merges blockedBy additively (completed blocker kept), unknown id skipped', eq(folded[1].blockedBy, ['3', '4']) && eq(folded[2].blocks, ['2']) && eq(folded[3].blocks, ['2']));
+check('fold: openBlockers = still-open subset (TaskList semantics)', eq(openBlockers(folded[1], folded), ['4']));
+check('order: blockers hoisted before the blocked task, rest in id order', eq(orderTasks(folded).map((t) => t.id), ['1', '3', '4', '2']));
+folded = foldTasks([
+  msg(part('TaskCreate', { subject: 'A' }, { task: { id: '1', subject: 'A' } }), part('TaskCreate', { subject: 'B' }, { task: { id: '2', subject: 'B' } })),
+  msg(part('TaskUpdate', { taskId: '2', status: 'completed' }, { success: true, taskId: '2', updatedFields: ['status'] })),
+]);
+check('order: no dependencies → id order regardless of status', eq(orderTasks(folded).map((t) => t.id), ['1', '2']));
+// TaskList listing a blocker AFTER its dependent still links; a pruned task
+// is unlinked everywhere; a cycle does not hang the sort.
+folded = foldTasks([
+  msg(part('TaskCreate', { subject: 'A' }, { task: { id: '1', subject: 'A' } }), part('TaskCreate', { subject: 'B' }, { task: { id: '2', subject: 'B' } })),
+  msg(part('TaskUpdate', { taskId: '1', addBlockedBy: ['2'] }, { success: true, taskId: '1', updatedFields: ['blockedBy'] })),
+  msg(part('TaskList', {}, { tasks: [{ id: '1', subject: 'A', status: 'pending', blockedBy: ['7'] }, { id: '7', subject: 'G', status: 'pending', blockedBy: [] }] })),
+]);
+check('fold: late-listed blocker links, pruned task unlinked', eq(folded.map((t) => t.id), ['1', '7']) && eq(folded[0].blockedBy, ['7']) && eq(folded[1].blocks, ['1']));
+check('order: late-created blocker hoisted', eq(orderTasks(folded).map((t) => t.id), ['7', '1']));
+check('order: cycle terminates', eq(orderTasks([{ id: '1', subject: 'a', status: 'pending', blocks: ['2'], blockedBy: ['2'] }, { id: '2', subject: 'b', status: 'pending', blocks: ['1'], blockedBy: ['1'] }]).map((t) => t.id), ['2', '1']));
 
 // ---------------------------------------------------------------------------
 // Parity: drive the store, record the events the tools would emit, fold them.
@@ -204,11 +233,14 @@ check('fold: empty conversation → no tasks', foldTasks([{ parts: [{ type: 'tex
   run('TaskUpdate', { taskId: '9', status: 'completed' }); // not found
   run('TaskGet', { taskId: '2' });
   run('TaskList', {});
-  const view = foldTasks(events).map(({ id, subject, status, owner, blockedBy }) => ({ id, subject, status, ...(owner ? { owner } : {}), blockedBy }));
+  // TaskList's blockedBy is the still-open projection; the fold keeps the full
+  // graph and derives that projection with openBlockers.
+  const full = foldTasks(events);
+  const view = full.map((task) => ({ id: task.id, subject: task.subject, status: task.status, ...(task.owner ? { owner: task.owner } : {}), blockedBy: openBlockers(task, full) }));
   const truth = listTasks(s).tasks;
   check('parity: fold of the emitted events == TaskList of the store', eq(view, truth), `${JSON.stringify(view)} vs ${JSON.stringify(truth)}`);
-  const full = foldTasks(events);
   check('parity: fold keeps descriptions/activeForm the summaries lack', full[0].description === 'first' && full[0].activeForm === 'Doing one');
+  check('parity: fold keeps the full graph like TaskGet', eq(full[1].blockedBy, getTask(s, '2').task.blockedBy));
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);
