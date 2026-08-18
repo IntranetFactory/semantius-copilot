@@ -71,7 +71,7 @@ Everything else is `reference`. `parent` implies cascade-on-delete; `reference` 
 
 **Set `relationship_label` for every FK field.** Specific verb in parent voice: `accounts → opportunities` is `"owns"`; `users → tasks` (owner) is `"manages"`. Avoid filler (`"has"`, `"references"`). Self-references: pick `"parent of"` / `"manages"` / `"reports to"`. When same parent has multiple FKs from the same child, verbs must differentiate (`"created"` vs `"assigned"`). Annotate as `relationship_label: "<verb>"` in §3 Notes. §2 Mermaid edge label and this annotation must agree byte-for-byte.
 
-**Optional v5.4 Notes markers (round-trip carriers; author rarely, `semantius-optimizer` emits them from live).** Two field-presentation markers may appear in the Notes cell; both are OPTIONAL with an omit-when-default rule, so a hand-authored spec normally leaves them off and lets the platform defaults stand:
+**Optional Notes markers (round-trip carriers; author rarely, `semantius-optimizer` emits them from live).** Two field-presentation markers may appear in the Notes cell; both are OPTIONAL with an omit-when-default rule, so a hand-authored spec normally leaves them off and lets the platform defaults stand:
 - `width: <s|m|w>` — the field's display width. Bare value, NOT backticked, exactly like `precision: 2`. Emit ONLY when non-default; omit when the platform default (`default`).
 - `` `searchable` `` — backticked bare marker, exactly like `` `unique` ``. Emit ONLY when the field's live `searchable` is true.
 

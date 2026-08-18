@@ -8,6 +8,14 @@ Entries below are newest first.
 
 ---
 
+## Unreleased: `AskUserQuestion` call mechanics
+
+Guidance only, no contract change, `EXPECTED_MAJOR` unchanged. The resident writing conventions in SKILL.md (mirroring `semantius-admin/references/writing-conventions.md`) gain an unnumbered "AskUserQuestion mechanics" paragraph: call the widget alone in its own response after edits and re-renders; answers arrive as a `<user_answers>` input block; there is no `user_answers` tool. Motivated by a 2026-08-17 copilot run where `edit` + `AskUserQuestion` in one tool batch cancelled the pause.
+
+## Unreleased: historical / version-stamp narration removed from runtime files
+
+No behavior change. Removed the retired `single_approver` pattern-flag note, the `alias` note, "legacy" labels on current states (two-permission baseline, `readonly` fields, entries without `source_module`), "no longer" / "used to fail" phrasings, and "Older 5.3 specs" / "v5.4 specs" wording (kept as version-free tolerance rules) from SKILL.md and `references/*`. History lives here and in git only.
+
 ## Unreleased: bulk (array) writes, entities before fields, preflight fix for the `anyOf` tool schemas
 
 2026-08-17. The crud server (postgrest-mcp "array inserts") and the CLI ("add array support") now take `data` on every typed `create_*` as one object **or a non-empty array** (one request, one transaction, all-or-nothing; items may have different keys — the server sends `?columns=<union>` + `Prefer: missing=default`; the response is always an array), and `id` / `table_name` on every `update_*` / `delete_*` as one value or an array (`in.(...)`, same `data` for all). `--single` is rejected (exit 1, `SINGLE_ARRAY_INPUT`) when any of those is an array. The platform's new golden rule: more than one record of the same kind pending → ONE call. Deployer-side only; `EXPECTED_MAJOR` stays `5`, `SCAFFOLD_LIB_MAJOR` stays `5` (additive).

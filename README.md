@@ -1177,18 +1177,41 @@ eviction — so everything an agent writes under `/workspace` (`semantius/specs`
 `semantius/blueprints`, `customizations.yaml`, …) used to die with it. Backups close that
 gap (design: `add_backup_restore_plan.md`):
 
-- **Persist** — at the end of every response whose submission actually touched the
-  container (touched-registry in `backend-b/src/backups.ts`, marked by
-  `provisionWorkspace`; chat-only turns never boot a container just to archive it), the
-  agent's `useResponseFinish` fire-and-forgets `persistWorkspaceBackup`: the sandbox SDK
-  builds a squashfs archive of `/workspace` (excludes `.agents`, `.tmp_admin`,
+- **Persist — every filesystem mutation** (since 2026-08-18; before, only at turn end,
+  which lost anything written earlier in a turn whose container was reset mid-way).
+  Three writers, all through `requestWorkspacePersist` (`backend-b/src/backups.ts`):
+  - the lazy env's `onMutation` hook fires after **every** `exec` / `writeFile` / `mkdir`
+    / `rm` a turn performs (`lazy-env.ts`, wired in `agents/main.ts`);
+  - the agent's `useResponseFinish` fires the turn-end sweep, only when THIS submission
+    touched the container (touched-registry; chat-only turns never boot a container just
+    to archive it);
+  - `POST /workspace/:id/files` after an upload.
+  `requestWorkspacePersist` is per-session single-flight + coalescing: while one archive
+  is in flight further requests only set a `pending` flag, at most ONE follow-up run
+  happens (which by construction captures every coalesced mutation), and starts are
+  spaced ≥1.5 s so the session-record write stays under KV's 1 write/s/key. Each run: the
+  sandbox SDK builds a squashfs archive of `/workspace` (excludes `.agents`, `.tmp_admin`,
   `.tmp_deploy`, `.restored`) into the `BACKUP_BUCKET` R2 bucket, the `session_backup`
   node lands on THE session record, and the previous archive is deleted — exactly ONE
   backup per session, `meta.name` = the full session id (the join every consumer uses).
+  A persist **refuses** a container without the `.restored` marker (`status:
+  'unreconciled'`, log `backup: persist … skipped — container not reconciled`): that is a
+  fresh disk that has not been merged with the session's archive, and archiving it would
+  supersede a good backup with an empty one — the exact mechanism that once lost an
+  uploaded file (container reset mid-turn, then the turn-end persist "won").
 - **Restore** — on the next container-touching submission, `provisionWorkspace` restores
   the archive BEFORE skill provisioning, gated by the `/workspace/.restored` marker so a
   warm container is never re-extracted over (restore is an `unsquashfs -f` merge; the
-  marker is touched even when there is nothing to restore, and excluded from archives).
+  marker is touched even when there is nothing to restore or the R2 feature is off, and
+  excluded from archives).
+- **Mid-turn reset detection** — the container can be replaced UNDER a running turn
+  (`sleepAfter` elapsing between two slow tool calls, eviction, a deploy); the SDK boots
+  a fresh disk transparently. The lazy env therefore runs a `resetProbe` (one `exists`
+  RPC on the `.restored` marker) before every container op once provisioned; a missing
+  marker logs `lazy-env: container reset detected before <op>` and re-runs the full
+  `provisionWorkspace` (restore + skills + env) before the op proceeds. The window that
+  can still be lost is one tool call: mutations after the last completed persist and
+  before the reset.
 - **Transport** — the SDK's `localBucket: true` mode: the sandbox DO streams bytes over
   its own control channel and uses the R2 binding directly. No presigned URLs, no R2
   access keys, no container egress — nothing new for the egress whitelist or the
@@ -1220,9 +1243,9 @@ POST   /admin/backups/sweep                # run the cron body now -> {scanned, 
 POST   /admin/sessions/<id>/backup         # body {action: "backup" | "restore" | "status"}
 ```
 
-`action:"backup"` runs the exact turn-end persist inline and returns its outcome;
-`action:"restore"` clears the marker first so the replay is deterministic on a warm
-container. One-time setup, BEFORE the first deploy with the binding:
+`action:"backup"` reconciles first (marker-guarded restore, a no-op on a warm container),
+then runs the exact persist path inline and returns its outcome; `action:"restore"`
+clears the marker first so the replay is deterministic on a warm container. One-time setup, BEFORE the first deploy with the binding:
 `wrangler r2 bucket create semantius-copilot-backups`.
 
 ## Workspace files (upload & download)
@@ -1397,6 +1420,37 @@ raw `client.send()` and the first streamed token). `idempotencyKey:
 ask-user-question:<toolCallId>` makes double-clicks and two-tab races converge on one
 admission. Multi-select answers join labels with `", "`; the auto-added "Other" option
 returns the typed text verbatim; Dismiss sends `cancelled: true`.
+
+**Batch caveat — the tool must be the only call in its response.** `terminate` is honored
+only when *every* call in the model's tool batch carries it (pi-agent-core
+`shouldTerminateToolBatch` is a unanimity predicate; flue mirrors it durably in
+`isTerminalTrailingToolBatch`). A sibling call in the same response — an `edit`, a `bash`, a
+hallucinated tool — cancels the pause: the batch settles, the loop continues, and the model
+is handed another step before the user has answered. Seen live on 2026-08-17 (importer flow):
+`edit` + `AskUserQuestion` in one batch → loop continued → the model "called" the
+`user_answers` XML tag as a tool (`Tool user_answers not found`) → "waiting on your
+decisions…" text. Nothing was auto-submitted (the card derives its state from the answer
+signal alone and stayed `pending`; the user's later submit worked), but the run looked
+broken. There is no mechanical seam: `useModel` exposes no parallel-tool-calls knob, flue
+builds the Pi agent with `toolExecution: "parallel"` and wires neither `beforeToolCall` nor
+`afterToolCall`, and pi-ai's openai-completions path has no `parallel_tool_calls` flag. The
+defense is therefore the tool contract: the description forbids sibling calls ("finish edits
+and commands in an earlier step, then call AskUserQuestion alone"), names `user_answers` as
+an input block that is not a tool, and scopes a stop directive to *the same response* and
+*this call's toolCallId* ("if handed another step before a `<user_answers>` block for this
+toolCallId or a new user message arrives, end with no text and no tool calls" — scoped so a
+later typed reply is still answered normally and an earlier round's answers, already in
+context on the second ask of a multi-round flow, are not mistaken for the current one); the
+tool output carries the same directive
+as an `instruction` field, which is what the model reads if the loop continues anyway (the
+frontend never reads the output; the probe checks only `output.status`). The skills under
+`agents/semantius-admin/skills/` are maintained upstream and are never edited here; the
+matching skill-side guidance ("call it alone, after edits; `user_answers` is an input block")
+is filed as `askuserquestion-skill-change-request.md` for upstream. Rejected: a stub
+`user_answers` tool (advertises the very name to avoid, costs schema tokens on every request,
+and a model calling it *instead of* AskUserQuestion would end the turn with no card — today
+that mistake self-heals via the tool error) and renaming the tag (duplicated in the frontend
+constant, README, and probe; old sessions carry it in history).
 
 `node scripts/ask-user-question-probe.mjs` verifies the full round-trip against the
 deployed backend: ask turn settles `completed` with the tool part, the answer signal wakes
@@ -1687,6 +1741,16 @@ documented KV-no-CAS window: `DELETE /sessions/:id` read a stale replica (the fi
 persist had merged a NEWER `backup_id` seconds earlier), deleted the superseded id, and left
 the fresh archive orphaned — which is exactly the case sweep rule (b)/(a) exists for; the
 hourly cron (or `POST /admin/backups/sweep`, or `DELETE /admin/backups/:id`) removes it.
+
+**Per-mutation persist + mid-turn reset detection, proven live 2026-08-18:** one real turn
+with four sequential `bash` calls (`echo one > t1.txt`, `echo two > t2.txt`,
+`rm -f /workspace/.restored` to simulate a reset, `cat t1.txt t2.txt`). Logs showed
+`backup: persisted … (#1)`, `(#2)` after the first two calls; the persist after the
+marker removal was refused (`persist … skipped — container not reconciled (marker absent),
+keeping <id> backup`); the fourth call logged `lazy-env: container reset detected before
+exec: cat … — re-provisioning`, restored, returned `one two`, and persists resumed `(#3)`,
+`(#4)` — `session_backup.backup_count: 4`, marker re-armed. The full acceptance suite
+(incl. `[backup]`, whose `action:"backup"` oracle now reconciles first) passed the same day.
 
 ## The `/sessions/:id/skill-check` route
 

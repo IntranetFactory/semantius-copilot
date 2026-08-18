@@ -143,6 +143,8 @@ The internal value (`naming_mode: template:salesforce`, role classifications, `c
 
 **Pre-emit check** (mandatory): before sending any chat message or firing any `AskUserQuestion`, scan the assembled text for any banned token. Rewrite before sending. The check is mechanical and cheap; running it twice on the same message is fine.
 
+**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, and policy-file reads first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block**; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the skill's internal work; they asked for a result. Hard rules:
 
 - **Do not announce what you're about to do** before doing it. No *"Let me peek at the existing blueprint to verify..."* — just peek. No *"Let me check the conventions..."* — just check. The peek/check itself produces a tool-call line in the transcript; that is enough.
@@ -337,7 +339,8 @@ Before writing, run these checks **silently** — do NOT narrate them in chat. T
 **Mechanical consistency gate (mandatory — this is enforcement, not eyeballing).** The cross-section rows above (Mermaid ⟺ §3, §2 ⟺ §3, Mermaid ⟺ §5, and the §7 / §6.4 / §8.2 resolution) are NOT verified by re-reading the file. After writing the candidate file, run the bundled deterministic checker shipped alongside this skill and require a clean exit:
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT:-.claude/skills/semantius-architect}/references/consistency-check.ts" "<path-to-the-written-blueprint>"
+# <skill-folder> = the directory this skill's SKILL.md was read from (absolute path; works for plugin and workspace installs alike)
+bun "<skill-folder>/references/consistency-check.ts" "<path-to-the-written-blueprint>"
 ```
 
 It parses the file, treats §3 as the entity registry, and byte-compares every other place each entity's identifier / display name / edge appears. It is **content-agnostic** — it never judges language, casing, or word choice, only that every occurrence agrees (reverse a label in *every* section and it passes; change it in *one* and it fails). Exit 0 = consistent; non-zero prints the exact entity, the differing values, and the disagreeing sections. **If it exits non-zero the save is not complete:** fix every reported line and re-run until exit 0, then emit the success line. The same script validates specs (`artifact: semantic-spec`); the analyst runs it at its own pre-save. Do not hand-wave this — blueprints shipped inconsistent precisely because the check was "done carefully" by reading instead of run.

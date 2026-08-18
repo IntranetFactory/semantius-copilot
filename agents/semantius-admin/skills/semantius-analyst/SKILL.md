@@ -49,6 +49,8 @@ The two always-on rules that govern every chat message are kept here verbatim (f
 
 **Pre-emit check** (mandatory): before sending any chat message or firing any `AskUserQuestion`, scan the assembled text for any banned token. Rewrite before sending.
 
+**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, and policy-file reads first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block**; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the skill's internal work; they asked for a reconciled spec. Hard rules:
 
 - **Do not announce what you're about to do** before doing it. No *"Let me load the use-semantius reference..."*, no *"Let me classify each entity..."*, no *"Let me check this against the live catalog..."*. Just do the work; the tool-call lines in the transcript are enough.
@@ -209,7 +211,7 @@ The lifecycle state machine still exists in a `basic` spec (every lifecycle enti
    - **Stage 5 (W3/W4/W4n/W5 workflow-permission scan)** emits nothing — no `workflow-gate` / `narrow` / `override` rows, no gating `validation_rules`.
    - **Stage 7 (`select_rule`)** emits nothing — no per-row read scoping (every entity falls back to table-level `view_permission`).
    - **Stage 9.5** forces `documentation` mode (Stage 9.5 Step 0 auto-derives the mode; `living` is never selected under `basic`), emits only the viewer + manager baseline roles (role slugs normalized `-`→`_`, e.g. `it_ops_starter_viewer`) and the single `manage → read` edge, and skips RACI realization, the Processes catalog, and §9.2 functional ownership. No `persona` frontmatter is emitted.
-   - **Stage 10** keeps only permission-free computed fields / validation rules (pure data-integrity logic); it drops any rule whose JsonLogic gates on a permission (`require_permission` / `has_permission` on a code that no longer exists), since the gating permission is gone.
+   - **Stage 10** keeps only permission-free computed fields / validation rules (pure data-integrity logic); it drops any rule whose JsonLogic gates on a permission (`require_permission` / `has_permission` on a code that does not exist), since the gating permission does not exist under `basic`.
 
 The result satisfies the analyst's own §8.1/§9.1 invariants by construction (exactly one baseline-read + one baseline-manage, no gate rolled under `manage`, no orphan `narrow`) and the modeler's parse-time validation. The Stage 11 pre-save verifier additionally checks `access_scope: basic` coherence (no admin/gate/override/narrow rows, no personas, no RACI realization).
 
@@ -313,7 +315,7 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 | Frontmatter carries `tagline`, `icon_name`, `description`, `persona`, `license`, `module_kind` (each either carried verbatim from blueprint or null when blueprint omitted) | missing frontmatter keys |
 | §9 governance section is present and populated (§9.1 + §9.2) | missing or empty §9 |
 | When frontmatter `access_scope: basic`: §8.1 carries exactly `<slug>:read` + `<slug>:manage` (no `baseline-admin` / `workflow-gate` / `override` / `narrow`); no §3 entity has `**Edit permission:** admin` or a narrow tier; no §7 lifecycle state is gated; §9.1 carries only viewer + manager + the single `manage → read` row; no RACI realization / Processes / §9.2 ownership rows; no `persona` frontmatter. (Absent or `full` → no extra check.) | access_scope incoherence list |
-| **RACI provenance — mechanically enforced by `consistency-check.ts`.** When the spec carries a RACI matrix, frontmatter MUST carry `raci_mode` (`living`/`documentation`) AND `raci_mode_source` (`computed-default`/`non-interactive`; `raci_mode` is auto-derived from instance state, so this gate no longer produces `user-answer`), and the §9 `**RACI mode:**` line must match `raci_mode`. The checker fails the save on any missing / invalid / mismatched value. | RACI provenance missing / inconsistent |
+| **RACI provenance — mechanically enforced by `consistency-check.ts`.** When the spec carries a RACI matrix, frontmatter MUST carry `raci_mode` (`living`/`documentation`) AND `raci_mode_source` (`computed-default`/`non-interactive`; `raci_mode` is auto-derived from instance state, so this gate never produces `user-answer`), and the §9 `**RACI mode:**` line must match `raci_mode`. The checker fails the save on any missing / invalid / mismatched value. | RACI provenance missing / inconsistent |
 | Every `re-prefixed-from` annotation in §8.1 names a catalog module and a verb; the verb appears on the relevant entity in §3 | malformed re-prefix list |
 | §5 rows carry `delete_mode` and `fk_format` consumed from the blueprint, not re-derived | column-missing list |
 | §6.2 / §6.3 handoff rows carry the `transition` column; for `lifecycle` event_category, `to_state` exists on source entity's §7 | mismatched-state list |
@@ -337,7 +339,8 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 **Mechanical consistency gate (mandatory — run it, do not eyeball it).** The §2 Mermaid-completeness row above and the entity-set / label / reference reconciliation are enforced by the same deterministic checker the architect ships (it handles both blueprints and specs). After writing the candidate spec, run it and require a clean exit:
 
 ```bash
-bun ".claude/skills/semantius-architect/references/consistency-check.ts" "semantius/specs/<slug>-semantic-spec.md"
+# <skill-folder> = the directory this skill's SKILL.md was read from (absolute path; works for plugin and workspace installs alike)
+bun "<skill-folder>/../semantius-architect/references/consistency-check.ts" "semantius/specs/<slug>-semantic-spec.md"
 ```
 
 For a spec it byte-compares: the frontmatter `entities:` list ⟺ §2 `Table name` ⟺ §3 sub-section headings (the entity set, strict 1:1); §2 `Singular label` ⟺ the §3 heading singular label (per entity); that every §4 / §5 / §8.2 / mermaid reference resolves to a declared entity; and that every §2 mermaid edge's direction + verb agrees with what §3 `relationship_label` + §4 `Cardinality`/`Kind` derive (a `parent`-kind row is always drawn as a bare arrow with no verb, per the junction convention; every other row's verb comes from §3, never invented at diagram time). It is **content-agnostic** on prose — it never judges language or casing, only that every occurrence of a name (and now every diagram edge) agrees with its source. A non-zero exit prints the exact entity and the disagreeing locations; fix every reported line and re-run until exit 0 before narrating the close-out. Do not substitute reading for running it.

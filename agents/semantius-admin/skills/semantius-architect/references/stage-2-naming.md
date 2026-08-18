@@ -54,14 +54,14 @@ The example entity names inside the vendor descriptions must be in **lowercase p
 
 The "(Recommended)" suffix on Agent-optimized is intentional, it's the better default for new builds.
 
-**After the AskUserQuestion tool returns**, your very first sentence MUST start with the chosen option name in **bold** so the transcript stays readable (the harness only records the answer ordinal like "A: 2"). Examples:
+**After the user's answer arrives** (as a `<user_answers>` input block mapping each question text to the chosen label; there is no `user_answers` tool to call, and the widget must have been the only tool call of its response), your very first sentence MUST start with the chosen option name in **bold** so the transcript stays readable. Examples:
 - *"**Greenhouse-style names**, I'll mirror Greenhouse's core object model..."*
 - *"**Modern, self-describing names**, I'll use clear names from first principles..."*
 - *"**Workday-style names**, I'll adopt their canonical entity names..."*
 
 Then map the choice to a `naming_mode` value for the rest of the session (this value is internal — never shown to the user):
 - Named vendor → `naming_mode: template:<vendor>`
-- Modern / self-describing → `naming_mode: agent-optimized` (keeps the legacy slug for backward compatibility; do NOT use this phrase in any user-facing prose)
+- Modern / self-describing → `naming_mode: agent-optimized` (internal token only; never use this phrase in user-facing prose)
 - "Other" + vendor name → `naming_mode: template:<that-vendor>`
 - "Other" + something else (e.g. "blend Salesforce and HubSpot") → resolve in conversation, then commit to one `naming_mode` value before continuing.
 

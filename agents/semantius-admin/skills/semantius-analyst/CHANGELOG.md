@@ -8,6 +8,14 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## Unreleased: `AskUserQuestion` call mechanics
+
+Guidance only, no contract change, `CURRENT_VERSION` unchanged. The resident writing conventions in SKILL.md (mirroring `semantius-admin/references/writing-conventions.md`) gain an unnumbered "AskUserQuestion mechanics" paragraph: call the widget alone in its own response after edits and re-renders; answers arrive as a `<user_answers>` input block; there is no `user_answers` tool. `stage-3-confirm.md` option 2 now says to apply edits and re-render first, then fire the confirmation widget alone. Motivated by a 2026-08-17 copilot run where `edit` + `AskUserQuestion` in one tool batch cancelled the pause.
+
+## Unreleased: historical / version-stamp narration removed from runtime files
+
+No behavior change. Removed "used to be" prose ("no longer" / "formerly" / "legacy" labels on current states, retired-mechanism notes) and every `vX.Y+` / "analyst vX.Y+" arrival tag from SKILL.md and `references/*` (notably `semantic-spec-template.md`, `stage-11-write.md`, `stage-9-governance.md`); the rules those lines carried are stated present-tense. Fixed the stale "3-option" 3d widget rows in `stage-3-placement.md` (the widget has two options: embed locally / skip). History lives here and in git only.
+
 ## Unreleased: 2a.1 version-match drift gate + deploy-provenance frontmatter carry-forward
 
 2026-07-05. Closes the owned-entity drift gap: previously the analyst reconciled a spec against its **blueprint** (Reconcile / Rebuild) and deep-inspected only **adopted** entities against live (2h), so prod-side drift on the spec's own OWNED entities surfaced only at modeler-deploy time (a late halt). Two additions, both keyed on a platform-maintained `modules.version` (monotonic integer, bumped on any owned-schema change):

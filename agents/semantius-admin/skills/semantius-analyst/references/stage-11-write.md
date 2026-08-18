@@ -33,13 +33,13 @@ access_scope: <resolved by the analyst after Stage 2>  # basic | full — OMIT o
 tagline: <from blueprint>  # ≤40-char selector chip → modules.description
 icon_name: <from blueprint>  # → modules.icon_name
 description: <from blueprint>  # carry forward (YAML literal block)
-logo_color: <hex>  # v5.4+; OPTIONAL → modules.logo_color. Placed after naming_mode: in the template. Emit only when set; omit the key entirely when unset (the modeler random-fills only when ABSENT).
-home_page: <path>  # v5.4+; OPTIONAL → modules.home_page. Emit only when set (non-empty/non-null); omit the key entirely otherwise.
+logo_color: <hex>  # OPTIONAL → modules.logo_color. Placed after naming_mode: in the template. Emit only when set; omit the key entirely when unset (the modeler random-fills only when ABSENT).
+home_page: <path>  # OPTIONAL → modules.home_page. Emit only when set (non-empty/non-null); omit the key entirely otherwise.
 created_at: <blueprint's created_at>
 reconciled_at: <YYYY-MM-DD today>
 reconciled_against_catalog_snapshot: <ISO 8601 timestamp of the catalog read in Stage 2>
 source_blueprint: <relative path to blueprint .md>
-# deploy provenance (v5.4+) — MODELER-owned (Stage 5b); analyst carries forward VERBATIM, never computes; all omitted until first deploy
+# deploy provenance — MODELER-owned (Stage 5b); analyst carries forward VERBATIM, never computes; all omitted until first deploy
 deployed_version: <carried forward from the spec being edited, else omit>
 deployed_version_date: <carried forward, else omit>
 deployed_related_versions: <carried forward, else omit>
@@ -87,16 +87,16 @@ Use the existing spec template at `./semantic-spec-template.md` for the section 
 
 9. **Every §3 owned entity that has an identity spine carries a `**Label parent:**` line.** Names the one FK that is the entity's identity spine (derived in Stage 4 via the label_parent decision rule). The deployer stamps it into `entities.label_parent`; re-pointing it changes the composed `_label` with no data migration. **Omit the line** for `junction` entities (the platform auto-combines their parent legs), self-identifying entities (intrinsic `label_column`), and `reuse-from` / built-in entities (referenced, not provisioned). The modeler parses and stamps it.
 
-10. **Optional v5.4 entity property lines (round-trip carriers; the analyst rarely authors them, `semantius-optimizer` emits them from live state).** Five new OPTIONAL `**Xxx:**` lines may appear in an entity block, each with an omit-when-default rule — so a hand-authored spec normally omits all five and lets the platform defaults stand. Positions and rules match `./semantic-spec-template.md` exactly:
+10. **Optional entity property lines (round-trip carriers; the analyst rarely authors them, `semantius-optimizer` emits them from live state).** Five new OPTIONAL `**Xxx:**` lines may appear in an entity block, each with an omit-when-default rule — so a hand-authored spec normally omits all five and lets the platform defaults stand. Positions and rules match `./semantic-spec-template.md` exactly:
    - **`**Order column:** `<field_name>``** — after `**Label column:**`. Backticked `field_name`. Omit when empty/null. → `entities.order_column`.
    - **`**Id column:** `<field_name>``** — after `**Order column:**`. Backticked `field_name`. Omit when `id` (the platform default) or empty. → `entities.id_column`.
    - **`**Edit mode:** <edit_mode>`** — after `**Edit permission:**`. Bare enum value, NO backticks. Omit when the platform default (`auto`). → `entities.edit_mode`.
    - **`**Cube mode:** <cube_mode>`** — after `**Edit mode:**`. Bare enum value, NO backticks. Omit when the platform default. → `entities.cube_mode`.
    - **`**Icon URL:** <icon_url>`** — after `**Cube mode:**`, before `**Catalog entity code:**`. Plain URL value, NO backticks. Omit when empty/null. → `entities.icon_url`.
 
-   A `reuse-from` / built-in entity carries none of these (referenced, not provisioned). The modeler parses and stamps each when present, and does not fail when they are absent (older 5.3 specs omit them all).
+   A `reuse-from` / built-in entity carries none of these (referenced, not provisioned). The modeler parses and stamps each when present, and does not fail when they are absent.
 
-11. **Deploy-provenance keys are carried forward, never computed (v5.4+).** `deployed_version`, `deployed_version_date`, and `deployed_related_versions` are written **only by the modeler** at the end of a clean deploy (Stage 5b), recording the live `modules.version` the deploy produced. The analyst NEVER computes or refreshes them — it copies them verbatim from the spec it read and re-emits them unchanged. A fresh Reconcile from a blueprint has none (nothing deployed yet), so omit all three. An Extend / Rebuild / re-Reconcile of a spec that was previously deployed carries them through as-is. They intentionally describe the **last deploy**, so they stay stable across analyst edits and are refreshed only when the modeler next deploys — that stability is what lets the 2a.1 gate compare live `modules.version` against `deployed_version` to detect prod drift. Omit any key the source spec did not carry.
+11. **Deploy-provenance keys are carried forward, never computed.** `deployed_version`, `deployed_version_date`, and `deployed_related_versions` are written **only by the modeler** at the end of a clean deploy (Stage 5b), recording the live `modules.version` the deploy produced. The analyst NEVER computes or refreshes them — it copies them verbatim from the spec it read and re-emits them unchanged. A fresh Reconcile from a blueprint has none (nothing deployed yet), so omit all three. An Extend / Rebuild / re-Reconcile of a spec that was previously deployed carries them through as-is. They intentionally describe the **last deploy**, so they stay stable across analyst edits and are refreshed only when the modeler next deploys — that stability is what lets the 2a.1 gate compare live `modules.version` against `deployed_version` to detect prod drift. Omit any key the source spec did not carry.
 
 ### Order §3 entities canonically (§2 inherits it)
 
@@ -118,7 +118,8 @@ If you find yourself about to type `-->` or `|verb|` directly into a `Write` or 
 Once §3 and §4 are written, generate the block and paste its output as §2 verbatim:
 
 ```bash
-bun ".claude/skills/semantius-architect/references/consistency-check.ts" --emit-mermaid "semantius/specs/<slug>-semantic-spec.md"
+# <skill-folder> = the directory this skill's SKILL.md was read from (absolute path; works for plugin and workspace installs alike)
+bun "<skill-folder>/../semantius-architect/references/consistency-check.ts" --emit-mermaid "semantius/specs/<slug>-semantic-spec.md"
 ```
 
 This reads the file's own §3/§4 and prints a ready-to-paste ` ```mermaid ` block: arrow direction from `Cardinality` (`N:1` → the `To` side is the parent, arrow runs `To --> From`; `1:N` → arrow runs `From --> To`; `1:1` → flat `---`), verb from §3's `relationship_label` for that field (a `parent`-kind row — a junction FK — is always a bare arrow with no verb, per the junction convention, even though §3 may declare a `relationship_label` for that field), `builtin`/`master` classDef lines from entity role, and a bare node line for any entity with no edges. Re-run it whenever §3 or §4 changes after the fact (an added field, a renamed verb, a cardinality fix) — never hand-patch §2 to keep it in sync.

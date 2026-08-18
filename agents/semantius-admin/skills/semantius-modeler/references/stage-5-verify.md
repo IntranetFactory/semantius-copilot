@@ -42,7 +42,7 @@ After all creates are done, emit a **structured verification report** with expli
    - No rows were created with `origin = "user"` overwriting prior admin intent (paranoia check; should be impossible per Stage 4i idempotency).
 
 4. **Merged JSON arrays (master entities only).**
-   - Every entry has a non-null `source_module` (legacy entries treated as `"user"`).
+   - Every entry has a non-null `source_module` (entries without it are treated as `"user"`).
    - **No `code` duplicates** within `validation_rules` on an entity, regardless of `source_module`. The natural key is `code` alone; `source_module` is reconciliation metadata, not part of the uniqueness key.
    - **No `name` duplicates** within `computed_fields` on an entity, same rule.
    - Pre-merge entries from non-current sources are still present (preserved across re-runs per 4e-merge rule 4).

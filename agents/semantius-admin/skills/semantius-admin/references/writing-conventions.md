@@ -62,6 +62,8 @@ The internal annotation value (`reuse-from <X>.<Y>`, `promote-to-master <host>.<
 
 **Pre-emit check** (mandatory): before sending any chat message or firing any `AskUserQuestion`, scan the assembled text for any banned token. Rewrite before sending.
 
+**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, and policy-file reads first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block**; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the skill's internal work; they asked for a reconciled spec. Hard rules:
 
 - **Do not announce what you're about to do** before doing it. No *"Let me load the use-semantius reference..."*, no *"Let me classify each entity..."*, no *"Let me check this against the live catalog..."*. Just do the work; the tool-call lines in the transcript are enough.

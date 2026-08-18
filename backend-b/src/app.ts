@@ -104,7 +104,7 @@ import {
   listBackups,
 } from '@semantius-copilot/core';
 import {
-  persistWorkspaceBackup,
+  requestWorkspacePersist,
   restoreWorkspaceBackup,
   sweepExpiredBackups,
   RESTORE_MARKER,
@@ -338,11 +338,21 @@ app.post('/admin/sessions/:id/backup', async (c) => {
   const binding = raw ? resolveSandboxBinding((JSON.parse(raw) as { baseImage: string }).baseImage) : 'Sandbox';
   const namespace = (c.env as unknown as Record<string, DurableObjectNamespace>)[binding];
 
+  const sandbox = getSandbox(namespace, sandboxNameForSession(id)) as unknown as BackupSandbox;
   if (action === 'backup') {
-    return c.json(await sandboxRpc(() => persistWorkspaceBackup({ env: c.env, namespace, sessionId: id })));
+    return c.json(
+      await sandboxRpc(async () => {
+        // The turn-end path always runs on a container provisionWorkspace has
+        // reconciled (marker armed); the oracle may hit a cold one, and the
+        // persist refuses marker-less containers ('unreconciled'), so
+        // reconcile first — marker-guarded, a no-op on a warm container.
+        const record = await readSession(c.env.STORE, id);
+        await restoreWorkspaceBackup(sandbox, c.env, record);
+        return requestWorkspacePersist({ env: c.env, namespace, sessionId: id });
+      }),
+    );
   }
 
-  const sandbox = getSandbox(namespace, sandboxNameForSession(id)) as unknown as BackupSandbox;
   if (action === 'restore') {
     return c.json(
       await sandboxRpc(async () => {
@@ -901,10 +911,11 @@ app.post('/workspace/:sessionId/files', async (c) => {
   const name = await uniqueWorkspaceName(sandbox, requested);
   await sandbox.writeFile(`${WORKSPACE_DIR}/${name}`, bytesToBase64(bytes), { encoding: 'base64' });
 
-  // Durability: the container disk dies at sleepAfter, and the turn-end
-  // backup only covers submissions that touched the container — an
-  // out-of-turn upload must persist itself. Fire-and-forget; never throws.
-  c.executionCtx.waitUntil(persistWorkspaceBackup({ env: c.env, namespace, sessionId: id }));
+  // Durability: the container disk dies at sleepAfter, and the in-turn
+  // persists only cover the agent's own mutations — an out-of-turn upload
+  // must persist itself. Coalesces with any persist in flight for the
+  // session; fire-and-forget; never throws.
+  c.executionCtx.waitUntil(requestWorkspacePersist({ env: c.env, namespace, sessionId: id }));
 
   return c.json({ ok: true, name, size: bytes.length, renamed: name !== requested });
 });

@@ -48,7 +48,7 @@ Use both the naming-pair heuristic AND format / lifecycle-stamp / required-ness 
 - Option 3 → keep both `<spec_field>` and `<live_field>` in the spec; add a 🟡 §7.2 note flagging the unusual choice.
 - Option 4 → halt the run, no spec written.
 
-**Lifecycle state field exception.** When `<spec_field>` is `workflow_state` (the fixed lifecycle state field, see Stage 4) and the live entity holds the state under a legacy name (`status` / `state` / `lifecycle_state` / `lifecycle_stage`), do **not** offer Option 1 ("keep the live name"): the deployer rejects any lifecycle state stored outside `workflow_state`, so keeping `status` would only produce a spec the modeler refuses to deploy. Offer the rename-to-`workflow_state` migration (Option 2) as the recommended path. When the live entity already uses `workflow_state`, there is no name drift to resolve.
+**Lifecycle state field exception.** When `<spec_field>` is `workflow_state` (the fixed lifecycle state field, see Stage 4) and the live entity holds the state under a different name (`status` / `state` / `lifecycle_state` / `lifecycle_stage`), do **not** offer Option 1 ("keep the live name"): the deployer rejects any lifecycle state stored outside `workflow_state`, so keeping `status` would only produce a spec the modeler refuses to deploy. Offer the rename-to-`workflow_state` migration (Option 2) as the recommended path. When the live entity already uses `workflow_state`, there is no name drift to resolve.
 
 #### 3f.2 Enum-value drift (with live records in use)
 

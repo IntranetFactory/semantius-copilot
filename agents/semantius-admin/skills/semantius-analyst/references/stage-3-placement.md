@@ -40,9 +40,9 @@ Walk every §3 row in the incoming blueprint and classify based on `role` + `mas
 | `embedded_master` | Owner module doesn't exist, entity exists in module X | Spec for X declared this entity as `embedded_master mastered_in: <different slug>` | **Second-mover, mismatched intent**: same 3b.1 2-option widget but the option-1 shell name uses incoming `<mastered_in>` (B's blueprint is truth per the design rule). | per 3b.1 outcome | 3b.1 2-option widget. |
 | `embedded_master` | Owner module doesn't exist, entity exists in module X | No spec evidence | **Second-mover, unknown source**: still 3b.1 2-option widget. Don't try to reconstruct what X intended. | per 3b.1 outcome | 3b.1 2-option widget. |
 | `contributor` | Owner module exists, entity exists there | n/a | Auto-reuse | `reuse-from <mastered_in>.<entity>` | None. |
-| `contributor` | Owner module doesn't exist | n/a | 3d decision (set up here / wait / skip) | per 3d outcome | 3d 3-option widget. |
+| `contributor` | Owner module doesn't exist | n/a | 3d decision (embed locally / skip) | per 3d outcome | 3d 2-option widget. |
 | `consumer` | Owner module exists, entity exists there | n/a | Auto-reuse, read-only consumption | `reuse-from <mastered_in>.<entity>` | None. |
-| `consumer` | Owner module doesn't exist | n/a | 3d decision | per 3d outcome | 3d 3-option widget. |
+| `consumer` | Owner module doesn't exist | n/a | 3d decision | per 3d outcome | 3d 2-option widget. |
 | (any role) | Optional row (`necessity: optional`) | n/a | Inclusion gated by user pick | per 3a outcome | 3a multiSelect (if any optionals). |
 | (any role) | Similar-name collision against an existing entity | n/a | per 3c widget | per 3c outcome | 3c 3-option widget. |
 

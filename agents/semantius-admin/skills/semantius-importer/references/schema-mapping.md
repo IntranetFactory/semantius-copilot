@@ -151,8 +151,10 @@ The util's `field_name` suggestions are mechanically valid. The skill still veri
 
 | Column | Default resolution | Alternatives (one question for all collisions) |
 |---|---|---|
-| a CSV column whose field name equals the target's primary key column (`id` on a new entity, the live `id_column` on an existing one) | rename to `external_id`, offer it as the **unique natural key** (`unique_value: true`) for idempotent, updatable re-imports | skip the column |
-| `id_move_column` (new entity, `id_mode: "move"`) | keep as its own `integer` field, offer as unique natural key | skip |
+| a CSV column whose field name equals the target's primary key column (`id` on a new entity, the live `id_column` on an existing one) | rename to `external_id`, offer to **mark it unique** (`unique_value: true`; becomes the `natural_key` the import dedupes on, so re-runs skip rows already present) | skip the column |
+| `id_move_column` (new entity, `id_mode: "move"`) | keep as its own `integer` field, offer to mark it unique (same as above) | skip |
+
+**The unique-key question (user-facing wording).** Any column that identifies a row in the source (an id, a code, a reference number) is a candidate. Ask once, in plain words: *"`<Header>` looks like a unique id from the source. Mark `<field>` as unique so re-running this import skips rows that are already there?"* Options: **Unique** (Recommended) — `unique_value: true` goes on the field, `natural_key` in `mapping.json` names it, the import skips rows whose value already exists; **Not unique** — plain insert, re-running the file inserts every row again. The phrase "natural key" is internal (`mapping.json`) and never appears in a question or a plan; the user decides about **uniqueness**. There is no "update existing rows" option: **updating existing records is postponed** (README → Postponed), the import is insert-only.
 
 **Why deferred:** explicit-id imports leave the platform id sequence behind and the first platform-side insert collides (verified live). The full preservation design, the sequence rule, and the repairing RPC's SQL live in the README under "Deferred design"; it returns once the `fix_id_sequence` RPC is installed.
 
@@ -179,7 +181,7 @@ Offer `format: "reference"` + `reference_table` (with `reference_delete_mode: "r
 1. The target entity exists in the live catalog.
 2. The user confirms the CSV values are that table's actual `id` values.
 
-Otherwise keep the column scalar (`integer` or `string` as introspected) and note in the mapping that it can be converted to a reference later. Looking up target ids from natural keys (e.g. the CSV holds category *names*, not ids) is out of scope for this skill's import script; flag it and keep the column scalar, or let the user pre-process the CSV.
+Otherwise keep the column scalar (`integer` or `string` as introspected) and note in the mapping that it can be converted to a reference later. Looking up target ids from display values (e.g. the CSV holds category *names*, not ids) is out of scope for this skill's import script; flag it and keep the column scalar, or let the user pre-process the CSV.
 
 `format: "parent"` (composition, cascade delete) is almost never right for an imported flat file; suggest it only when the user describes the relationship as ownership.
 
@@ -228,7 +230,6 @@ The review loop's output and the **single runtime input** for every script in th
   "table": "products",
   "id_column": "id",
   "natural_key": "external_id",
-  "on_exists": "update",
   "expected_records": 110,
   "batch_size": 250,
   "columns": [
@@ -277,8 +278,8 @@ Top-level keys:
 |---|---|
 | `table` | Target `table_name`. |
 | `id_column` | Copied from the target entity's live `id_column` property (`read_entity`; `id` for entities this skill just created). The import script's payload guard keys on it. |
-| `natural_key` | Optional. Names the **field** (not header) that identifies a row across re-imports. |
-| `on_exists` | Meaningful only with a natural key: `"insert"` skips rows whose key already exists; `"update"` synchronizes them — unchanged rows untouched, changed rows updated, new rows inserted. Update mode requires the key field to be unique (`unique_value: true`); with a non-unique key only `"insert"` is available and the skill says so. |
+| `natural_key` | Optional. Names the **field** (not header) the user chose to mark unique (`unique_value: true` on that column). The import skips rows whose value already exists in the table; existing rows are never modified (updating existing records is postponed, README → Postponed). Absent/null: plain insert, re-running duplicates rows. Internal name only — user-facing wording is "unique key" / "marked unique". |
+| `on_exists` | **Removed** (postponed). The scripts reject a mapping that still carries `"on_exists": "update"`; do not write the key. |
 | `expected_records` | The introspection wrapper's `record_count` on a full scan; `null` when the scan was capped. The import verifies `parsed` against it (section 9). |
 | `batch_size` | Optional insert batch size (default 250, sane range 200–500). |
 
@@ -336,6 +337,6 @@ Coercion direction matters: a CSV `integer` column imports losslessly into a liv
 
 In compare-only mode this classified report is the deliverable: render it and stop, zero writes.
 
-When a natural key and `on_exists: "update"` are in play, the report also states how existing rows will be treated: matched-and-identical rows are left untouched, matched-but-differing rows are updated with the CSV's values, and rows only in the CSV are inserted.
+When a unique key is set, the report also states how existing rows will be treated: rows whose key value already exists are skipped (never modified), rows only in the CSV are inserted. Without a unique key it says plainly that every row will be inserted, existing or not.
 
 **Row-count expectation.** On a full scan, the wrapper's `record_count` is the number of data records the import should parse; the verification stage checks `parsed === record_count` and treats a mismatch as a parsing defect to surface (delimiter trouble, embedded newlines), not as noise.

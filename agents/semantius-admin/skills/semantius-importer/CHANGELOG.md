@@ -2,6 +2,18 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## Unreleased
+
+`AskUserQuestion` mechanics (guidance only, no contract change): call the widget alone in its own response after mapping edits and re-renders; answers arrive as a `<user_answers>` input block; there is no `user_answers` tool. New writing convention 6, plus sequencing sentences in the Stage 2 review loop and the Stage 4 pre-write gate. Motivated by a 2026-08-17 copilot run where `edit` + `AskUserQuestion` in one tool batch cancelled the pause.
+
+## 1.5
+
+Update mode postponed; the "natural key" wording replaced by a plain "mark this field unique?" question.
+
+- **Insert-only.** The `insert` / `update` write-mode question is gone, and with it `on_exists` from `mapping.json`. `import.template.ts` no longer preloads mapped fields, diffs, or `PATCH`es; it preloads only the key values and skips rows already present (`skipped`), and exits 4 if a mapping still carries `on_exists: "update"`. Summary shape is now `parsed / inserted / skipped / failed`. `render-plan.ts` warns on a stale `on_exists` and on a `natural_key` column that lacks `unique_value: true`.
+- **User-facing wording.** Semantius has no "natural key" concept; the user's decision is whether the identifying column is **unique** (`unique_value: true`). SKILL.md Stage 2 and schema-mapping.md section 4 now prescribe the exact question ("Mark `<field>` as unique so re-running this import skips rows that are already there?" — Unique (Recommended) / Not unique). `natural_key` stays as the internal `mapping.json` name for the field the script dedupes on and never appears in a question or plan; the plan line reads "unique key: …".
+- README: update mode moved from "Works today" to a new "Postponed" section with the re-enable prerequisite (batched upsert); the 1.1 update-mode design lives in git history.
+
 ## 1.4
 
 Bulk field creation: one `create_field` call instead of one per column.

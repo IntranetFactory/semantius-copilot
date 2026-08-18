@@ -116,7 +116,7 @@ If the request is ambiguous, ask one clarifying question via `AskUserQuestion`. 
 
 1. Derive the candidate slug from the named source (the URL/file's own filename: `it-ops-starter-semantic-blueprint.md` → `it-ops-starter`; `related_modules`/other metadata is not needed for this, just the filename stem).
 2. Run ONE targeted **exact-filename** existence check against the convention folders only — `test -f semantius/blueprints/<slug>-semantic-blueprint.md` / `semantius/specs/<slug>-semantic-spec.md`. **Exact filename, never a glob, never a substring/prefix/suffix match.** A file is either named `it-ops-starter-semantic-blueprint.md` and is the artifact, or it is named anything else (`v0-it-ops-starter-semantic-blueprint.md`, `it-ops-starter-v2-semantic-blueprint.md`, `my-it-ops-starter-semantic-blueprint.md`) and is **not a match** — full stop, it does not get read, opened, `cmp`'d, or mentioned. A blueprint's name is its filename; `*<slug>*` glob matching treats "contains the slug as a substring" as "is the artifact," which is exactly backwards — it pulls in prefixed/suffixed variants nobody named and burns a read-and-compare cycle on each one. If the exact-name file is absent, that's a miss: proceed to Step 2 (fetch the named URL) or build fresh, same as if the workspace were empty. Do not fall back to searching for "something close."
-3. Do **not** run the legacy root-level scan at all for a named-source request. Root-level legacy placement is a migration-era concern for artifacts nobody named explicitly; it has no bearing on a request that already says exactly what to fetch and deploy. If the user separately mentions a root-level file by name, that's a *named* source too and step 2's exact-filename check (pointed at root instead) covers it — still not a scan, still exact-match only.
+3. Do **not** run the workspace-root scan at all for a named-source request. Root-level placement is a concern for artifacts nobody named explicitly; it has no bearing on a request that already says exactly what to fetch and deploy. If the user separately mentions a root-level file by name, that's a *named* source too and step 2's exact-filename check (pointed at root instead) covers it — still not a scan, still exact-match only.
 
 **Only when the request does NOT name an explicit source** (status checks, "what's deployed", a bare "deploy this" with nothing else in the workspace to disambiguate, onboarding) does a general inventory make sense, because there IS something to discover — which artifact, if any, the vague request could mean:
 
@@ -124,7 +124,7 @@ If the request is ambiguous, ask one clarifying question via `AskUserQuestion`. 
 # Primary location (the convention): semantius/blueprints/ and semantius/specs/
 find semantius/blueprints semantius/specs -maxdepth 1 -name '*.md' 2>/dev/null
 
-# Legacy locations: blueprints/specs left at the workspace root by older runs.
+# Workspace-root locations: blueprints/specs sitting at the workspace root.
 # Still scope this to any slug hints the request text does contain (e.g. "the ATS
 # blueprint" → scope to *ats*), never a blanket `*-semantic-blueprint.md` glob —
 # that pulls every unrelated file at the repo root into consideration for zero
@@ -164,7 +164,7 @@ After 1.1, blueprints and specs are read wherever they live (convention folder o
 
 ### 1.2 Workspace summary
 
-A slug may live in the convention folder, at the repo root (legacy), or both; the skill reads it wherever it is and never moves it (per 1.1). When the same slug appears in both locations, prefer the convention-folder copy as a defensive fallback for the summary, unless the user picked the root copy via the 1.1 collision widget.
+A slug may live in the convention folder, at the repo root, or both; the skill reads it wherever it is and never moves it (per 1.1). When the same slug appears in both locations, prefer the convention-folder copy as a defensive fallback for the summary, unless the user picked the root copy via the 1.1 collision widget.
 
 For each candidate file, read **only the front-matter** (the first 30 lines is enough). Extract:
 
@@ -366,8 +366,8 @@ Decisions the user makes inside one item (cross-module collisions, host-master p
 Walk the deploy sources named in the request left-to-right (when invoked as a plugin command they arrive as the command arguments; standalone, read them from the user's message). Each source is one of:
 
 - `http(s)://...` URL: download via `curl -s -L` (never `WebFetch`). Land in `.tmp_admin/run-<id>/incoming/<derived-filename>.md` for validation; on success, move to the workspace artifact folder (`semantius/blueprints/<system_slug>-semantic-blueprint.md` or `semantius/specs/<system_slug>-semantic-spec.md`).
-- Local file path: accept both the convention folders (`semantius/blueprints/<file>`, `semantius/specs/<file>`) and bare workspace-root paths (legacy). A root-only artifact is **copied into the convention folder up front per Step 1.1's copy rule, before any sub-skill runs**, and the convention-folder copy becomes the resolved working path for the rest of the run; the root original is read once and then never edited. (copy, never move; never edit the root.)
-- Glob pattern: expand against the workspace. Sensible glob shapes include `semantius/blueprints/*.md`, `semantius/specs/*.md`, or `./*.md` for legacy roots. Order is whatever the shell returns; user can re-order by listing sources explicitly.
+- Local file path: accept both the convention folders (`semantius/blueprints/<file>`, `semantius/specs/<file>`) and bare workspace-root paths. A root-only artifact is **copied into the convention folder up front per Step 1.1's copy rule, before any sub-skill runs**, and the convention-folder copy becomes the resolved working path for the rest of the run; the root original is read once and then never edited. (copy, never move; never edit the root.)
+- Glob pattern: expand against the workspace. Sensible glob shapes include `semantius/blueprints/*.md`, `semantius/specs/*.md`, or `./*.md` for the workspace root. Order is whatever the shell returns; user can re-order by listing sources explicitly.
 
 Build a flat list of resolved file paths (validated, final locations). Validate each one:
 
@@ -579,7 +579,7 @@ The authoritative reference for how the admin and sub-skills share standing poli
 
 ### 7.1 Why every answer is policy
 
-The architect and analyst no longer ask the same question twice. Every Stage 3 / authoring-stage answer is written to `semantius/<org>/customizations.yaml` as standing policy *before* the spec or catalog change proceeds. Re-runs of the same blueprint, sibling blueprints that reference the same entity, and brand-new blueprints that share a concept all auto-resolve from this single file.
+The architect and analyst never ask the same question twice. Every Stage 3 / authoring-stage answer is written to `semantius/<org>/customizations.yaml` as standing policy *before* the spec or catalog change proceeds. Re-runs of the same blueprint, sibling blueprints that reference the same entity, and brand-new blueprints that share a concept all auto-resolve from this single file.
 
 There is no "just this run" alternative, no follow-up "remember it?" widget, no opt-out. Decisions are policy unconditionally. The customer's escape hatch is git: revert the line in `customizations.yaml`, re-deploy. Git is the audit log; the file itself carries provenance via trailing comments (`# decided <YYYY-MM-DD> during <blueprint_slug> deploy`).
 
@@ -663,7 +663,7 @@ After successful execution:
 After unsuccessful execution:
 
 - Surface the failing sub-skill's last message verbatim.
-- Suggest the recovery path from `three-skill-workflow-spec.md` § 6 (Failure Modes).
+- Suggest the recovery path from `../../docs/architecture.md` § 6 (Failure Modes).
 - Never try to "fix" the failure by chaining additional sub-skills.
 
 ---
@@ -705,7 +705,7 @@ This skill's own references (load on demand):
 - `./references/output-discipline.md` — per-run diagnostic-log mechanics
 - `./references/admin-operations.md` — Step 5 admin-op procedures (status / backup / list / health)
 - `./references/plan-shapes.md` — plan-line authoring rules, the four plan patterns, and worked examples
-- `./three-skill-workflow-spec.md` — full architecture spec, failure modes, debugging invariants (co-located in this skill folder)
+- `../../docs/architecture.md` — full architecture spec, failure modes, debugging invariants
 
 Sibling skills:
 

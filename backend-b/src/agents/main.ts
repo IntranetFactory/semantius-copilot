@@ -64,7 +64,8 @@ import * as v from 'valibot';
 import {
   drainWorkspaceTouched,
   markWorkspaceTouched,
-  persistWorkspaceBackup,
+  requestWorkspacePersist,
+  RESTORE_MARKER,
   restoreWorkspaceBackup,
   type BackupEnv,
   type BackupSandbox,
@@ -355,12 +356,14 @@ export function Main({ id }: AgentProps) {
     // Sidebar title (session record `title`): void, fire-and-forget — the
     // callback stays synchronous and the response is never delayed.
     maybeGenerateTitle(STORE, id, drainTitleTranscript(id), active, next.responses_count);
-    // Workspace backup (fire-and-forget, same posture): only when THIS
-    // submission actually touched the container — chat-only turns never boot
-    // one just to archive it. persistWorkspaceBackup never throws; the catch
-    // is belt-and-braces.
+    // Workspace backup (fire-and-forget, same posture): the turn-end sweep,
+    // only when THIS submission actually touched the container — chat-only
+    // turns never boot one just to archive it. Per-mutation persists already
+    // ran during the turn (lazy env onMutation below); this one coalesces
+    // with any still in flight and catches whatever the last tool call left.
+    // Never throws; the catch is belt-and-braces.
     if (drainWorkspaceTouched(id)) {
-      persistWorkspaceBackup({ env: env as unknown as BackupEnv, namespace, sessionId: id }).catch(() => {});
+      requestWorkspacePersist({ env: env as unknown as BackupEnv, namespace, sessionId: id }).catch(() => {});
     }
     return {
       session_state: next,
@@ -409,6 +412,18 @@ export function Main({ id }: AgentProps) {
           () => cloudflareSandbox(getSandbox(namespace, sandboxNameForSession(id))).createSandbox(opts),
           loadBundle,
           provisionWorkspace,
+          {
+            // Mid-turn container reset (sleepAfter between slow tool calls,
+            // eviction, deploy): the marker restoreWorkspaceBackup arms on
+            // every provisioned container life is gone → provisionWorkspace
+            // runs again (restore + skills + env) before the op proceeds.
+            resetProbe: (inner) => inner.exists(RESTORE_MARKER),
+            // Every filesystem mutation is persisted: one coalesced squashfs
+            // per burst of tool calls (backups.ts requestWorkspacePersist).
+            onMutation: () => {
+              requestWorkspacePersist({ env: env as unknown as BackupEnv, namespace, sessionId: id }).catch(() => {});
+            },
+          },
         ),
       tools: sandboxToolsWithBashFloor,
     },

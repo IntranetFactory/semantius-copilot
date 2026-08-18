@@ -130,7 +130,8 @@ Seed scripts reuse the committed [`deploy-lib.ts`](./deploy-lib.ts) for the loud
 
 ```bash
 mkdir -p .tmp_deploy
-cp "${CLAUDE_PLUGIN_ROOT:-.claude/skills/semantius-modeler}/references/deploy-lib.ts" .tmp_deploy/deploy-lib.ts
+# <skill-folder> = the directory this skill's SKILL.md was read from (absolute path; works for plugin and workspace installs alike)
+cp "<skill-folder>/references/deploy-lib.ts" .tmp_deploy/deploy-lib.ts
 ```
 
 ```typescript

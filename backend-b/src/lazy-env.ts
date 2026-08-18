@@ -45,6 +45,20 @@
  * the first container-needing op after a container slept re-runs the
  * absent→write provisioning, exactly what useAgentStart used to do eagerly on
  * every message.
+ *
+ * Mid-submission resets (options.resetProbe): the container can be replaced
+ * UNDER a running turn — sleepAfter elapsing between two slow tool calls,
+ * eviction, a deploy. The SDK then boots a fresh disk transparently, and a
+ * memoized `provisioned` would let every later op run on it: no skills, no
+ * env, none of the files earlier tool calls wrote — and a persist of that
+ * blank disk would supersede the session's good backup. So once provisioned,
+ * every op that reaches the inner env first runs `resetProbe(inner)`; a
+ * `false` answer clears the memo and re-runs the full provision (restore +
+ * skills + env) before the op proceeds. One cheap RPC per container op.
+ *
+ * Mutations (options.onMutation): fired after every exec / writeFile / mkdir /
+ * rm settles (success OR failure — a failed exec may still have written), so
+ * the caller can persist the workspace after each filesystem mutation.
  */
 import type { FileStat, Sandbox } from '@flue/runtime';
 import { SKILLS_DIR } from '@semantius-copilot/core';
@@ -126,12 +140,25 @@ function buildView(bundle: SkillFilesBundle): Map<string, VNode> {
 const notFound = (op: string, path: string) =>
   new Error(`${op} failed for ${path}: No such file or directory`);
 
+export type LazySessionEnvOptions = {
+  /**
+   * "Is the container still the one we provisioned?" — checked before every
+   * op once provisioned; `false` re-runs provision first. Should be a single
+   * cheap RPC (a marker `exists`). A throwing probe is treated as "still
+   * live" so a flaky probe never blocks the op it guards.
+   */
+  resetProbe?: (inner: Sandbox) => Promise<boolean>;
+  /** Fired after every mutating op settles (exec / writeFile / mkdir / rm). */
+  onMutation?: (op: 'exec' | 'writeFile' | 'mkdir' | 'rm', detail: string) => void;
+};
+
 export function lazySessionEnv(
   cwd: string,
   /** Builds the real env — first use of this is the first sandbox-DO contact. */
   makeInner: () => Promise<Sandbox>,
   loadBundle: () => Promise<SkillFilesBundle>,
   provision: (bundle: SkillFilesBundle) => Promise<void>,
+  options: LazySessionEnvOptions = {},
 ): Sandbox {
   let provisioned = false;
   let provisioning: Promise<void> | undefined;
@@ -147,6 +174,45 @@ export function lazySessionEnv(
       throw err;
     });
     return innerPromise;
+  };
+
+  /**
+   * The inner env, verified live: after provisioning, run the reset probe;
+   * a reset clears the memo and re-provisions (single-flight via `ready`)
+   * before the op proceeds. Concurrent ops that all see the reset share the
+   * one re-provision, because `ready` memoizes `provisioning`.
+   */
+  const live = async (op: string, detail: string): Promise<Sandbox> => {
+    const env = await inner();
+    if (!provisioned) {
+      // A concurrent op already detected the reset and is re-provisioning:
+      // join it rather than run on the not-yet-restored disk.
+      await ready(op, detail);
+      return env;
+    }
+    if (options.resetProbe) {
+      let alive = true;
+      try {
+        alive = await options.resetProbe(env);
+      } catch (err) {
+        console.log(`lazy-env: reset probe failed, assuming live: ${String(err).slice(0, 200)}`);
+      }
+      if (!alive) {
+        console.log(`lazy-env: container reset detected before ${op}: ${detail.slice(0, 200)} — re-provisioning`);
+        provisioned = false;
+        provisioning = undefined;
+        await ready(op, `${detail} (after reset)`);
+      }
+    }
+    return env;
+  };
+
+  const mutated = (op: 'exec' | 'writeFile' | 'mkdir' | 'rm', detail: string) => {
+    try {
+      options.onMutation?.(op, detail);
+    } catch (err) {
+      console.log(`lazy-env: onMutation hook threw: ${String(err).slice(0, 200)}`);
+    }
   };
 
   const view = () => {
@@ -184,17 +250,17 @@ export function lazySessionEnv(
     resolvePath,
 
     async exists(path) {
-      if (provisioned) return (await inner()).exists(path);
+      if (provisioned) return (await live('exists', path)).exists(path);
       return (await view()).has(norm(path));
     },
     async readdir(path) {
-      if (provisioned) return (await inner()).readdir(path);
+      if (provisioned) return (await live('readdir', path)).readdir(path);
       const node = (await view()).get(norm(path));
       if (node?.kind !== 'dir') throw notFound('readdir', path);
       return [...node.children];
     },
     async stat(path) {
-      if (provisioned) return (await inner()).stat(path);
+      if (provisioned) return (await live('stat', path)).stat(path);
       const node = (await view()).get(norm(path));
       if (!node) throw notFound('stat', path);
       const isFile = node.kind === 'file';
@@ -212,8 +278,9 @@ export function lazySessionEnv(
         if (node?.kind === 'file') return node.content;
         if (node) throw new Error(`readFile failed for ${path}: is a directory`);
         await ready('readFile', path); // outside the bundled tree — genuinely needs the container
+        return (await inner()).readFile(path); // just provisioned: the probe would be redundant
       }
-      return (await inner()).readFile(path);
+      return (await live('readFile', path)).readFile(path);
     },
     async readFileBuffer(path) {
       if (!provisioned) {
@@ -221,25 +288,52 @@ export function lazySessionEnv(
         if (node?.kind === 'file') return new TextEncoder().encode(node.content);
         if (node) throw new Error(`readFile failed for ${path}: is a directory`);
         await ready('readFileBuffer', path);
+        return (await inner()).readFileBuffer(path);
       }
-      return (await inner()).readFileBuffer(path);
+      return (await live('readFileBuffer', path)).readFileBuffer(path);
     },
 
-    async exec(command, options) {
+    // Mutating ops: boot-or-verify, forward, then report the mutation whether
+    // the op succeeded or threw (a failed exec may still have written).
+    async exec(command, execOptions) {
+      const wasProvisioned = provisioned;
       await ready('exec', command);
-      return (await inner()).exec(command, options);
+      const env = wasProvisioned ? await live('exec', command) : await inner();
+      try {
+        return await env.exec(command, execOptions);
+      } finally {
+        mutated('exec', command);
+      }
     },
     async writeFile(path, content) {
+      const wasProvisioned = provisioned;
       await ready('writeFile', path);
-      return (await inner()).writeFile(path, content);
+      const env = wasProvisioned ? await live('writeFile', path) : await inner();
+      try {
+        return await env.writeFile(path, content);
+      } finally {
+        mutated('writeFile', path);
+      }
     },
-    async mkdir(path, options) {
+    async mkdir(path, mkdirOptions) {
+      const wasProvisioned = provisioned;
       await ready('mkdir', path);
-      return (await inner()).mkdir(path, options);
+      const env = wasProvisioned ? await live('mkdir', path) : await inner();
+      try {
+        return await env.mkdir(path, mkdirOptions);
+      } finally {
+        mutated('mkdir', path);
+      }
     },
-    async rm(path, options) {
+    async rm(path, rmOptions) {
+      const wasProvisioned = provisioned;
       await ready('rm', path);
-      return (await inner()).rm(path, options);
+      const env = wasProvisioned ? await live('rm', path) : await inner();
+      try {
+        return await env.rm(path, rmOptions);
+      } finally {
+        mutated('rm', path);
+      }
     },
   };
 }

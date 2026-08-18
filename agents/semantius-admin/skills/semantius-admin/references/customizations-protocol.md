@@ -24,7 +24,7 @@ Every Stage 3 / authoring-stage widget reads and writes one path in `$CUSTOMIZAT
 | Analyst Stage 3b.2 | Claim new owner module | `.collisions.<entity>.new_owner` | scalar (when outcome=claim) |
 | Analyst Stage 3b.2 sub | Shared-master manager scope | `.shared_master_managers` | scalar |
 | Analyst Stage 3c | Similar-name → reuse / rename | `.aliases.<incoming_slug>` | object (slug, singular_label, plural_label) |
-| Analyst Stage 3d | Missing-owner default | `.on_missing_owner` | scalar (`embed_locally` \| `skip`). Legacy `wait` entries are coerced to `embed_locally` at consult time. |
+| Analyst Stage 3d | Missing-owner default | `.on_missing_owner` | scalar (`embed_locally` \| `skip`). A `wait` value is read as `embed_locally`. |
 | Analyst Stage 3d sub | Slug-collision local naming | `.slug_collision_naming` | scalar (`context-prefix` \| `module-prefix` \| `reuse-existing`) |
 | Analyst Stage 3e | Cross-scope link target | `.links.<blueprint_slug>.<field_name>` | scalar |
 | Analyst Stage 3f.1 | Field-name drift | `.drift.field_name.<entity>.<field>` | scalar |

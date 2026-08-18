@@ -19,6 +19,24 @@
  *
  * Mounted for web/chat sessions only (main.ts) — GitHub-issue conversations
  * have no browser to answer, and an unmounted tool cannot be called.
+ *
+ * Batch caveat (why the description insists on "call it ALONE"): pi-agent-core
+ * ends the loop only when EVERY call in the model's tool batch carries
+ * `terminate` (`shouldTerminateToolBatch` — unanimity; flue mirrors the same
+ * predicate durably in `isTerminalTrailingToolBatch`). A sibling call in the
+ * same response (an `edit`, a `bash`, a hallucinated tool) cancels the pause:
+ * the model is handed another step before the user has answered. Seen live on
+ * 2026-08-17 (importer flow): `edit` + `AskUserQuestion` in one batch → loop
+ * continued → the model "called" the `user_answers` XML tag as a tool → error →
+ * "waiting…" text. Nothing was auto-submitted (the card derives its state from
+ * the answer signal alone), but the run looked broken. flue exposes no seam to
+ * fix this mechanically (`useModel` has no parallel-tool-calls knob; pi's
+ * `beforeToolCall`/`afterToolCall` are not wired), so the defense is the tool
+ * contract: the description forbids sibling calls and names `user_answers` as
+ * an input block, and the output carries a stop directive the model reads if
+ * the loop continues anyway. A stub `user_answers` tool was rejected — it would
+ * advertise the very name to avoid, and a model calling it INSTEAD of this tool
+ * would end the turn with no card shown.
  */
 import { defineTool } from '@flue/runtime';
 import * as v from 'valibot';
@@ -70,23 +88,39 @@ export const askUserQuestion = defineTool({
     'instead. Each question needs a short header (a few words, shown as a tab label), ' +
     '2-4 options with a label and a one-line description, and multiSelect true/false. ' +
     'The form automatically adds an "Other" free-text option — never add your own ' +
-    '"Other"/"None" option. Calling this tool ENDS your current response: do not repeat ' +
-    'the questions in text, do not call this tool more than once per response, and expect ' +
-    'no further output this turn. The answers arrive as your next input in a ' +
-    '<user_answers toolCallId="..."> block: its JSON body has "answers" mapping each ' +
-    'question text to the chosen label(s) (multi-select labels joined with ", "; a ' +
-    'free-form "Other" answer appears verbatim), and "cancelled": true when the user ' +
-    'dismissed the form — then continue without the answers and do not immediately ' +
-    're-ask. The user may also ignore the form and type a normal message instead; treat ' +
-    'that message as superseding the questions.',
+    '"Other"/"None" option. Calling this tool ENDS your response, and it MUST be the ONLY ' +
+    'tool call in that response: finish every edit, write, and command in an earlier step, ' +
+    'then call AskUserQuestion alone. Never combine it with any other tool call — a sibling ' +
+    'call cancels the pause and you will be handed another step before the user has ' +
+    'answered. Do not repeat the questions in text and do not call this tool more than once ' +
+    'per response. The answers arrive automatically as your next input, in a ' +
+    '<user_answers type="ask_user_question.answer" toolCallId="..."> block. That is an ' +
+    'input block, NOT a tool — there is no user_answers tool; never call one. Its JSON body ' +
+    'has "answers" mapping each question text to the chosen label(s) (multi-select labels ' +
+    'joined with ", "; a free-form "Other" answer appears verbatim), and "cancelled": true ' +
+    'when the user dismissed the form — then continue without the answers and do not ' +
+    'immediately re-ask. The user may also ignore the form and type a normal message ' +
+    'instead; treat that message as superseding the questions. If, in this same response, ' +
+    'you are handed another step before the user has replied (no <user_answers> block ' +
+    'carrying THIS call\'s toolCallId and no new user message yet — earlier rounds\' ' +
+    '<user_answers> blocks do not count): end the response immediately — no text, no tool ' +
+    'calls, do not repeat or re-ask the questions. When the answer or a typed message ' +
+    'arrives, respond normally.',
   input: askUserQuestionInput,
   run({ data }) {
     // The full question set is already in model context as the call arguments;
     // echo only the texts so the model can correlate the incoming answers.
+    // `instruction` is what the model reads if a sibling call kept the loop
+    // alive (see the batch caveat above); it is invisible to the frontend,
+    // which renders the card from `input` and never reads this output.
     return {
       output: {
         status: 'awaiting_user_response',
         questions: data.questions.map((q) => q.question),
+        instruction:
+          'Response paused for the user. If you are handed another step in this same response ' +
+          'before a <user_answers> block for THIS toolCallId (or a new user message) arrives, ' +
+          'end it now with no text and no tool calls. user_answers is an input block, not a tool.',
       },
       terminate: true,
     };

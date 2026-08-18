@@ -8,6 +8,14 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Unreleased: `AskUserQuestion` call mechanics
+
+Guidance only, no contract change, `CURRENT_VERSION` unchanged. The resident writing conventions in SKILL.md (mirroring `semantius-admin/references/writing-conventions.md`) gain an unnumbered "AskUserQuestion mechanics" paragraph (Conventions 1-10 stay as numbered): call the widget alone in its own response after edits and re-renders; answers arrive as a `<user_answers>` input block; there is no `user_answers` tool. `stage-2-naming.md` corrected: the answer arrives as a `<user_answers>` block mapping each question text to the chosen label, not as an answer ordinal like "A: 2". Motivated by a 2026-08-17 copilot run where `edit` + `AskUserQuestion` in one tool batch cancelled the pause.
+
+## Unreleased: historical / version-stamp narration removed from runtime files
+
+No behavior change. Removed "(formerly `label`)", the `2.x → 3.0` bump history on the `blueprint_version` bullet, "no longer …" phrasings, and the "legacy slug" parenthetical in `stage-2-naming.md` from the references; the rules those lines carried are stated present-tense. History lives here and in git only.
+
 ## Unreleased: catalog-surface elicitation moved to Stage 13; `description` / `license` become publish-only
 
 2026-07-23. Stage 1 asked the user for buyer-facing marketing copy (`tagline`, `description`), a `license`, and a `module_kind` before a single entity existed — yet the `hiring-starter` reference description literally enumerates the entity list ("postings, candidates, applications, interviews, and offers"), which cannot be written well before Stage 3, and `module_kind`'s defaults are defined by §3 role composition, which doesn't exist yet either. Separately, `description` and `license` are catalog-publication metadata that internal-only blueprints never need.

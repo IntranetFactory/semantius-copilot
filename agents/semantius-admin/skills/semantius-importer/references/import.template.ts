@@ -6,8 +6,10 @@
  * never edited per run. All run configuration comes from `./mapping.json`
  * (schema-mapping.md section 8) next to this script.
  *
- * One-shot; safe to re-run only with `natural_key` set in mapping.json
- * (otherwise re-running duplicates rows).
+ * INSERT-ONLY: existing rows are never modified (updating existing records
+ * from a re-import is postponed, see README -> Postponed). Safe to re-run
+ * only with `natural_key` set in mapping.json (the field marked unique):
+ * rows whose key already exists are skipped. Otherwise re-running duplicates rows.
  *
  * Run (inside the run folder): bun run import.ts <absolute-path-to-csv>
  */
@@ -48,7 +50,8 @@ type Mapping = {
   table: string;
   id_column?: string;
   natural_key?: string | null;
-  on_exists?: "insert" | "update";
+  // Legacy key from the (postponed) update mode. Anything but "insert" is rejected.
+  on_exists?: string;
   expected_records?: number | null;
   batch_size?: number;
   columns: ColumnSpec[];
@@ -60,12 +63,14 @@ const M: Mapping = JSON.parse(
 
 const TABLE = M.table;
 const BATCH_SIZE = M.batch_size ?? 250;
-// A mapped field name (unique via unique_value: true for update mode), or
-// null (plain insert; re-running duplicates rows).
+// The field the user chose to mark unique (unique_value: true), or null
+// (plain insert; re-running duplicates rows). Rows whose key value already
+// exists in the table are SKIPPED - never updated (update mode is postponed).
 const NATURAL_KEY: string | null = M.natural_key ?? null;
-// What happens to rows whose NATURAL_KEY already exists:
-// "insert" skips them, "update" synchronizes them (diff, then PATCH changed rows).
-const ON_EXISTS: "insert" | "update" = M.on_exists ?? "insert";
+if (M.on_exists !== undefined && M.on_exists !== "insert") {
+  console.error(`mapping.json: on_exists "${M.on_exists}" is not supported - this import is insert-only (updating existing records is postponed). Remove the key.`);
+  process.exit(4);
+}
 // The entity's primary key column, copied into mapping.json from the LIVE
 // entity's id_column property (read_entity; default "id", but customizable
 // per entity - never assume the literal "id" for existing targets). Stripped
@@ -144,41 +149,25 @@ function coerce(spec: ColumnSpec, raw: string | undefined): { ok: boolean; value
 
 // ------------------------------------------------------------------ main --
 const failed: { batchIndex: number; rowRange?: string; row?: unknown; error: string }[] = [];
-let parsed = 0, inserted = 0, updated = 0, unchanged = 0, skipped = 0, rowFailed = 0;
+let parsed = 0, inserted = 0, skipped = 0, rowFailed = 0;
 
-// key -> live row (mapped fields only). Insert mode only needs the keys;
-// update mode diffs CSV values against these to avoid pointless writes.
-const liveRows = new Map<string, Record<string, unknown>>();
+// Key values already present in the table; rows carrying one of them are skipped.
+const liveKeys = new Set<string>();
 if (NATURAL_KEY) {
-  const fields = [...new Set([NATURAL_KEY, ...MAPPING.map((m) => m.field_name)])].join(",");
   let offset = 0;
   for (;;) {
-    const res = await pgRequest({ method: "GET", path: `/${TABLE}?select=${fields}&order=${NATURAL_KEY}&limit=1000&offset=${offset}` });
-    if (res.code !== 0) { console.error(`natural-key preload failed:\n${res.stderr}`); process.exit(1); }
+    const res = await pgRequest({ method: "GET", path: `/${TABLE}?select=${NATURAL_KEY}&order=${NATURAL_KEY}&limit=1000&offset=${offset}` });
+    if (res.code !== 0) { console.error(`unique-key preload failed:\n${res.stderr}`); process.exit(1); }
     const page = JSON.parse(res.stdout) as Record<string, unknown>[];
-    for (const r of page) liveRows.set(String(r[NATURAL_KEY]), r);
+    for (const r of page) liveKeys.add(String(r[NATURAL_KEY]));
     if (page.length < 1000) break;
     offset += 1000;
   }
-  console.error(`natural key "${NATURAL_KEY}": ${liveRows.size} existing rows loaded (${ON_EXISTS} mode)`);
+  console.error(`unique key "${NATURAL_KEY}": ${liveKeys.size} existing values loaded (rows with these values will be skipped)`);
+} else {
+  console.error(`no unique key set: plain insert (re-running this import duplicates rows)`);
 }
 const preexisting = await serverCount();
-
-function sameValues(live: Record<string, unknown>, next: Record<string, unknown>): boolean {
-  return MAPPING.every((m) => {
-    const a = live[m.field_name] ?? null;
-    const b = next[m.field_name] ?? null;
-    return a === b || String(a) === String(b);
-  });
-}
-
-async function patchRow(key: string, row: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
-  const path = `/${TABLE}?${NATURAL_KEY}=eq.${encodeURIComponent(key)}`;
-  const res = await pgRequest({ method: "PATCH", path, body: row });
-  if (res.code === 0) return { ok: true };
-  if (res.code === 5) { console.error(`auth failure, aborting:\n${res.stderr}`); process.exit(5); }
-  return { ok: false, error: res.stderr || res.stdout };
-}
 
 const parser = createReadStream(CSV_PATH).pipe(
   parse({ columns: true, bom: true, skip_empty_lines: true }),
@@ -230,20 +219,8 @@ for await (const record of parser) {
       continue;
     }
     seenInFile.add(key);
-    const live = liveRows.get(key);
-    if (live) {
-      if (ON_EXISTS === "insert") { skipped += 1; continue; }
-      if (sameValues(live, out)) { unchanged += 1; continue; }
-      const res = await patchRow(key, out);
-      if (res.ok) {
-        updated += 1;
-        if (updated % 50 === 0) console.error(`updated ${updated} rows so far - ${parsed} parsed`);
-      } else {
-        rowFailed += 1;
-        failed.push({ batchIndex: -1, row: record, error: `PATCH failed: ${res.error}` });
-      }
-      continue;
-    }
+    // Insert-only: an existing key is skipped, never updated.
+    if (liveKeys.has(key)) { skipped += 1; continue; }
   }
   batch.push(out);
   if (batch.length >= BATCH_SIZE) await flush();
@@ -254,7 +231,7 @@ await flush();
 const finalCount = await serverCount();
 const expected = preexisting + inserted;
 const summary = {
-  table: TABLE, parsed, inserted, updated, unchanged, skipped, failed: rowFailed,
+  table: TABLE, parsed, inserted, skipped, failed: rowFailed,
   preexisting, finalCount, countMatches: finalCount === expected,
   expectedRecords: EXPECTED_RECORDS,
   recordCountMatches: EXPECTED_RECORDS === null || parsed === EXPECTED_RECORDS,

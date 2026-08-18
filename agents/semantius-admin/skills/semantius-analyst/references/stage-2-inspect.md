@@ -198,7 +198,7 @@ adopted_entity_index[<entity_slug>] = {
       precision, scale,                          // numeric precision / scale
       description, title,
       reference_table, reference_delete_mode,    // FK shape
-      width, searchable,                         // v5.4 UI columns
+      width, searchable,                         // UI columns
       input_type_rule,                           // JsonLogic object
       // live-usage signals, to grade risk (not compared, used to classify):
       live_records_using_field, live_distinct_enum_values_in_use,
@@ -210,7 +210,7 @@ adopted_entity_index[<entity_slug>] = {
 
 The index is the truth-source for Stage 3f drift detection. **Compare EVERY captured property (entity-level and field-level) live-vs-intended by name — the categories below are exhaustive, not illustrative. No property is exempt from the scan.** The first five categories have specialized handling (rename migration, live-record data risk, JsonLogic cascade); **every remaining scalar property falls to the generic resolver 3f.6, and every JsonLogic block to the rule-block resolver 3f.7** — so `description`, `default_value`, `precision`/`scale`, `title`, `unique_value`, `reference_delete_mode`, `view_permission`, the UI columns, and every `select_rule` / `computed_fields` / `validation_rules` / `input_type_rule` are validated, never silently kept. Compare:
 
-- **Field-name drift candidate**: the spec declares `<spec_field>` that doesn't exist live, AND there exists a live field with similar semantic role (same format family, same general purpose). Common case: the lifecycle state field — the spec always names it `workflow_state` (fixed; see Stage 4), but a legacy live entity may hold the same state under `status` / `state` / `lifecycle_state`. Both are conceptually "where in the lifecycle this record is." Flag as a 🛑 for Stage 3f resolution; because the deployer requires the canonical `workflow_state` name, that resolution is a rename/migration to `workflow_state`, not "keep the live name" (see 3f.1).
+- **Field-name drift candidate**: the spec declares `<spec_field>` that doesn't exist live, AND there exists a live field with similar semantic role (same format family, same general purpose). Common case: the lifecycle state field — the spec always names it `workflow_state` (fixed; see Stage 4), but a live entity may hold the same state under `status` / `state` / `lifecycle_state`. Both are conceptually "where in the lifecycle this record is." Flag as a 🛑 for Stage 3f resolution; because the deployer requires the canonical `workflow_state` name, that resolution is a rename/migration to `workflow_state`, not "keep the live name" (see 3f.1).
 - **Enum-value drift**: a live field's `enum_values` and the blueprint's `enum_values` differ in either direction (live has values the blueprint doesn't, or blueprint introduces values that re-classify live values). When `live_distinct_enum_values_in_use` includes any value the blueprint *drops*, this is high-risk drift. Flag for Stage 3f.
 - **Format drift**: blueprint declares a different `format` than live (e.g., live `text`, blueprint `string`). Cross-primitive changes (text → integer, text → date) are 🔴 blockers; same-primitive variations (text ↔ string ↔ multiline, integer ↔ int32 ↔ int64) are 🟡 warnings the modeler can auto-resolve.
 - **Required-ness drift**: blueprint requires a field the live entity has as optional, or vice versa. Often safe; flag for Stage 3f when the change would leave live records violating the new constraint.

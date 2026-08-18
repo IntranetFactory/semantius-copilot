@@ -72,6 +72,8 @@ The internal annotation values (`reuse-from`, `promote-to-master`, etc.) still g
 
 **Pre-emit check** (mandatory): before sending any chat message, before firing any `AskUserQuestion`, before printing any plan or verification summary, scan the assembled text for any banned token. Rewrite before sending.
 
+**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, and policy-file reads first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block**; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the deploy; they asked for a deployed module. Hard rules:
 
 - **Do not announce what you're about to do** before doing it. No *"Let me verify the reconciliation annotations..."*, no *"Let me check the live catalog..."*. Just do it.
@@ -182,7 +184,7 @@ This skill emits shell and Bun (TypeScript) helper scripts during a deploy (e.g.
 - Do **not** write to `$TMPDIR` / `/tmp/` / `$env:TEMP`. Those paths resolve differently between Git Bash and Windows-native runtimes, and the user cannot inspect them by path if a run fails.
 
 **Where they must not go:**
-- ❌ The skill folder (`.claude/skills/semantius-modeler/`). The skill folder is read-only at runtime; only the maintainer edits it. Never leak deploy scratch files here.
+- ❌ The skill folder (the directory this SKILL.md was read from). The skill folder is read-only at runtime; only the maintainer edits it. Never leak deploy scratch files here.
 - ❌ The user's working directory. Pollutes the project, surfaces in `git status`, and survives across sessions.
 - ❌ Any path under the model file's directory. Same reasons.
 
@@ -208,9 +210,9 @@ Cross-entity JsonLogic primitives (`set_record`, `let`, `throw_error`) are passe
 
 The history of the deployer's contract changes lives in [`CHANGELOG.md`](./CHANGELOG.md) — what each analyst-lockstep bump changed in the deployer's parser, stage numbering, and audit checks. That file is not loaded at runtime; the body of this SKILL.md is the **current contract**, the CHANGELOG is the **history**.
 
-- **Older major** (e.g. file is `"0.x"`, this skill expects `"1.x"`), the file was written by an older analyst version using a structure this deployer no longer understands. Tell the user to run the analyst skill; its archived-knowledge mode reads the older file and re-authors a current-major file from the same semantic content.
+- **Older major** (e.g. file is `"0.x"`, this skill expects `"1.x"`), the file was written by an older analyst version using a structure this deployer does not understand. Tell the user to run the analyst skill; its archived-knowledge mode reads the older file and re-authors a current-major file from the same semantic content.
 - **Newer major** (e.g. file is `"2.x"`, this skill expects `"1.x"`), the file was written by a newer analyst than this deployer knows about. Tell the user to update this deployer skill before retrying.
-- **Missing `version` key** (legacy, pre-versioning), treat as major `0`; same response as older-major above.
+- **Missing `version` key**: treat as major `0`; same response as older-major above.
 
 ## Your role: thin executor of a reconciled spec
 
