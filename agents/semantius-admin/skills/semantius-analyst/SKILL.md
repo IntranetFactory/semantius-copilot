@@ -49,7 +49,14 @@ The two always-on rules that govern every chat message are kept here verbatim (f
 
 **Pre-emit check** (mandatory): before sending any chat message or firing any `AskUserQuestion`, scan the assembled text for any banned token. Rewrite before sending.
 
-**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, and policy-file reads first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block**; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, policy-file reads, and task updates first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block** keyed by question text; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+
+**Task tracking** (resident summary; the rules are the canonical text in [`../semantius-admin/references/task-tracking.md`](../semantius-admin/references/task-tracking.md)). The analyst uses the harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`); the task list is rendered UI, not chat, so it does not count against narration restraint.
+
+- **Stage tasks.** At Step 0 (after the run context is read, standalone or under the admin), once the mode is known: `TaskList`, then `TaskCreate` the `Match ›` tasks from the Stage pipeline index below (subjects verbatim, `activeForm` = subject, all `pending`; reconcile mode creates four, the other modes one); the first goes `in_progress`. One `in_progress` at a time; `completed` when the stage's procedure ran; a halt (version rejection, drift refusal, user cancel) leaves the task `in_progress` with `halted: <verbatim message>`. Never a task for preflight, the use-semantius reads, or the pre-save checks.
+- **Ledger stages: access scope, 3a-3e, 3f, and Extend mode's re-run of the Stage 2/3 widgets for new entities.** Every widget in those stages is a `Q:` task (subject = `Q: ` + the exact question text; one task per question object; a multiSelect with more than four choices is several tasks "(1 of N)" with the same header; description = header, options, `Decides: <slugs>`, `Recorded in: <the yq path(s) from customizations-protocol.md 7.4>`). Sequence: enumerate every open widget of the stage first (E, after the policy consultation; a policy hit creates no task), batches of up to four question objects per `AskUserQuestion` call (B, re-consulting policy per pending task; A), then record every answer in `customizations.yaml` first and complete the task (R). `TaskList` clean of open `Q:` tasks is the precondition for the 3g plan render. **A MUST-FIRE widget is a `Q:` task that must reach `completed`; a widget that never became a task was silently skipped, which is the bug the MUST-FIRE rule forbids.**
+- **`Q:` templates** (fill placeholders, never reword): `Q: Which optional parts do you want to set up? (<i> of <N>)` (`(1 of 1)` omitted when one question suffices); `Q: Basic or advanced access control?`; `Q: <Plural Label> exists already as part of <Module Display Name>. Adopt it now?`; `Q: <Plural Label> also exists in <Module Display Name>. Use theirs, keep our own, or share one copy?`; `Q: <Plural Label> looks like <Other Plural Label> in <Module Display Name>. Same thing?`; `Q: <Module Display Name> is not set up yet. Wait for it, create the records here, or skip?`; `Q: <Plural Label>: keep the live <property>, or apply the design's?`. Where a stage file specifies a different question wording, that wording wins and becomes the subject; the point is that subject and question text are identical.
+- **Standalone (no ledger task, unchanged):** the 3g closing confirmation and its "Adjust the fields" / "Revise the plan" follow-ups (a "revise" sets the affected `Q:` tasks back to `pending` and re-enters the ledger instead of re-deriving), and every prose question in the Audit / Rebuild modes.
 
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the skill's internal work; they asked for a reconciled spec. Hard rules:
 
@@ -227,30 +234,32 @@ The reconcile flow runs Stage 1 through Stage 11. Each stage's detail is in a `r
 2. **Stages 5, 7, 9.5, 10 are no-ops under `access_scope: basic`** (see the resident "What basic authors" contract above).
 3. **Stage 8 + the Stage 11 pre-save gates are the join point**: they validate the output of Stages 5/6/7/9/10 and run before every write. They are **resident** (see "Verification gates" below), not in a reference.
 
-| Stage | Purpose | When it runs | `basic` short-circuit | Read first |
-|---|---|---|---|---|
-| 1. Parse | Parse the blueprint sections into an internal model | Start of every reconcile run | n/a | `references/stage-1-parse.md` |
-| Access scope | Resolve `basic` vs `full` (resolution order is resident above) | Right after Stage 2 | this decides it | `references/access-control-scope.md` |
-| 2. Inspect | Read the live catalog; classify every blueprint entity | After parse | n/a | `references/stage-2-inspect.md` |
-| 3 placement | Role-driven deterministic placement of every entity | After inspect | n/a | `references/stage-3-placement.md` |
-| 3a-3e collisions | Optional / collision / cross-link widgets (with the consultation protocol) | When a 🛑 or 🟡 fires | n/a | `references/stage-3-collisions.md` + `references/customizations-consultation.md` |
-| 3g confirm | Render the plan, confirm; orchestrates 3f then Stage 4 | After placement / collisions | n/a | `references/stage-3-confirm.md` |
-| 3f drift | Resolve adopted-entity drift | From 3g, when Stage 2h found drift | n/a | `references/stage-3f-drift.md` |
-| 4. Fields | Draft fields for owned entities | From 3g, before the render | n/a | `references/stage-4-fields.md` |
-| 5. Workflow perms | W3 / W4 / W4n / W5 workflow-permission scan | After fields | **emits nothing** | `references/stage-5-workflow-perms.md` |
-| 6. Input-type | Conditional input-type scan | After Stage 5 | n/a | `references/stage-6-input-type.md` |
-| 7. Select rule | Row-level read-access scan | After Stage 6 | **no select_rule** | `references/stage-7-select-rule.md` |
-| 8. Consistency gate | Holistic view / edit-rules cross-check | After 5/6/7/9/10 | n/a | **resident** (Verification gates) |
-| 9 + 9.5 Governance | Cross-tier FK validation + RACI / persona reconciliation | After Stage 8 inputs | **documentation-only, viewer + manager** | `references/stage-9-governance.md` |
-| 10. Rules | Computed fields + validation rules (families F1-F15) | After governance | **drop permission-gated rules** | `references/stage-10-rules.md` |
-| 11. Write | Frontmatter, section deltas, write the spec, close-out | After all stages pass | n/a | `references/stage-11-write.md` (pre-save gates resident) |
-| Modes B/C/D | Audit / Extend / Rebuild | Non-reconcile invocations | n/a | `references/modes-audit-extend-rebuild.md` |
+The Task column is the exact subject of the stage task (Task tracking, above); stages sharing a subject are one task, and the ledger stages are marked.
+
+| Stage | Purpose | When it runs | `basic` short-circuit | Task subject | Read first |
+|---|---|---|---|---|---|
+| 1. Parse | Parse the blueprint sections into an internal model | Start of every reconcile run | n/a | `Match › Look at the design and your live model` | `references/stage-1-parse.md` |
+| Access scope | Resolve `basic` vs `full` (resolution order is resident above); **ledger** | Right after Stage 2 | this decides it | (same task) | `references/access-control-scope.md` |
+| 2. Inspect | Read the live catalog; classify every blueprint entity | After parse | n/a | (same task) | `references/stage-2-inspect.md` |
+| 3 placement | Role-driven deterministic placement of every entity | After inspect | n/a | `Match › Settle reuse, naming, and optional parts` | `references/stage-3-placement.md` |
+| 3a-3e collisions | Optional / collision / cross-link widgets (with the consultation protocol); **ledger** | When a 🛑 or 🟡 fires | n/a | (same task) | `references/stage-3-collisions.md` + `references/customizations-consultation.md` |
+| 3f drift | Resolve adopted-entity drift; **ledger** | From 3g, when Stage 2h found drift | n/a | (same task) | `references/stage-3f-drift.md` |
+| 3g confirm | Render the plan, confirm; orchestrates 3f then Stage 4 | After placement / collisions | n/a | `Match › Draft the fields and confirm the plan` | `references/stage-3-confirm.md` |
+| 4. Fields | Draft fields for owned entities | From 3g, before the render | n/a | (same task) | `references/stage-4-fields.md` |
+| 5. Workflow perms | W3 / W4 / W4n / W5 workflow-permission scan | After fields | **emits nothing** | (same task) | `references/stage-5-workflow-perms.md` |
+| 6. Input-type | Conditional input-type scan | After Stage 5 | n/a | (same task) | `references/stage-6-input-type.md` |
+| 7. Select rule | Row-level read-access scan | After Stage 6 | **no select_rule** | (same task) | `references/stage-7-select-rule.md` |
+| 8. Consistency gate | Holistic view / edit-rules cross-check | After 5/6/7/9/10 | n/a | (same task) | **resident** (Verification gates) |
+| 9 + 9.5 Governance | Cross-tier FK validation + RACI / persona reconciliation | After Stage 8 inputs | **documentation-only, viewer + manager** | (same task) | `references/stage-9-governance.md` |
+| 10. Rules | Computed fields + validation rules (families F1-F15) | After governance | **drop permission-gated rules** | (same task) | `references/stage-10-rules.md` |
+| 11. Write | Frontmatter, section deltas, write the spec, close-out | After all stages pass | n/a | `Match › Write the file and double-check it` | `references/stage-11-write.md` (pre-save gates resident) |
+| Modes B/C/D | Audit / Extend / Rebuild | Non-reconcile invocations | n/a | `Match › Review the file` / `Match › Extend the design` (its Stage 2/3 re-run is a **ledger** stage) / `Match › Rebuild the file` | `references/modes-audit-extend-rebuild.md` |
 
 ---
 
 ## Stage 3: Drive reconciliation decisions
 
-Before any field elicitation, surface every 🛑 ambiguity and every 🟡 optional to the user via `AskUserQuestion`. No field work happens until every decision is recorded.
+Before any field elicitation, surface every 🛑 ambiguity and every 🟡 optional to the user via `AskUserQuestion`, through the question ledger (Task tracking, above): every widget is enumerated as a `Q:` task first, asked in batches of up to four per call, and completed only after its answer is written to `customizations.yaml`. No field work happens until every decision is recorded, which is checkable: `TaskList` shows no `Q:` task pending or in progress.
 
 > **Reminder:** every `AskUserQuestion` in this stage must follow Writing Convention 8 (plain language). Use Singular/Plural Labels, never raw `table_name`. Use module display names when known, never internal annotation values. Map the user's choice to an internal annotation *after* they pick.
 
@@ -264,7 +273,7 @@ In particular:
 - **3f.1 / 3f.2 / 3f.3 / 3f.4 (drift widgets)**: even when option 1 ("keep live state, align spec to it") is the safe and obvious default, the widget MUST fire so the user knows drift was detected. Silently rewriting the spec to align to live state is a Convention 8 *violation* — the spec is the user's design, and changing field names / enum values / permission tiers behind their back is exactly the kind of "silent self-correction" Convention 8 forbids in its Narration restraint section ("Do not narrate self-corrections mid-flight; fix them silently" applies to *implementation* corrections, not *spec content* corrections).
 - **Pre-fill the recommended option, then fire the widget** — that's the correct pattern. The user clicks "Yes" once per widget; they did not lose conversation context; they have explicit awareness of every adjustment to their design.
 
-If you find yourself reasoning *"the user is going to pick option 1, so I'll just do it and move on,"* that's the bug. Fire the widget anyway.
+If you find yourself reasoning *"the user is going to pick option 1, so I'll just do it and move on,"* that's the bug. Fire the widget anyway. The mechanical form of this rule: every MUST-FIRE widget is a `Q:` task, and the stage does not end while any `Q:` task is pending or in progress; a decision that never became a task was skipped.
 
 ---
 

@@ -39,6 +39,8 @@ When extending: prefer fewer, broader keys. The whole point is to deduplicate; o
 
 Before any `AskUserQuestion` call site that maps to a row above, the sub-skill consults `$CUSTOMIZATIONS_FILE`. After a cache miss, it writes the answer back atomically with a provenance comment, BEFORE proceeding with the spec / catalog change.
 
+**With the question ledger** ([`task-tracking.md`](./task-tracking.md), Pattern B): the lookup below runs twice, at **E** (a policy hit means no `Q:` task is created) and again at **B** for every still-pending `Q:` task (an earlier batch or an earlier item may have written the entry since; a hit sets the task `completed` with `Answer: policy` and narrates the one cache-hit line). Step 3 (the write) happens at **R**, before the `TaskUpdate` that completes the task; the yq path is the task description's `Recorded in:` value. When one `Q:` task decides several items (a multiSelect of optional entities), write one entry per item, including the negative verdicts the registry records.
+
 ```bash
 # Inputs: $CUSTOMIZATIONS_FILE (path), $DECISION_PATH (yq path from 7.4),
 #         $BLUEPRINT_SLUG (the current blueprint's system_slug)

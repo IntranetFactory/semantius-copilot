@@ -92,6 +92,8 @@ Source of truth for this contract: `semantius-cli/src/local-tools/csv-schema.d.t
 
 ## 2. Format mapping
 
+> **Ledger note (sections 2-7).** Every user question these sections describe (a format override, an ambiguous enum, the unique-key question, the reserved-column collisions, an FK candidate, the label column, a zero-for-empty or enum-empty rule) is a `Q:` ledger task in the Stage 2 review loop: enumerated all at once, asked in batches of up to four, and completed only after the answer is in `mapping.json`. Templates and sequence: SKILL.md writing convention 7 and `../../semantius-admin/references/task-tracking.md`. Nothing here is asked outside that loop.
+
 The vocabulary is aligned, so most formats pass straight into `create_field`:
 
 | csvschema `format` | Semantius `format` | Extras on `create_field` | Script coercion (section 7 for empties) |

@@ -22,12 +22,13 @@ These rules apply to chat output, spec markdown files, audit reports, and anythi
 
 **8. Plain language in every user-facing surface.** Anything the user reads — `AskUserQuestion` widgets (question, header, option labels, option descriptions), chat status updates, progress narration, plan summaries, peek-and-verify reports, close-out messages — is written for someone who has never opened a spec file and doesn't know the blueprint vocabulary. The user is a domain expert (HR director, ATS administrator, operations lead), not a data modeler.
 
-This convention covers **two surfaces** equally:
+This convention covers **three surfaces** equally:
 
 - **Surface A: `AskUserQuestion` fields** — question, header, option labels, option descriptions.
 - **Surface B: every other thing the user sees in chat** — status updates ("Let me read the existing entities..."), progress reports ("Skill Profiles already exists in another module..."), plan summaries, the closing message after a write.
+- **Surface C: task subjects and `activeForm`** (the harness task list; see [`task-tracking.md`](./task-tracking.md)). Task *descriptions* are working memory and may carry internal keys; subjects may not.
 
-Both surfaces follow the same ban list and the same "required" list below.
+All three surfaces follow the same ban list and the same "required" list below.
 
 **Banned in any user-facing surface:**
 
@@ -62,7 +63,7 @@ The internal annotation value (`reuse-from <X>.<Y>`, `promote-to-master <host>.<
 
 **Pre-emit check** (mandatory): before sending any chat message or firing any `AskUserQuestion`, scan the assembled text for any banned token. Rewrite before sending.
 
-**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, and policy-file reads first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block**; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
+**AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, policy-file reads, and task updates first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response (an edit, a Bash call, a `TaskUpdate`) cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block** keyed by the question text; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description. Inside a skill's declared ledger stages, every question is a `Q:` task whose subject is the exact question text, asked in batches of up to four and recorded per the response sequence in [`task-tracking.md`](./task-tracking.md); standalone questions elsewhere are unchanged.
 
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the skill's internal work; they asked for a reconciled spec. Hard rules:
 

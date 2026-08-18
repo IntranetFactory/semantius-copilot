@@ -85,7 +85,7 @@ When the user wants to add entities, fields, rules, or §6 link rows to an exist
 
 1. Read the current spec. Note its `version` (must be `"5.4"` major; older → Mode D Rebuild first).
 2. Capture what to add (entity / field / rule) via conversation.
-3. **If adding entities**, re-run Stage 2 reconciliation against the live catalog for the new entities only. Same collision detection, same widgets.
+3. **If adding entities**, re-run Stage 2 reconciliation against the live catalog for the new entities only. Same collision detection, same widgets, same ledger: the widgets are `Q:` tasks under the `Match › Extend the design` stage task, and step 4 starts only when `TaskList` shows none pending or in progress.
 4. **If adding fields to an existing owned entity**, apply Stage 4 field elicitation for the new fields. Then re-run Stages 5-10 (scans, consistency gate) on the affected entity.
 5. **If adding rules**, draft the JsonLogic; run the Stage 8 consistency gate.
 6. Stamp `version: "5.4"` (no bump unless skill version bumped).

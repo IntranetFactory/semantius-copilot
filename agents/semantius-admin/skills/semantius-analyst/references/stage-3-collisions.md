@@ -2,6 +2,8 @@
 
 *Reference for `semantius-analyst`. Each widget's "Policy path:" line depends on the protocol in [`customizations-consultation.md`](customizations-consultation.md); read it alongside.*
 
+> **Ledger stage.** Every widget in 3a-3e is a `Q:` task (SKILL.md → Task tracking; sequence in `../../semantius-admin/references/task-tracking.md`): after the policy consultation, enumerate every widget that must fire into `Q:` tasks (subject = `Q: ` + the widget's exact question text; description carries the widget's Policy path as `Recorded in:`), ask them in batches of up to four question objects per `AskUserQuestion` call, write each answer to `customizations.yaml` first, then complete its task. 3b.0 adoption widgets and any widget whose text says "fire a single AskUserQuestion" are still one question object each; they may share a call. The stage is complete only when `TaskList` shows no `Q:` task pending or in progress; that check is what makes the MUST-FIRE rule verifiable.
+
 ### 3a. Optional concepts
 
 **Policy path:** `.optionals_decided.<slug>` (per-slug verdict, `included` or `excluded`). Both directions are recorded; 2c.5 has already filtered the entity list to un-decided slugs only. This widget fires only when at least one un-decided optional remains.
@@ -18,10 +20,10 @@ Blueprint §3 entries with `necessity = optional` are offered to the user as mul
 **The 4-option cap (mandatory).** `AskUserQuestion` allows at most **4 options per question**. Most modules have ≤4 optionals and fit one multiSelect question. When **more than 4** optional entities remain un-decided:
 
 - **Never merge two entities into one combined option** to fit the cap. The user must be able to include one without the other; a `"Issues + Service Requests"` mega-option silently forces an all-or-nothing choice and corrupts the per-slug `.optionals_decided` record.
-- **Split** the optionals across several multiSelect questions of ≤4 options each, **all carrying the same `"Optional parts"` header**, and send them together in **one** `AskUserQuestion` call (a single call holds up to 4 questions → up to 16 optionals). With more than 16 un-decided optionals, fire successive `AskUserQuestion` calls until all are covered.
-- **Keep this in its own `AskUserQuestion` call.** Do not fold the optional-parts question(s) into the access-control question (Stage 2c) or any other decision. Batching unrelated questions makes every chip inherit the first question's header (the access-control question's `"Access control"` chip would then mislabel the optional-parts question).
+- **Split** the optionals across several multiSelect questions of ≤4 options each, **all carrying the same `"Optional parts"` header**, each its own `Q:` ledger task with subject `Q: Which optional parts do you want to set up? (<i> of <N>)` (SKILL.md → Task tracking). The ledger batches up to four question objects per `AskUserQuestion` call and keeps asking until `TaskList` shows none pending; no optional is left un-asked because each chunk is a task that must reach `completed`.
+- Optional-parts questions may share a call with other Stage 3 `Q:` tasks (each question carries its own header chip); the ledger's id order decides the batch.
 
-Entities the user does NOT select get the internal annotation `dropped (optional, user declined)` on the spec entry and are skipped from all later stages. Selected entities proceed to bucket classification.
+Entities the user does NOT select get the internal annotation `dropped (optional, user declined)` on the spec entry and are skipped from all later stages; at record time (R) write one `.optionals_decided.<slug>` entry per option in the question, `included` or `excluded`, before completing the task. Selected entities proceed to bucket classification.
 
 Example option (for Career Aspirations):
 - Label: `"Career Aspirations"`

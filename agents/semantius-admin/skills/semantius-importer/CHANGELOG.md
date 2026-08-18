@@ -2,6 +2,10 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## Unreleased: task tracking and the question ledger
+
+Guidance only, no contract change (2026-08-18). The importer now uses the harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`; canonical rules in `../semantius-admin/references/task-tracking.md`): new writing convention 7; the Workflow table gains a Task subject column (five `Import ›` stage tasks, created at Step 0 for the operating mode) and `TaskList` as a mandatory command of Stages 2-4; Stages 2, 3, and 4 are ledger stages: every open decision becomes a `Q:` task before the first widget (subject = the exact question text, from a fixed template list), questions are asked in batches of up to four per `AskUserQuestion` call, and a task is completed only after its answer is in `mapping.json`; the pre-write gate and the diff report require `TaskList` clean of open `Q:` tasks. Standalone (unchanged): the mode question, the previous-run-folder question, the pre-write gate. Motivated by the 4-questions-per-call cap: reviews with more open decisions than that had no durable record of what was still unasked. `schema-mapping.md` §2 carries a one-paragraph pointer.
+
 ## Unreleased
 
 `AskUserQuestion` mechanics (guidance only, no contract change): call the widget alone in its own response after mapping edits and re-renders; answers arrive as a `<user_answers>` input block; there is no `user_answers` tool. New writing convention 6, plus sequencing sentences in the Stage 2 review loop and the Stage 4 pre-write gate. Motivated by a 2026-08-17 copilot run where `edit` + `AskUserQuestion` in one tool batch cancelled the pause.

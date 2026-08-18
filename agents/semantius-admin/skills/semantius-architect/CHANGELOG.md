@@ -8,6 +8,10 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Unreleased: task tracking and the question ledger
+
+Guidance only, no contract change, `CURRENT_VERSION` unchanged (2026-08-18). The architect now uses the harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`; canonical rules in `../semantius-admin/references/task-tracking.md`): a resident "Task tracking" paragraph in SKILL.md with a per-mode table of `Design ›` stage tasks (four for Create-Greenfield, two for Catalog-Clone, one for Audit / Extend / Customize / Rebuild); the Mode A stage table gains a Task subject column; the Customize task stays `in_progress` for the whole C2 → C5 loop and is completed only when the user answers the C5 question with "done", which is the status the admin now reads at its customize gate (`modes-audit-extend-rebuild.md` C1 and C5). Stage 2's naming-style question is the one ledger question (`stage-2-naming.md`); every other architect question stays a standalone prose or widget question. Files: SKILL.md, `stage-2-naming.md`, `modes-audit-extend-rebuild.md`.
+
 ## Unreleased: `AskUserQuestion` call mechanics
 
 Guidance only, no contract change, `CURRENT_VERSION` unchanged. The resident writing conventions in SKILL.md (mirroring `semantius-admin/references/writing-conventions.md`) gain an unnumbered "AskUserQuestion mechanics" paragraph (Conventions 1-10 stay as numbered): call the widget alone in its own response after edits and re-renders; answers arrive as a `<user_answers>` input block; there is no `user_answers` tool. `stage-2-naming.md` corrected: the answer arrives as a `<user_answers>` block mapping each question text to the chosen label, not as an answer ordinal like "A: 2". Motivated by a 2026-08-17 copilot run where `edit` + `AskUserQuestion` in one tool batch cancelled the pause.

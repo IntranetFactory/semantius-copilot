@@ -129,7 +129,7 @@ Any row → **default Full** (stay consistent with the modules already using ful
 
 ### The prompt (only at resolution step 3)
 
-`AskUserQuestion`, header `Access control`, the Recommended option leading per the detection (Basic on a fresh instance, Full on one already using RBAC). Plain language, no `access_scope` token, US spelling, no em-dashes:
+A `Q:` ledger task (SKILL.md → Task tracking; subject `Q: Basic or advanced access control?`, `Recorded in: modules.access_scope via Stage 4a`), asked per the ledger sequence, batched with any Stage 3 `Q:` tasks that are already enumerated. `AskUserQuestion` header `Access control`, the Recommended option leading per the detection (Basic on a fresh instance, Full on one already using RBAC). Plain language, no `access_scope` token, US spelling, no em-dashes:
 
 - label `Basic access (read and edit)` — *"Anyone allowed in can read and edit records. No roles to manage, no approval steps, no per-stage gating. The records and their stages still exist; moving a record through its stages just isn't restricted. You can add advanced access control later."*
 - label `Advanced access control` — *"An admin tier, role-based permissions, approval gates on sensitive actions, and per-stage gating of record lifecycles. More to set up, fine-grained control over who can do what."*

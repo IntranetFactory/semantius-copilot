@@ -2,6 +2,8 @@
 
 *Reference for `semantius-analyst`. Invoked from the 3g step (see [`stage-3-confirm.md`](stage-3-confirm.md)). Its "Policy path:" lines depend on [`customizations-consultation.md`](customizations-consultation.md).*
 
+> **Ledger stage.** Every 3f widget (one per drifted property, per entity) is a `Q:` task (SKILL.md → Task tracking; template `Q: <Plural Label>: keep the live <property>, or apply the design's?`, or the widget's own question text where this file specifies one). Enumerate all of them when 3f starts, ask in batches of up to four per `AskUserQuestion` call, record each answer at its Policy path before completing the task, and return to 3g only when `TaskList` shows no `Q:` task pending or in progress. Informational widgets (3f.4 same-primitive) are still tasks; a blocker surfaced as a §7.1 entry with no widget is not.
+
 ### 3f. Adopted-entity drift resolution (run from the 3g confirmation step, before field drafting)
 
 **Fires when** a per-entity comparison surfaced any drift between the live entity and the **intended** definition, on ANY property: field-name (3f.1), enum-value (3f.2), permission-tier (3f.3), format/required-ness (3f.4), every other scalar property (3f.6), and every JsonLogic rule block (3f.7). The scan is property-exhaustive (see 2h) — no property is skipped. One widget fires per drift kind per affected entity. Resolution is recorded as either an annotation that the analyst applies to the spec being drafted, or as a 🔴 §7.1 blocker that the user must accept before the spec is written.

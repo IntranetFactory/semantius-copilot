@@ -51,7 +51,7 @@ The goal is to evolve the model without breaking what's already there. Existing 
 
 ### Step C1: Read and summarize the current model
 
-Read the file. Present a compact summary to orient the user:
+The mode's stage task already exists from Step 0 (`Design › Extend the design`, or `Design › Edit the design with you` when the mode is Customize; SKILL.md → Task tracking) and is `in_progress`; it stays so through the whole loop. Read the file. Present a compact summary to orient the user:
 
 > **Current model: `{system_name}`** (`{naming_mode}`, {N} entities)
 >
@@ -110,7 +110,7 @@ Update the file in place:
 > **🛑 MUST-FIRE gate — the customize pass is a loop and only the user ends it.** After the file is written and the one-line change summary is announced, the customize pass is **NOT over**. Immediately return to the user and ask, in plain language, whether they want another change or are done — e.g. *"Done, <change> is in. Anything else to adjust, or are you ready to move on?"*
 
 - If the user names another change → go back to **Step C2** and repeat the full C2 → C3 (confirm) → C4 (write) → C5 (ask) loop for it. There is no limit on the number of passes.
-- If the user explicitly signals completion ("done", "deploy", "that's all", "proceed", "nothing else") → only THEN return control to the caller.
+- If the user explicitly signals completion ("done", "deploy", "that's all", "proceed", "nothing else") → only THEN `TaskList`, set the `Design › Edit the design with you` task `completed`, and return control to the caller. That status is the signal the admin reads before it advances (its 6.7 customize gate); while the task is `in_progress` the pass is open. Never complete it earlier.
 
 **Never** treat the first change as the end of the customize pass, and **never** let the deploy pipeline (matching / deploy) advance while the user might still have changes. **When this skill is run by the admin orchestrator, the admin advances to the next pipeline step the instant this skill returns** — so returning early after a single edit is exactly what silently launches matching and deployment behind the user's back. Hold control here until the user's explicit "I'm done". This gate exists because that silent auto-advance is a real failure this loop is designed to prevent.
 
