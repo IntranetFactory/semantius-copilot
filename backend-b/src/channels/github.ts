@@ -167,7 +167,10 @@ export function commentOnIssue(ref: GitHubIssueRef) {
         issue_number: ref.issueNumber,
         body: `${body}\n\n${AGENT_MARKER}`,
       });
-      return { commentId: result.data.id, url: result.data.html_url };
+      // Envelope, not the value: Flue 2.0.3 rejects a plain-object return whose
+      // keys are not `output`/`terminate` ("unexpected key"), so a bare
+      // `{ commentId, url }` fails the call after the comment was posted.
+      return { output: { commentId: result.data.id, url: result.data.html_url } };
     },
   });
 }

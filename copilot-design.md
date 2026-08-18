@@ -535,3 +535,73 @@ comparison by driving the deterministic core directly. Grouped by the five contr
   dispatch, and whether per-tenant *containers* are supported there is an open question to validate with
   Cloudflare, not assume. Keep per-tenant variation in the injected skill **data**; keep base images a
   small fixed set.
+
+## 17. Task tracking (TaskCreate / TaskUpdate / TaskList / TaskGet)
+
+**Goal.** Give every agent a durable checklist for multi-step work and give the UI a structured
+progress signal. Without it, a plan lives only in the model's context — gone at compaction, at a
+paused turn (AskUserQuestion), at a container reset or a session restart — and the chat can only
+show "Working…". Two requirements: (1) the list lives on the file system, as JSON, in the
+session's workspace, so a restart/crash/pause never loses it; (2) every change is an explicit,
+structured tool call, so a UI can render an active checklist and a progress bar from the
+tool_use stream instead of scraping prose.
+
+**Contract = Claude Code's Task tools, verbatim.** Claude Code replaced `TodoWrite` (one call
+rewriting the whole list) with four tools — `TaskCreate` (`{subject, description, activeForm?,
+metadata?}` → `{task:{id, subject}}`), `TaskUpdate` (`{taskId, status?, subject?, description?,
+activeForm?, owner?, metadata?, addBlocks?, addBlockedBy?}` → `{success, taskId, updatedFields,
+error?, statusChange?}`; `status:"deleted"` removes), `TaskList` (`{}` → `{tasks:[{id, subject,
+status, owner?, blockedBy}]}`) and `TaskGet` (`{taskId}` → `{task:{…}|null}`). We ship exactly
+those names, schemas and result shapes (extracted from the Claude Code 2.1.92 bundle, incl. the
+semantics: sequential string ids from a high-watermark that never reuses a deleted id, two-sided
+`blocks`/`blockedBy`, metadata merge with `null` deleting a key, `updatedFields` only on change,
+`TaskList` hiding `metadata._internal` and listing only still-open blockers) so any UI wrapper
+written for Claude Code's stream renders ours unchanged. `TodoWrite` is deliberately absent. The
+always-present Flue built-in `task` tool (subagent delegation) is unrelated; the descriptions say
+so. Descriptions are condensed from Claude Code's prompts and ride every request of every agent —
+kept tight on purpose. A static instructions paragraph (`TASK_TRACKING_INSTRUCTIONS`, appended on
+every channel, literal text so the cached prefix stays byte-identical) is the usage nudge Claude
+Code delivers through periodic reminders.
+
+**Storage: one index document, `/workspace/.tasks/tasks.json`** (`{version, highwatermark,
+tasks[]}`, pretty-printed). Not Claude Code's one-file-per-task layout, for a reason specific to
+this backend: the lazy sandbox wrapper (§15 successor, `lazy-env.ts`) answers
+`exists`/`readdir`/`stat` outside the skills tree from the KV bundle view — "not there" — until the
+container is provisioned; only `readFile`, `exec` and writes boot + restore. A `readdir` of a task
+directory at the start of a submission would therefore report zero tasks without ever restoring
+the backup. One `readFile` boots, restores, then reads (and any read failure is disambiguated
+with a now-live `exists`, so a real failure is never mistaken for "no tasks"). It also costs 1
+RPC per read and 2 per write instead of N+1. Location rules: not under `.agents` (excluded from
+archives) and not at the workspace top level (user-downloadable). Persistence needs no code of
+its own — the tools reach the sandbox via `harness.sandbox`, which is the very lazy env
+`useSandbox` created, so each write fires `onMutation → requestWorkspacePersist` (§ Workspace
+backup) and the file comes back with the next restore. Corrupt content (a squashfs taken
+mid-write) is set aside as `tasks.json.corrupt-<iso>` and the list restarts empty rather than
+wedging the tools.
+
+**Concurrency.** Flue executes a tool batch in parallel; a model creating three tasks in one
+message would race the read-modify-write and mint duplicate ids. `defineTool` exposes no
+sequential-execution flag, so every task op runs under a per-session promise-chain mutex (one
+conversation = one Durable Object = one isolate; pi starts the parallel executions in call order,
+so ids come out in message order). The pure semantics live in `task-store.ts` (no I/O) and the
+I/O + mutex in `tasks.ts`, so the contract is unit-testable without a sandbox.
+
+**UI.** The chat surface folds the conversation's settled task tool parts (`task-fold.ts`:
+TaskCreate results and TaskUpdate inputs accumulate into a map keyed by id; TaskList/TaskGet
+results merge and prune — the docs-recommended consumption pattern) into a checklist + progress
+bar pinned above the composer (`task-progress.tsx`). Durable truth is history, so a reload, the
+key-flip remount or model-context compaction re-derive the same panel; failed calls
+(`output-error`, `success:false`) never phantom-update it. No answer channel is needed — unlike
+AskUserQuestion these tools are fire-and-forget. Individual calls stay collapsed in the tool-call
+group.
+
+**Mounting.** All agents, all channels (GitHub-issue conversations have session records too, so
+their file persists the same way); no per-agent flag — the tools are opt-in by the model, and an
+agent that never plans multi-step work never pays more than the four schemas.
+
+**Acceptance.** Offline: `scripts/tasks.test.mjs` (in `pnpm test`) drives the store through the
+reference semantics and the fold through a synthetic conversation, plus a parity check that
+folding the events the store emitted reproduces the store's own list. Live:
+`scripts/task-tools-probe.mjs` — three creates in one turn get ids 1..3 (mutex), updates report
+`statusChange`, `TaskList` reflects them, the session record gains a `session_backup`, and a
+second submission lists the same state and `TaskGet`s a full record.

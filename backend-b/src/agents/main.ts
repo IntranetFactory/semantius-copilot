@@ -73,6 +73,7 @@ import {
 import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '../channels/github';
 import { lazySessionEnv } from '../lazy-env';
 import { askUserQuestion } from '../tools/ask-user-question';
+import { taskTools, TASKS_FILE } from '../tools/tasks';
 import { agentModelSpecifier } from '../llm';
 import { drainTitleTranscript, maybeGenerateTitle } from '../title';
 import { drainLlmCalls } from '../usage';
@@ -273,6 +274,25 @@ Write the literal placeholder {sessionId} — the chat client replaces it with
 the real session id. Percent-encode spaces and parentheses in the file-name
 segment (e.g. report (1).pdf -> report%20%281%29.pdf). Files inside
 subdirectories cannot be linked — copy them to the top level first.`;
+
+/**
+ * Appended to EVERY channel's system prompt (design §17): the task tools are
+ * mounted on all channels, and the nudge is what makes a model actually reach
+ * for them (Claude Code drives usage with periodic reminders; we have one
+ * static paragraph instead). Literal text — no per-session values — so the
+ * cached prompt prefix stays byte-identical across sessions.
+ */
+const TASK_TRACKING_INSTRUCTIONS = `
+
+## Tracking multi-step work
+
+For any request that takes 3 or more distinct steps, keep a task list with the
+TaskCreate / TaskUpdate / TaskList / TaskGet tools: create the tasks up front
+(one TaskCreate per step), set each one in_progress right before you start it
+and completed as soon as it is truly done, and add follow-up tasks as you
+discover them. The list is stored in ${TASKS_FILE} and survives across turns
+and restarts, so after an interruption call TaskList to see where you left
+off. Skip the list for single-step or conversational requests.`;
 
 export function Main({ id }: AgentProps) {
   const { STORE } = env as unknown as Env;
@@ -507,9 +527,20 @@ export function Main({ id }: AgentProps) {
     }),
     run({ data: { key, value } }) {
       setAgentData((prev) => (agentDataNow = { ...prev, [key]: value }));
-      return { ok: true, key };
+      // Envelope, not the value: Flue 2.0.3 rejects a plain-object return whose
+      // keys are not `output`/`terminate` ("unexpected key"), so the bare
+      // `{ ok, key }` this used to return failed every call.
+      return { output: { ok: true, key } };
     },
   });
+
+  // Task tracking (design §17): Claude Code–compatible TaskCreate / TaskUpdate /
+  // TaskList / TaskGet over /workspace/.tasks/tasks.json. Mounted on EVERY
+  // channel — the durable checklist is for the agent (GitHub conversations
+  // have session records too, so their file persists the same way); the chat
+  // UI additionally folds the tool events into its pinned progress panel. The
+  // factory closes over the session id, the key of the per-session write mutex.
+  for (const tool of taskTools(id)) useTool(tool);
 
   const instructions = active?.instructions ?? DEFAULT_INSTRUCTIONS;
 
@@ -531,6 +562,7 @@ export function Main({ id }: AgentProps) {
       'IMPORTANT: the issue author can ONLY see comments you post with the comment_on_github_issue tool — a plain text ' +
       'reply reaches nobody. You MUST finish every event by calling comment_on_github_issue exactly once with your full ' +
       'answer in Markdown. If the request is unclear, post a comment asking for clarification.' +
+      TASK_TRACKING_INSTRUCTIONS +
       suffix
     );
   }
@@ -539,7 +571,7 @@ export function Main({ id }: AgentProps) {
   // render the question card, so the tool is not mounted there at all.
   useTool(askUserQuestion);
 
-  return instructions + WORKSPACE_LINK_INSTRUCTIONS + suffix;
+  return instructions + WORKSPACE_LINK_INSTRUCTIONS + TASK_TRACKING_INSTRUCTIONS + suffix;
 }
 
 // The generic multi-agent host: durable identity `main` (generated DO class

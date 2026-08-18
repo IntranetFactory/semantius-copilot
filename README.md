@@ -1174,7 +1174,8 @@ fallback would be to group by `instanceId` and resolve instance → session out 
 
 The container disk is ephemeral — reset to the image at `sleepAfter` (10 min idle) or
 eviction — so everything an agent writes under `/workspace` (`semantius/specs`,
-`semantius/blueprints`, `customizations.yaml`, …) used to die with it. Backups close that
+`semantius/blueprints`, `customizations.yaml`, the task list `.tasks/tasks.json`, …) used
+to die with it. Backups close that
 gap (design: `add_backup_restore_plan.md`):
 
 - **Persist — every filesystem mutation** (since 2026-08-18; before, only at turn end,
@@ -1358,7 +1359,12 @@ turns (and cold containers) see what was stored, and mirrored into the session
 record's `session_data` field at each response finish (including tool writes from the
 same response). Flue natively provides both halves: `useInitialData` = what the
 session is *about* (immutable), `usePersistentState` = what the agent has *learned*
-(mutable from tool `run()`/lifecycle callbacks, never during render).
+(mutable from tool `run()`/lifecycle callbacks, never during render). Note the tool
+`run()` return contract under Flue 2.0.3: a plain-object return MUST be the
+`{ output?, terminate? }` envelope — a bare value object (`{ ok, key }`) is rejected with
+"unexpected key" and the call errors. `update_session_data` and the GitHub channel's
+`comment_on_github_issue` returned bare values until 2026-08-18 (found while adding the
+task tools); both now return `{ output: … }`.
 
 **`session_state` — infra-written runtime aggregation.** Running totals per session:
 `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
@@ -1384,6 +1390,14 @@ fires 15 minutes after the container stops — so the figure survives the Costs 
 today-only window. Written with
 `mergeExistingSessionRecord`, so it can never resurrect a deleted session — see "Container
 costs" for why that matters.
+
+**`session_backup` — infra-written, updated at each workspace-touching response.** The
+durable record of the session's R2 workspace backup (see "Workspace backup & restore"):
+`backup_id`, `size_bytes`, `backup_count`, `last_backup_at`, `storage_monthly_usd` (the
+R2 storage run rate — the Costs tab's `Backup $/mo` column). Written by
+`persistWorkspaceBackup` (`backend-b/src/backups.ts`) with `mergeExistingSessionRecord`,
+so it never resurrects a deleted session; if the session vanishes mid-persist, the fresh
+archive is deleted on the spot rather than orphaned.
 
 ## AskUserQuestion (structured user prompts)
 
@@ -1456,13 +1470,69 @@ constant, README, and probe; old sessions carry it in history).
 deployed backend: ask turn settles `completed` with the tool part, the answer signal wakes
 the agent and projects `system/dispatch/diagnostic`, and the reply repeats the chosen label.
 
-**`session_backup` — infra-written, updated at each workspace-touching response.** The
-durable record of the session's R2 workspace backup (see "Workspace backup & restore"):
-`backup_id`, `size_bytes`, `backup_count`, `last_backup_at`, `storage_monthly_usd` (the
-R2 storage run rate — the Costs tab's `Backup $/mo` column). Written by
-`persistWorkspaceBackup` (`backend-b/src/backups.ts`) with `mergeExistingSessionRecord`,
-so it never resurrects a deleted session; if the session vanishes mid-persist, the fresh
-archive is deleted on the spot rather than orphaned.
+## Task tracking (TaskCreate / TaskUpdate / TaskList / TaskGet)
+
+The four task tools (`backend-b/src/tools/tasks.ts` + the pure `task-store.ts`; design §17)
+give every agent a durable checklist for multi-step work and give the chat UI a structured
+progress signal. They are **Claude Code's Task tools, verbatim** — same names, input schemas,
+result shapes and semantics as Claude Code 2.1.92 (extracted from its bundle), the successor
+to `TodoWrite`, which is deliberately NOT provided:
+
+| tool | input | result |
+| --- | --- | --- |
+| `TaskCreate` | `{ subject, description, activeForm?, metadata? }` | `{ task: { id, subject } }` |
+| `TaskUpdate` | `{ taskId, status?, subject?, description?, activeForm?, owner?, metadata?, addBlocks?, addBlockedBy? }` — `status: "deleted"` removes | `{ success, taskId, updatedFields, error?, statusChange? }` |
+| `TaskList` | `{}` | `{ tasks: [{ id, subject, status, owner?, blockedBy }] }` (open blockers only; `metadata._internal` hidden) |
+| `TaskGet` | `{ taskId }` | `{ task: { id, subject, description, status, blocks, blockedBy } \| null }` |
+
+Ids are sequential strings from a high-watermark (a deleted id is never reused);
+`addBlocks`/`addBlockedBy` link both sides; `metadata` merges (`null` deletes a key);
+`updatedFields` names only what changed. A UI written against Claude Code's `tool_use` /
+`tool_result` stream renders ours unchanged. The always-present Flue built-in `task` tool
+(subagent delegation) is unrelated — the descriptions say so. Mounted on **every channel**
+(`agents/main.ts`, `taskTools(id)`), and a static `TASK_TRACKING_INSTRUCTIONS` paragraph
+(literal text — the cached prompt prefix stays byte-identical) tells the model when to use them.
+
+**On disk: one JSON document, `/workspace/.tasks/tasks.json`** (`{ version, highwatermark,
+tasks[] }`, pretty-printed — `cat` it). It is a workspace file like any other, so it rides the
+per-mutation R2 backup and is restored before the first read of the next container life: the
+list survives compaction, a paused turn, a container reset and a session restart. Why one index
+file and not Claude Code's one-file-per-task layout: the lazy env answers `exists`/`readdir`/
+`stat` outside the skills tree from the KV bundle view ("not there") until the container is
+provisioned — only `readFile`/`exec`/writes boot + restore — so a `readdir` of a task directory at
+the start of a submission would report zero tasks without ever restoring the backup; one
+`readFile` boots, restores, then reads (a read failure is disambiguated with a now-live
+`exists`, so a real failure is never mistaken for "no tasks"). Not under `.agents` (excluded from
+archives), not at the top level (user-downloadable). Corrupt content (a squashfs taken
+mid-write) is set aside as `tasks.json.corrupt-<iso>` and the list restarts empty. Cost: the first
+task op of a submission provisions the container like any `bash`/`read`; each later op pays one
+`resetProbe` RPC; each write triggers a coalesced R2 persist; a read-only `TaskList` turn still
+marks the workspace touched (one squashfs at response finish).
+
+**Parallel batches.** Flue executes a tool batch in parallel; three `TaskCreate` calls in one
+assistant message would race the read-modify-write and mint duplicate ids. `defineTool` has no
+sequential-execution flag, so every task op runs under a per-session promise-chain mutex (one
+conversation = one Durable Object = one isolate; pi starts the parallel executions in call
+order, so ids come out in message order). The tools reach the sandbox via `harness: true` →
+`harness.sandbox` — the lazy env `useSandbox` created — so writes fire `onMutation →
+requestWorkspacePersist` with no extra wiring.
+
+**The UI** (`frontend/src/components/ai-elements/task-fold.ts` + `task-progress.tsx`, part of the
+copyable folder) folds the conversation's settled task tool parts — `TaskCreate` results and
+`TaskUpdate` inputs into a map keyed by id, `TaskList`/`TaskGet` results merged and pruned — into a
+collapsible checklist + progress bar pinned above the composer (in_progress rows show
+`activeForm`, completed rows are struck through, blocked rows name their open blockers, owners
+get a badge). Durable truth is history: reloads and the key-flip remount re-derive the same
+panel; `output-error` parts and `success:false` updates never phantom-update it. Individual calls
+stay collapsed in the tool-call group (`TaskUpdate #3 → completed` on the row).
+
+Tests: `scripts/tasks.test.mjs` (in `pnpm test`; imports the two pure `.ts` modules straight
+into Node) — the reference semantics, the fold over a synthetic conversation, and a parity check
+that folding the events the store emitted reproduces the store's own list.
+`API_TOKEN=$(cat .api-token) node scripts/task-tools-probe.mjs` verifies the deployed backend:
+three creates in one turn get ids 1..3, updates report `statusChange`, `TaskList` reflects them,
+the session record gains a `session_backup`, and a second submission lists the same state and
+`TaskGet`s a full record.
 
 ## GitHub channel (backend B)
 

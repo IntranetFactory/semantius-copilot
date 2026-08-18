@@ -156,6 +156,14 @@ const summarizeInput = (input: ToolPart["input"]): string | undefined => {
   const flatten = (text: string) => text.replace(/\s+/g, " ").trim();
   if (typeof input === "string") return flatten(input) || undefined;
   if (!input || typeof input !== "object") return undefined;
+  // Task tools (TaskUpdate/TaskGet): "#3 → completed" / "#3 Run tests" beats
+  // the bare "3" the first-string rule would pick.
+  const { taskId, status, subject } = input as Record<string, unknown>;
+  if (typeof taskId === "string" || typeof taskId === "number") {
+    const detail =
+      typeof status === "string" ? ` → ${status}` : typeof subject === "string" ? ` ${flatten(subject)}` : "";
+    return `#${taskId}${detail}`;
+  }
   for (const value of Object.values(input as Record<string, unknown>)) {
     if (typeof value === "string" && value.trim()) return flatten(value);
   }

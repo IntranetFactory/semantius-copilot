@@ -47,6 +47,8 @@ import {
 } from './prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './reasoning';
 import { seedFromMeta, useAgentMeta, withAgentSeed, type ChatAuth } from './session';
+import { foldTasks } from './task-fold';
+import { TaskProgressPanel } from './task-progress';
 import { Tool, ToolCallGroup, ToolContent, ToolHeader, ToolInput, ToolOutput } from './tool';
 import { WelcomeCard } from './welcome';
 import { chatMarkdownComponents, WorkspaceLinkContext } from './workspace-link';
@@ -186,6 +188,11 @@ export function AgentChat({
     }
     return map;
   }, [agent.messages]);
+
+  // The task checklist (TaskCreate/TaskUpdate/TaskList/TaskGet), folded from
+  // ALL messages' settled tool parts (task-fold.ts) — durable truth is history,
+  // so reloads and the key-flip remount re-derive the same panel.
+  const tasks = useMemo(() => foldTasks(agent.messages), [agent.messages]);
 
   // Answer sends in flight: toolCallId → submissionId once admitted. Transient
   // UI only ("Sending…" + busy strip) — the signal echo above takes over the
@@ -384,6 +391,10 @@ export function AgentChat({
         </Conversation>
 
         <div className="border-t p-3">
+          {/* The task checklist sits topmost: it is the longest-lived thing here
+              (the whole conversation) and must not jump when tips/strips come
+              and go beneath it. Renders nothing while there are no tasks. */}
+          <TaskProgressPanel tasks={tasks} />
           {/* The clicked prompt's tip, above the transient strips: it outlives
               them (it stays until dismissed, including once the welcome card
               itself is gone), so the moving parts stay nearest the input. */}
