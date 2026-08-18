@@ -20,11 +20,11 @@ reconstructs it into the sandbox. Which agent a session runs is data, not code.
 
 (The POC originally ran a second backend — "A", the same agent hard-baked into a
 container image — to prove image-baked and dynamically-delivered skills behave
-identically. That thesis was proven — see [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) and
+identically. That thesis was proven — see [`copilot-design.md`](./copilot-design.md) and
 git history — and backend A has since been removed; "backend B" naming survives in the
 worker/package names.)
 
-See [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) for the original design and acceptance criteria.
+See [`copilot-design.md`](./copilot-design.md) for the original design and acceptance criteria.
 
 ## Deployed
 
@@ -186,7 +186,7 @@ core/        Host-agnostic Flue-core seams (no Cloudflare imports):
 backend-b/   Flue+CF Worker — the MULTI-AGENT backend: one generic `main` Flue agent;
              the named agent definition a session references (`{ agentName }` at ingest,
              resolved from KV `agentdef:<name>`) decides instructions, model, skills.
-             First-turn identity rides the creating send's `initialData` (see plan §6).
+             First-turn identity rides the creating send's `initialData` (see design §6).
 frontend/    React + Vite — `/chat` and `/copilot` (the shared ChatPage:
              New-session button, agent dropdown from GET /agents; token vs.
              session-cookie auth), `/agent/<name>` (the input-free per-agent
@@ -857,7 +857,7 @@ Rules, all covered by `pnpm test`:
 
 - **Registering a host as credential-required is what makes absence fatal.** A host handled
   by this path with no matching map entry gets **403** — never an unauthenticated forward.
-  That's the fail-closed rule behind plan §13 C5: the self-heal never creates credentials,
+  That's the fail-closed rule behind design §13 C5: the self-heal never creates credentials,
   so an expired session whose policy self-heals recovers its whitelist but not
   its ability to call the downstream API.
 - **The self-heal preserves the map verbatim** — a retrieval-populated entry is never
@@ -938,7 +938,7 @@ the ingest route from the identity the user guard just verified (`mintSessionId`
 `core/src/config.js`). The identity segments ride **verbatim** (lowercased, separators
 stripped) — a user id is never truncated or hashed into the id. The route takes **no id
 from the caller**: the browser used to generate one with `crypto.randomUUID()`, which
-made "server-minted, globally unique, never reused" (plan §6) a promise nobody enforced
+made "server-minted, globally unique, never reused" (design §6) a promise nobody enforced
 and would have let a client stamp any tenant it liked on its own KV keys.
 
 Why the tenant rides the id: it is the only place that puts it in every key derived from
@@ -983,7 +983,7 @@ bundle snapshot (`agent:<id>`), THE session record (`session:<id>`), and the con
 pointer (`container:<containerId>`) all carry a 24 h TTL; every merge into the session
 record (e.g. the per-response `session_state` mirror) refreshes its TTL, so an idle
 session expires 24 h after its last response. A session's `egress_secrets` are never
-recreated by the self-heal (plan §13 C5) — an expired chat session loses egress and, on a cold
+recreated by the self-heal (design §13 C5) — an expired chat session loses egress and, on a cold
 container, its skills; start a new one. Named agent definitions (`agentdef:<name>`)
 deliberately have NO TTL: they are deployable artifacts, overwritten by the next
 `pnpm deploy:agent`, not session state. (Historical: the per-concern keys
@@ -1730,7 +1730,7 @@ it needs a live better-auth session cookie); re-verified on the Flue 2.0.3 upgra
 end. (The original A/B thesis — image-baked and dynamically-delivered skills produce
 byte-identical sandboxes and identical `activate_skill → read → bash` behavior — was
 proven while backend A still existed; see git history.) Two wiring findings and the egress HTTP-vs-HTTPS caveat are
-recorded in [`semantius-copilot-plan.md`](./semantius-copilot-plan.md) §7.
+recorded in [`copilot-design.md`](./copilot-design.md) §7.
 
 **Workspace backup restore-over-sleep, proven live 2026-08-05:** a real LLM turn wrote
 `/workspace/semantius/proof.txt`; the turn-end persist archived it to R2 unprompted; the

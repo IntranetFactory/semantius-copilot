@@ -22,7 +22,7 @@
  * acceptance.mjs): name-based ingest ({ agentName } — the trip-planner
  * definition must already be deployed via `pnpm deploy:agent
  * hoth-trip-planner`), then POST the message to /agents/main/:id with the
- * creation seed as `initialData` (plan §6 — without it, turn 1 runs on
+ * creation seed as `initialData` (design §6 — without it, turn 1 runs on
  * generic default instructions; the seed is built from dist-bundle/, so run
  * `pnpm bundle` first). The reply is polled from `?view=history` until the
  * submission settles.

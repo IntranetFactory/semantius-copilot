@@ -14,7 +14,7 @@
     "bindings": [{ "name": "Sandbox", "class_name": "SemantiusCopilotSandbox" }]
   },
   // placement stays "smart" (default) — "targeted" breaks outboundByHost
-  // header injection (sandbox-sdk#661, plan §7).
+  // header injection (sandbox-sdk#661, design §7).
   "containers": [
     {
       "class_name": "SemantiusCopilotSandbox",

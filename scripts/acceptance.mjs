@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Acceptance tests (plan §11 step 8, §13) against the DEPLOYED backend.
+ * Acceptance tests (design §11 step 8, §13) against the DEPLOYED backend.
  * Every check names a concrete oracle; LLM nondeterminism is isolated by
  * driving the deterministic core (the bounded /skill-check route) directly.
  *
@@ -14,7 +14,7 @@
  * gate's second credential (a better-auth session cookie). Skipped with a NOTE
  * when unset, because only a signed-in browser can produce one.
  *
- * (Check ids C2-C5 keep their plan §13 numbering; C1 — "backend A is
+ * (Check ids C2-C5 keep their design §13 numbering; C1 — "backend A is
  * OOTB/static" — retired with backend A itself.)
  */
 import { createHash } from 'node:crypto';
@@ -798,7 +798,7 @@ async function main() {
     console.log('NOTE  [backup] skipped — BACKUP_BUCKET not configured on the deployed backend');
   }
 
-  // --- Hostile bundles rejected at the deploy trust boundary (plan §13) ---
+  // --- Hostile bundles rejected at the deploy trust boundary (design §13) ---
   // Validation moved with the bundle bytes: ingest only takes a name, so the
   // deploy route is where a hostile definition must be stopped. The key
   // agentdef:hostile-probe is never written — every PUT below must 422.

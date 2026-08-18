@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Node smoke test (plan §2/§11.7): proves the core agent-bundle flow —
+ * Node smoke test (design §2/§11.7): proves the core agent-bundle flow —
  * scan agents/ → bundle (JSONC config + INSTRUCTIONS.md + skills) → validate →
  * provision (reconstruct) → discoverable layout → script executes and calls
  * the API — runs with ZERO Cloudflare present.
@@ -114,7 +114,7 @@ try {
   const jsoncBundle = createAgentBundleFromDir(jsoncAgent);
   check('JSONC config parsed (comments + trailing comma) & model normalized', jsoncBundle.model === 'openrouter/deepseek/deepseek-v4-flash');
 
-  // 4. hostile bundles rejected before reconstruction (plan §8/§13)
+  // 4. hostile bundles rejected before reconstruction (design §8/§13)
   for (const [label, mutate] of [
     ['path traversal ..', (b) => ({ ...b, skills: { ...b.skills, planner: { ...b.skills.planner, '../evil.md': 'x' } } })],
     ['absolute path', (b) => ({ ...b, skills: { ...b.skills, planner: { ...b.skills.planner, '/etc/passwd': 'x' } } })],

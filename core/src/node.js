@@ -34,7 +34,7 @@ export function scanAgentsDir(agentsDir) {
 }
 
 /**
- * Build an agent bundle from an agents/<name>/ folder (plan §5):
+ * Build an agent bundle from an agents/<name>/ folder (design §5):
  *   - agent.jsonc (REQUIRED, JSONC with comments/trailing commas) validated
  *     against the contract in agents/agent.schema.json,
  *   - optional INSTRUCTIONS.md appended to the config's instructions,
@@ -75,7 +75,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
       const skillDir = join(skillsRoot, entry.name);
       for (const relPath of walk(skillDir)) {
         // Read as utf-8; normalize path separators so bundles built on Windows
-        // are byte-identical to the Docker COPY of the same folder (plan §13 C3).
+        // are byte-identical to the Docker COPY of the same folder (design §13 C3).
         files[relPath.split(sep).join('/')] = readFileSync(join(skillDir, relPath), 'utf-8');
       }
       skills[entry.name] = files;
@@ -116,7 +116,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
 }
 
 /**
- * Round-trip assert (plan §5): each bundled skill -> reconstruct ->
+ * Round-trip assert (design §5): each bundled skill -> reconstruct ->
  * byte-identical to agents/<name>/skills/<skill>/. Throws on any drift.
  *
  * @param {string} agentDir

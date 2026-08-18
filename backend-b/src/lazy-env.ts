@@ -1,5 +1,5 @@
 /**
- * Lazy-boot Sandbox wrapper (plan §15 P1 successor): nothing sandbox-side —
+ * Lazy-boot Sandbox wrapper (design §15 P1 successor): nothing sandbox-side —
  * not the container, not even its Durable Object — is touched until a turn
  * performs an operation that genuinely needs the machine.
  *

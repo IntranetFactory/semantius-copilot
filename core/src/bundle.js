@@ -1,5 +1,5 @@
 /**
- * Shared bundle validation primitives (plan §8): per-skill file-map checks,
+ * Shared bundle validation primitives (design §8): per-skill file-map checks,
  * path safety, size caps, and the baseImage -> Sandbox binding resolver.
  * The agent-level bundle format that composes these lives in ./agent.js.
  */
@@ -90,9 +90,9 @@ function utf8Length(str) {
 }
 
 /**
- * baseImage -> Sandbox binding resolver (plan §16 design hook).
+ * baseImage -> Sandbox binding resolver (design §16 design hook).
  * Both getSandbox and the bearer KV key must derive from the SAME
- * selected binding (plan §7). Adding an image later is a wrangler
+ * selected binding (design §7). Adding an image later is a wrangler
  * entry + a row here, not a rewrite.
  */
 export const BASE_IMAGE_BINDINGS = { node: 'Sandbox' };

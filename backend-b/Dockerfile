@@ -1,4 +1,4 @@
-# Backend B container image: SKILL-FREE by hard requirement (plan §6) — only
+# Backend B container image: SKILL-FREE by hard requirement (design §6) — only
 # the Cloudflare sandbox base (which bundles node) plus the shared semantius
 # CLI. /workspace/.agents/skills stays empty at boot; if any skill file were
 # baked in, B would be discovering a baked copy instead of testing dynamic

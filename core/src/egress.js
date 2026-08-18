@@ -1,5 +1,5 @@
 /**
- * Egress seam (plan §2/§7): the one capability Flue does not abstract. The
+ * Egress seam (design §2/§7): the one capability Flue does not abstract. The
  * POC ships only the Cloudflare (outbound-handler) consumer of this
  * interface; a Docker egress-proxy sidecar is future work behind the same
  * seam.
@@ -17,7 +17,7 @@
  * session id and simply computes the container id.
  *
  * Handlers resolve pointer -> session record on EVERY invocation — no
- * closure/module caching (plan §7/§9.2: the handler registry is
+ * closure/module caching (design §7/§9.2: the handler registry is
  * isolate-global, caching bleeds across concurrent sessions). Missing
  * pointer or record means DENY ALL egress (fail-closed).
  */
@@ -398,7 +398,7 @@ export async function ensureEgressPolicy(kv, containerId, sessionId, desired) {
 // ---------------------------------------------------------------------------
 
 /**
- * Catch-all secret broker with a domain whitelist (plan §7 secret-at-egress).
+ * Catch-all secret broker with a domain whitelist (design §7 secret-at-egress).
  * The container holds only the placeholder `sentinel`; the real key lives here
  * in the Worker and never enters the sandbox. Policy per outbound request:
  *
@@ -491,7 +491,7 @@ export async function brokerEgress(request, policy, fetchImpl = fetch) {
  * `Authorization` header the sandbox never held — the container sends no
  * credential and no placeholder, so it cannot leak or misdirect one. Fails
  * closed when the session has no credential for that host (deleted session,
- * or a chat session whose policy self-healed without one — plan §13 C5).
+ * or a chat session whose policy self-healed without one — design §13 C5).
  * Host-agnostic: the Cloudflare outbound handler calls this with its own fetch.
  *
  * Callers gate on the whitelist FIRST — this function assumes the host is

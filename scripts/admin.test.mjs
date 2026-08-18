@@ -284,7 +284,7 @@ await (async function run() {
   // holds). NOTHING in the server writes it today — it is reserved for the
   // future secret-retrieval layer (see the TODO in backend-b/src/app.ts) —
   // so these cover the read side: match by the same globber as the
-  // whitelist, and deny when a host has no entry (plan §13 C5 — a session
+  // whitelist, and deny when a host has no entry (design §13 C5 — a session
   // whose policy self-heals must not gain egress credentials).
   check('egressSecretForHost matches an exact host', egressSecretForHost({ 'postman-echo.com': 'k1' }, 'postman-echo.com') === 'k1');
   check('egressSecretForHost matches a subdomain glob', egressSecretForHost({ '*.partner.example': 'k2' }, 'api.partner.example') === 'k2');

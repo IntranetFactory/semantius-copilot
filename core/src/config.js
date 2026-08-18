@@ -1,9 +1,9 @@
 /**
  * POC-wide constants shared by both backends (code sharing only — the
- * backends share no runtime resources, plan §13 C5).
+ * backends share no runtime resources, design §13 C5).
  */
 
-/** The mock Hoth Tourism API (HTTP echo endpoint, plan §7/§14). */
+/** The mock Hoth Tourism API (HTTP echo endpoint, design §7/§14). */
 export const ECHO_HOST = 'postman-echo.com';
 
 /**
@@ -112,7 +112,7 @@ export const STREAM_PROTOCOL_HEADERS = [
   'Producer-Received-Seq',
 ];
 
-/** Session ids are server-minted (plan §6/§9.6). The id itself is only a KV
+/** Session ids are server-minted (design §6/§9.6). The id itself is only a KV
  * key suffix and a DO name (neither cares about length) — the sandbox SDK's
  * 63-char sanitizeSandboxId limit applies to the CONTAINER name, which is the
  * id's random tail alone (sandboxNameForSession below), never the full id. */

@@ -1,5 +1,5 @@
 /**
- * Backend B HTTP app — the multi-agent named-definition surface (plan §6/§8).
+ * Backend B HTTP app — the multi-agent named-definition surface (design §6/§8).
  *
  * TWO AUTH SURFACES, never mixed (core/src/auth.js):
  *
@@ -47,10 +47,10 @@
  * The route ONLY stores: it never touches the container. The container boots
  * lazily at the first sandbox operation that genuinely needs it (the agent's
  * lazy SessionEnv wrapper provisions-then-forwards; see agents/main.ts and
- * src/lazy-env.ts) — the old eager pre-warm (plan §15 P1) is gone
+ * src/lazy-env.ts) — the old eager pre-warm (design §15 P1) is gone
  * because sessions are now created at first-message time, so there is no
  * typing window left to overlap the boot with. A snapshot is immutable per id
- * (plan §6/§13 C5), which minted ids give by construction: every create is a
+ * (design §6/§13 C5), which minted ids give by construction: every create is a
  * fresh id, so nothing can be overwritten.
  */
 import './braintrust';
@@ -670,12 +670,12 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   // hex>` (core/src/config.js). The client no longer supplies one: it used to
   // generate the whole id in the browser, which made the tenant prefix
   // unfalsifiable only if the server checked it, and made "server-minted,
-  // globally unique, never reused" (plan §6) a promise nobody enforced.
+  // globally unique, never reused" (design §6) a promise nobody enforced.
   const id = mintSessionId(org, user.sub);
 
   // Collision assert, not a client-reachable path: the tail is 122 random bits,
   // so a hit means the generator is broken. Kept because a bundle is immutable
-  // per id (plan §6/§13 C5) — silently overwriting one would hand two sessions
+  // per id (design §6/§13 C5) — silently overwriting one would hand two sessions
   // the same container.
   if (await c.env.STORE.get(`agent:${id}`)) {
     return c.json({ error: 'minted session id collided with a live session' }, 409);
@@ -690,7 +690,7 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   const bundle = validateAgentBundle(raw);
 
   // Select the Sandbox binding from the bundle's baseImage; BOTH getSandbox
-  // and the bearer KV key must derive from this same binding (plan §7/§16).
+  // and the bearer KV key must derive from this same binding (design §7/§16).
   const binding = resolveSandboxBinding(bundle.baseImage);
   const namespace = (c.env as unknown as Record<string, DurableObjectNamespace>)[binding];
   // Container identity drops the USER segment: name = `<org>-<tail>`
@@ -760,7 +760,7 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   });
 });
 
-// Deterministic skill-check (plan §13): NOT arbitrary exec — the command is
+// Deterministic skill-check (design §13): NOT arbitrary exec — the command is
 // built server-side from a bounded op + validated params. Before running it
 // this replays EXACTLY the lazy provisioning a real turn performs at its
 // first container-needing op — read stored bundle, absent→write

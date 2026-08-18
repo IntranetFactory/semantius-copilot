@@ -1,5 +1,5 @@
 /**
- * Semantius Copilot admin console (`/admin`, plan §10): a read-only Data browser over
+ * Semantius Copilot admin console (`/admin`, design §10): a read-only Data browser over
  * everything the backend persists in Cloudflare, plus today's Cloudflare
  * container spend per session (the Costs tab).
  *

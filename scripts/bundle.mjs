@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Agent bundler CLI (plan §5): scans the top-level agents/ folder, builds one
+ * Agent bundler CLI (design §5): scans the top-level agents/ folder, builds one
  * agent bundle per agents/<name>/ that has an agent.jsonc (folders without it
  * are skipped with a warning), asserts each bundle round-trips byte-identical,
  * and emits the canonical artifacts:

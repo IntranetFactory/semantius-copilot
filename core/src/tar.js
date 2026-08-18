@@ -1,6 +1,6 @@
 /**
  * Minimal ustar tar writer + gzip, so a whole skill bundle can be
- * reconstructed into a sandbox in 2 RPCs (plan §8/P2): one writeFile of a
+ * reconstructed into a sandbox in 2 RPCs (design §8/P2): one writeFile of a
  * base64 tar.gz blob, one exec of `base64 -d | tar -xz`. Works in Workers
  * and Node >=18 (CompressionStream).
  */

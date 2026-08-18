@@ -6,7 +6,7 @@
  * `container:<containerId> -> sessionId` pointer to THE session record
  * (`session:<sessionId>` — its egress_secrets/whitelist/org_whitelist/
  * session_context fields) — see resolveEgressPolicy. Both handlers resolve per
- * invocation (no caching — isolate-global registry, plan §9.2a). NO POINTER OR
+ * invocation (no caching — isolate-global registry, design §9.2a). NO POINTER OR
  * RECORD (agent without a proxy_whitelist still gets `whitelist: []`; expired
  * TTL; deleted session) MEANS DENY ALL — fail-closed.
  *

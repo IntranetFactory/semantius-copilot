@@ -1,5 +1,5 @@
 /**
- * Deterministic skill-check (plan §13). A BOUNDED set of fixed commands built
+ * Deterministic skill-check (design §13). A BOUNDED set of fixed commands built
  * server-side from validated structured params — never a client-supplied shell
  * string. This is what lets the acceptance harness drive the core directly and
  * isolate the A/B skill-delivery comparison from LLM nondeterminism, without
@@ -48,7 +48,7 @@ export function buildSkillCheckCommand(req) {
       // C3 triple-hash leg inside the live sandbox.
       return `cd '${SKILL_DIR}' && find . -type f | sort | xargs sha256sum`;
     case 'count-skill-files':
-      // Clean-base / positive-control file count (plan §13). A *file* count.
+      // Clean-base / positive-control file count (design §13). A *file* count.
       return `find '${SKILLS_DIR}' -type f 2>/dev/null | wc -l`;
     case 'curl-check':
       // Per-process TLS-trust proof: curl uses the OpenSSL default verify

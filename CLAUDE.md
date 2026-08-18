@@ -1,7 +1,7 @@
 # Instructions for Claude
 
 - **All project knowledge lives in committed files in this repo** (README.md,
-  semantius-copilot-plan.md, code comments). Never record decisions, findings, or setup notes in
+  copilot-design.md, code comments). Never record decisions, findings, or setup notes in
   out-of-repo memory/scratch files — if it's worth remembering, it goes in a committed file
   in the same change.
 - Secrets never go in committed files: use `.dev.vars` (gitignored) locally and

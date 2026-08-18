@@ -26,7 +26,7 @@ import {
  */
 
 /**
- * Shared API-key gate for the ADMIN surface (plan §9.6 is the production
+ * Shared API-key gate for the ADMIN surface (design §9.6 is the production
  * successor). A single shared secret in `env.API_TOKEN`, supplied per-request
  * as `Authorization: Bearer <API_TOKEN>`.
  *

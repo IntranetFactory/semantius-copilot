@@ -14,7 +14,7 @@ import { makeTarGz, toBase64 } from './tar.js';
 export const SKILLS_DIR = '/workspace/.agents/skills';
 
 /**
- * Reconstruct a validated agent bundle's skills into the sandbox (plan §6/§8).
+ * Reconstruct a validated agent bundle's skills into the sandbox (design §6/§8).
  *
  * Absent→write only: a bundle is immutable per session id, so an existing
  * skill dir means this id was already materialized — never overwrite.

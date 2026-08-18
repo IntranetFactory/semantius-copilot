@@ -1,7 +1,7 @@
 'use agent';
 /**
  * Backend B agent — the generic MULTI-AGENT host (dynamic bundle delivery,
- * plan §6). Which agent a session runs is not code: it is the agent bundle
+ * design §6). Which agent a session runs is not code: it is the agent bundle
  * (instructions + model + skills) POSTed at session creation and stored under
  * `agent:<sessionId>`. This one Flue agent hosts them all.
  *
@@ -16,7 +16,7 @@
  * policy. The ingest route only STORES the bundle.
  *
  * A bundle is immutable per session id, so reconstruction is always
- * absent→write, never overwrite (plan §6/§8).
+ * absent→write, never overwrite (design §6/§8).
  *
  * ONE host, many channels: bundle-driven instructions, model, and skill
  * provisioning are shared; a channel only changes where the bundle comes from
