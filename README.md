@@ -170,6 +170,17 @@ sessions, whitelisted meta), `POST /sessions/agent`, `/agents/main/:sessionId` (
 Failed / stopped runs, failed sends, and connection errors are surfaced by the transcript
 itself, with a Retry — see "Failed runs, stopped runs, retry" below.
 
+**Tool calls** (`tool.tsx`). A run of consecutive tool calls collapses to one line ("Ran 10
+tool calls ✓", or "Running bash  Checking the workspace…" while one is in flight); expanding
+shows a slim row per call, and each row opens into the call's Parameters and Result panels.
+The text on a row/line is `summarizeInput`: `#id → status` for task ops, else the call's
+`subject` (TaskCreate), else its `description`, else its first string argument (a path, a
+pattern). `description` is what makes a `bash` row read as plain language rather than a
+600-character shell one-liner: Claude sends one with every `bash` call on its own — the field
+Claude Code's Bash tool taught it; Flue's `bash` schema declares only `command`/`timeout` but
+tolerates the extra key — and the row prefers it, keeping the command itself one click away
+in the Parameters panel (a call without a description falls back to the command).
+
 ## Layout
 
 ```
@@ -1508,7 +1519,21 @@ later typed reply is still answered normally and an earlier round's answers, alr
 context on the second ask of a multi-round flow, are not mistaken for the current one); the
 tool output carries the same directive
 as an `instruction` field, which is what the model reads if the loop continues anyway (the
-frontend never reads the output; the probe checks only `output.status`). The skills under
+frontend never reads the output; the probe checks only `output.status`). The other way the
+continued loop plays out — seen live 2026-08-18 (admin flow, session
+`tests-user3-99d2f5dada57466ba2d08df7b621d204`): the ledger's `TaskUpdate` + `AskUserQuestion`
+in one batch → loop continued → the model, instead of ending silently, called
+`AskUserQuestion` again *alone* with the same questions → that call terminated the response.
+Two settled `AskUserQuestion` parts on the last visible message both derived `pending`, so the
+chat showed two interactive copies of one card. The renderer now treats it as what it is: an
+earlier, unanswered ask followed by a later ask in the same message is *superseded* — folded
+into the tool-call group like any other settled call (`supersededQuestionCalls` in
+`agent-chat.tsx`), and only the LAST ask is the live card. The last one, not the first, because
+its toolCallId is the one the answer must carry: an answer addressed to the earlier call would
+leave the later call's "no `<user_answers>` for THIS toolCallId → end silently" directive in
+force. A superseded ask is not rendered "Skipped" (that badge means the user passed over a card
+they had, not one they never got), and an earlier ask that did receive an answer (a delivery
+joined into the running response) keeps its answered card. The skills under
 `agents/semantius-admin/skills/` are maintained upstream and are never edited here; the
 matching skill-side guidance ("call it alone, after edits; `user_answers` is an input block")
 is filed as `askuserquestion-skill-change-request.md` for upstream. Rejected: a stub

@@ -48,6 +48,7 @@ Everything this skill prints to chat is read by a casual user who does not know 
 
 **Surface to chat ONLY:**
 
+- The download milestone: ONE result-shaped line per URL the user named, emitted when the fetch has validated (Step 2 / 6.1): *"Downloaded the Hiring Starter blueprint from semantius.com."* Display name (front-matter `system_name`) and host only; nothing about paths, folders, staging, or validation. It reports what happened, never what is about to happen or what machinery ran. Local sources get no milestone (the user named the file; the first question or the plan lead-in names the design within a step).
 - The one-sentence plan lead-in (the plan itself is the task list; see the core invariant above).
 - Questions the user must answer (`AskUserQuestion`: scope flags, sub-skill decisions).
 - Results the user cares about: what's now live, where produced files landed, and any failure they must act on (with the failing sub-skill's verbatim message).
@@ -57,11 +58,11 @@ Everything this skill prints to chat is read by a casual user who does not know 
 
 **Never surface to chat** (write to `$DIAG_LOG` instead):
 
-- **The fact that any setup is happening at all.** Do not announce that you're running checks, preflight, or setup. **Never write the words "preflight" or "silent" in chat** — they name machinery the user doesn't know exists, and "silent" in particular reads as ominous. Your FIRST words to the user are either the first `AskUserQuestion` or the plan lead-in; the tool-call rows ("Ran N commands") and the task list are the only trace the setup is allowed to leave.
+- **The fact that any setup is happening at all.** Do not announce that you're running checks, preflight, or setup. **Never write the words "preflight" or "silent" in chat** — they name machinery the user doesn't know exists, and "silent" in particular reads as ominous. Your FIRST words to the user are the download milestone (only when the request named a URL), the first `AskUserQuestion`, or the plan lead-in; the tool-call rows ("Ran N commands") and the task list are the only other trace the setup is allowed to leave. Fetching a URL the user named is the first step of their request, not setup: its *result* gets the one milestone line; the fetch mechanics (`curl`, staging, validation, the copy into the convention folder) stay out of chat.
 - Preflight: the org probe, the `adenin` halt check passing, the customizations-path computation, the toolchain (Bun / jq / yq) and CLI install checks. A *successful* tool install gets at most one plain line ("Installing jq..."); only a *firing* halt guard (org is `adenin`, or a required tool could not be installed) produces a halt message.
 - Internal transitions: "running preflight", "setting up the per-org customizations path", "assigning run id", phase announcements like "now inspecting the workspace".
 - CLI / tool mechanics: command names, `.tmp_admin/` paths, `curl` / `jq` / `yq` invocations, staging locations.
-- Skill-internal vocabulary: `customizations.yaml`, `run_id`, decision-path names, sub-skill mode names, raw flag tokens. (The single terse inferred-flags line from Step 6.4.2 is the one deliberate exception.)
+- Skill-internal vocabulary: `customizations.yaml`, `run_id`, decision-path names, sub-skill mode names, raw flag tokens (never *"Inferred: customize=no, deploy=yes"*; the plan lead-in already states the resolved scope in plain words, and 6.4.3 lets the user correct it).
 - Pipeline jargon: "reconcile", "reconciliation", "reconcile-then-apply", "normalization", "legacy location", "fact-sheet version". In user prose say "match (it) against your live semantic model", "build the spec", "the blueprint has N entities". The user never needs the internal stage names or the front-matter field labels.
 
 Bash `description` fields obey the same rule (they render as "Ran <description>" in chat): neutral plain English ("Checking the workspace", "Reading the artifact"), never "Probe org", "adenin guard", "yq check", "Append to customizations.yaml".
@@ -70,7 +71,7 @@ Bash `description` fields obey the same rule (they render as "Ran <description>"
 
 **The admin never duplicates a sub-skill's execution play-by-play.** The deploy, verification, and sample-data steps belong to the modeler sub-skill, which runs inline (Step 6.7) and narrates in ITS own restrained voice. While following the modeler's instructions, obey the modeler's "Narration restraint" rules and add no second layer of admin narration on top: no *"Matching step done"*, *"Confirming the artifact before applying"*, *"Seeding sample data now"*, *"Seven of eight tables confirm cleanly…"*, and no narration of a transient error and its self-correction (*"that ERR was a transient blip"*). Those are exactly the lines the modeler's "Narration restraint" section deletes; emitting extra admin-level narration reintroduces the noise that restraint exists to remove. If you are narrating what the deploy is doing as it happens beyond what the modeler's own rules permit, you are doing the modeler's job in the wrong voice; stop, and let the sub-skill's voice stand.
 
-**Technical / DBA vocabulary is banned in admin chat too**, the same standard as the modeler's banned-token list. Keep these out of user-facing prose: `FK`, `orphan(s)`, `idempotent`, `non-destructive`, `NOT-NULL` and constraint talk, `junction`, `FK-dependency order`, `spec` / `blueprint` / version numbers (`v5.2`, `blueprint v3.0`), and raw `snake_case` identifiers. Say "links between records", "safe to re-run", "the connecting records", "your live model" instead. The reader is a domain expert (HR director, operations lead), not a data modeler.
+**Technical / DBA vocabulary is banned in admin chat too**, the same standard as the modeler's banned-token list. Keep these out of user-facing prose: `FK`, `orphan(s)`, `idempotent`, `non-destructive`, `NOT-NULL` and constraint talk, `junction`, `FK-dependency order`, `spec` / `blueprint` version numbers (`v5.2`, `blueprint v3.0`), and raw `snake_case` identifiers. Say "links between records", "safe to re-run", "the connecting records", "your live model" instead. The reader is a domain expert (HR director, operations lead), not a data modeler.
 
 ### Per-run diagnostic log
 
@@ -90,7 +91,7 @@ The admin uses the harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` 
 
 ## Preflight (runs before Step 0, every invocation)
 
-**Preflight produces no chat output** (see Output discipline above). Do not announce it; never write the words "preflight" or "silent" to the user. Sample `$RUN_ID` and set up `$DIAG_LOG` (`diag-admin.log`) first, then run the four shared preflight checks with NO chat narration, writing their results to the log. The only user-facing output is a halt message (the active org is `adenin`, or a required tool could not be installed) or a setup action the user must see (installing a required tool, or supplying their API key). On all-pass with every tool already installed and the CLI authenticated, say nothing and let your first user-facing line be the first question or the plan. The `$RUN_ID` sampled here is the one reused by Step 6.2 — never re-sample it.
+**Preflight produces no chat output** (see Output discipline above). Do not announce it; never write the words "preflight" or "silent" to the user. Sample `$RUN_ID` and set up `$DIAG_LOG` (`diag-admin.log`) first, then run the four shared preflight checks with NO chat narration, writing their results to the log. The only user-facing output is a halt message (the active org is `adenin`, or a required tool could not be installed) or a setup action the user must see (installing a required tool, or supplying their API key). On all-pass with every tool already installed and the CLI authenticated, say nothing and let your first user-facing line be the download milestone (URL requests only), the first question, or the plan. The `$RUN_ID` sampled here is the one reused by Step 6.2 — never re-sample it.
 
 **Run the shared preflight: [`references/preflight.md`](./references/preflight.md).** The canonical checks live there as the single source of truth shared by the admin and all three sub-skills:
 
@@ -249,6 +250,8 @@ When the user gives an `http(s)://` URL, fetch it before any other step using th
 
 On any fetch failure (curl non-zero exit, empty file, no front-matter, unknown `artifact:` value), halt and report the failure verbatim; do not guess. The `semantius/` folder at the workspace root is the committed home for these artifacts (distinct from the plugin install, which lives in the user's Claude Code plugin folder, not their project repo).
 
+**On success, emit the download milestone** (Output discipline): one line per URL, as soon as its front-matter has validated, naming the design by its `system_name` and the source host, e.g. *"Downloaded the Hiring Starter blueprint from semantius.com."* (for a spec: *"Downloaded the Hiring Starter spec from semantius.com."*). That line is this step's ONLY chat output; where the file landed, the staging folder, and the validation are `$DIAG_LOG` material. Do not pre-announce the fetch ("Fetching the blueprint...") and do not add a second line when the file was already present and byte-identical (Step 1.3 bypass): the milestone still reads "Downloaded ...", because it was.
+
 ---
 
 ## Step 3: Plan the pipeline
@@ -374,7 +377,7 @@ Decisions the user makes inside one item (cross-module collisions, host-master p
 
 Walk the deploy sources named in the request left-to-right (when invoked as a plugin command they arrive as the command arguments; standalone, read them from the user's message). Each source is one of:
 
-- `http(s)://...` URL: download via `curl -s -L` (never `WebFetch`). Land in `.tmp_admin/run-<id>/incoming/<derived-filename>.md` for validation; on success, move to the workspace artifact folder (`semantius/blueprints/<system_slug>-semantic-blueprint.md` or `semantius/specs/<system_slug>-semantic-spec.md`).
+- `http(s)://...` URL: download via `curl -s -L` (never `WebFetch`). Land in `.tmp_admin/run-<id>/incoming/<derived-filename>.md` for validation; on success, move to the workspace artifact folder (`semantius/blueprints/<system_slug>-semantic-blueprint.md` or `semantius/specs/<system_slug>-semantic-spec.md`) and emit the one download milestone line per Step 2 (*"Downloaded the Hiring Starter blueprint from semantius.com."*), the only chat output the fetch produces.
 - Local file path: accept both the convention folders (`semantius/blueprints/<file>`, `semantius/specs/<file>`) and bare workspace-root paths. A root-only artifact is **copied into the convention folder up front per Step 1.1's copy rule, before any sub-skill runs**, and the convention-folder copy becomes the resolved working path for the rest of the run; the root original is read once and then never edited. (copy, never move; never edit the root.)
 - Glob pattern: expand against the workspace. Sensible glob shapes include `semantius/blueprints/*.md`, `semantius/specs/*.md`, or `./*.md` for the workspace root. Order is whatever the shell returns; user can re-order by listing sources explicitly.
 
@@ -484,7 +487,7 @@ The classification is lenient on `deploy` (favor inferring) and strict on `custo
 1. Read the user's full request text (the message that triggered the run).
 2. For each item, pick the half of the table (blueprint or spec) matching the artifact, then walk it top-to-bottom; first match wins.
 3. For every flag that remains `?` after inference, ask it through the question ledger (`references/task-tracking.md`, Pattern B): one `Q:` task per flag whose subject is `Q: ` + that flag's exact 6.4 question wording, then batches of up to four question objects per `AskUserQuestion` call, each question carrying its 6.4 header, both options with their impact-explicit descriptions, and the default option marked Recommended. One question object per flag, never two flags merged into one question. The answer is recorded on the item (in the pipeline task's description once it exists) and the `Q:` task set `completed`. `TaskList` clean of `Q:` tasks is the precondition for 6.6.
-4. Narrate the inferred flags in one line before continuing, listing ONLY the flags that came from inference (not the ones the user was just asked): *"Inferred: customize=no, deploy=yes."* If everything was asked, or everything came from explicit phrasing, skip the line.
+4. Inferred flags are NOT narrated (no *"Inferred: customize=no, deploy=yes."*): raw flag tokens are internal vocabulary. The resolved scope reaches the user through the plan lead-in, which names the steps and says which one writes to the live model, and 6.4.3 covers a correction. The flag values go into the pipeline tasks' descriptions and `$DIAG_LOG`.
 
 #### 6.4.3 Changing scope before the run
 

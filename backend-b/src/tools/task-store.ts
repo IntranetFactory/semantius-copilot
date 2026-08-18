@@ -42,7 +42,8 @@ export const EMPTY_STORE: TaskStore = { version: 1, highwatermark: 0, tasks: [] 
 
 export type TaskCreateInput = {
   subject: string;
-  description: string;
+  /** Optional on input (unlike Claude Code); stored as "" when omitted so `Task.description` stays a string. */
+  description?: string;
   activeForm?: string;
   metadata?: Record<string, unknown>;
 };
@@ -147,7 +148,7 @@ export function createTask(store: TaskStore, input: TaskCreateInput): { store: T
   const task: Task = {
     id,
     subject: input.subject,
-    description: input.description,
+    description: input.description ?? '',
     status: 'pending',
     blocks: [],
     blockedBy: [],

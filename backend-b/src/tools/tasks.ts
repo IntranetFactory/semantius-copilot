@@ -113,14 +113,20 @@ async function writeStore(sandbox: Sandbox, store: TaskStore): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Schemas — Claude Code's, field for field (valibot instead of zod)
+// Schemas — Claude Code's, field for field (valibot instead of zod), with one
+// deliberate relaxation: TaskCreate.description is optional here (Claude Code
+// requires it). Models writing checklist-style tasks routinely send only
+// `subject` + `activeForm`, and a required description bought nothing but a
+// validation error and a retry round-trip — nothing downstream needs it (the
+// store defaults it to "", so on-disk and TaskGet shapes are unchanged; see
+// design §17).
 
 const TaskId = v.pipe(v.string(), v.minLength(1), v.maxLength(64));
 const Metadata = v.record(v.string(), v.unknown());
 
 export const taskCreateInput = v.object({
   subject: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
-  description: v.pipe(v.string(), v.maxLength(8000)),
+  description: v.optional(v.pipe(v.string(), v.maxLength(8000))),
   activeForm: v.optional(v.pipe(v.string(), v.maxLength(500))),
   metadata: v.optional(Metadata),
 });
@@ -151,7 +157,7 @@ const TASK_CREATE_DESCRIPTION = `Create a tracked to-do item in this session's t
 When to use: complex work needing 3+ distinct steps; when the user gives several things to do; when new instructions arrive (capture them as tasks right away); when you start on a task (mark it in_progress BEFORE beginning) and when you finish (mark it completed, then add any follow-ups you discovered).
 When NOT to use: a single straightforward step, trivial work, or purely conversational requests — just do those directly.
 
-Fields: subject — a brief, actionable title in imperative form ("Fix authentication bug in login flow"); description — what needs to be done; activeForm (optional) — present-continuous form shown while in_progress ("Fixing authentication bug"); metadata (optional) — arbitrary key/values.
+Fields: subject — a brief, actionable title in imperative form ("Fix authentication bug in login flow"); description (optional) — what needs to be done, when the subject alone does not say it; activeForm (optional) — present-continuous form shown while in_progress ("Fixing authentication bug"); metadata (optional) — arbitrary key/values.
 Every task starts as pending. Ids are sequential strings ("1", "2", …) returned in the result — use them with TaskUpdate/TaskGet. Check TaskList first to avoid duplicates. The list is saved to /workspace/.tasks/tasks.json and survives across turns and restarts.`;
 
 const TASK_UPDATE_DESCRIPTION = `Update one task in the task list by id: status, subject, description, activeForm, owner, metadata (merged; set a key to null to delete it), addBlocks (tasks that cannot start until this one completes) and addBlockedBy (tasks that must complete before this one can start).

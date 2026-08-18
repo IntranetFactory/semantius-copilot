@@ -54,6 +54,13 @@ check('ids are sequential strings', eq(store.tasks.map((t) => t.id), ['1', '2', 
 check('highwatermark follows the last id', store.highwatermark === 3);
 check('new tasks are pending with empty deps', store.tasks.every((t) => t.status === 'pending' && t.blocks.length === 0 && t.blockedBy.length === 0));
 check('metadata kept, activeForm kept, owner absent', store.tasks[2].metadata.area === 'infra' && store.tasks[0].activeForm === 'Writing tests' && !('owner' in store.tasks[0]));
+{
+  // description is optional on create (our one deviation from Claude Code):
+  // stored as "" so the record and TaskGet shape stay string-typed.
+  const { store: s, output: o } = createTask(store, { subject: 'No description', activeForm: 'Working without one' });
+  check('TaskCreate without description → stored as ""', eq(o, { task: { id: '4', subject: 'No description' } }) && s.tasks[3].description === '' && eq(getTask(s, '4').task, { id: '4', subject: 'No description', description: '', status: 'pending', blocks: [], blockedBy: [] }));
+  check('omitted description round-trips through serialize/parse', parseStore(serializeStore(s))?.tasks[3]?.description === '');
+}
 
 check(
   'TaskGet full record shape',

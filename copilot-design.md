@@ -375,7 +375,12 @@ frontend — the dropdown lists `GET /agents` and `AgentChat` loads welcome + tu
 The conversation (draft, session create, key-flip handoff, streaming) is the reusable
 `AgentChatContainer` in `components/ai-elements/` — a folder with ZERO workspace imports,
 copyable into other apps (README "Reusable chat surface" documents the props, the three auth
-modes incl. ambient cookies, and the full copy set). `/chat` and `/copilot` share
+modes incl. ambient cookies, and the full copy set). Tool activity is one collapsed line per
+run of calls, each row summarised in plain language, not in its technical payload: task ops as
+`#id → status`, everything else by `subject` → `description` → first string argument — so a
+`bash` row shows the `description` Claude sends alongside every command (a habit from Claude
+Code's Bash tool; Flue's schema tolerates the extra key), and the command itself is behind a
+click in the row's Parameters panel. `/chat` and `/copilot` share
 `ChatPage.tsx` as chrome around it; `/agent/<name>` renders it bare. Separate Vite entries
 so the user bundles never ship the admin code. No fixed path is declared in code beyond
 `CHAT_PAGE`/`AGENT_PAGE_PREFIX` in `frontend/src/pages.ts` (the app's page map + credential
@@ -563,7 +568,12 @@ those names, schemas and result shapes (extracted from the Claude Code 2.1.92 bu
 semantics: sequential string ids from a high-watermark that never reuses a deleted id, two-sided
 `blocks`/`blockedBy`, metadata merge with `null` deleting a key, `updatedFields` only on change,
 `TaskList` hiding `metadata._internal` and listing only still-open blockers) so any UI wrapper
-written for Claude Code's stream renders ours unchanged. `TodoWrite` is deliberately absent. The
+written for Claude Code's stream renders ours unchanged. One deliberate deviation on the *input*
+side: `TaskCreate.description` is optional (Claude Code requires it). Models writing
+checklist-style tasks routinely send only `subject` + `activeForm`, and the required field bought
+nothing but a validation error and a retry round-trip — no consumer needs it (the UI shows it only
+as a tooltip; `TaskGet` is the sole reader). The store defaults it to `""`, so the record on disk
+and every result shape stay exactly Claude Code's. `TodoWrite` is deliberately absent. The
 always-present Flue built-in `task` tool (subagent delegation) is unrelated; the descriptions say
 so. Descriptions are condensed from Claude Code's prompts and ride every request of every agent —
 kept tight on purpose. A static instructions paragraph (`TASK_TRACKING_INSTRUCTIONS`, appended on
@@ -609,8 +619,11 @@ stage — otherwise the panel shows later rows done while earlier ones wait. The
 on ids and links, which only ever grow, so rows never jump on a status change; the panel never
 resorts by status. For that the fold keeps the FULL graph: TaskList's `blockedBy` is the
 still-open subset and is merged additively (a link appears via addBlocks/addBlockedBy or a
-TaskList/TaskGet mention and vanishes only with a deleted task), and "(blocked by #n)" is derived
-from the blockers' status (`openBlockers`). No parent/child: the contract has none, and
+TaskList/TaskGet mention and vanishes only with a deleted task); `openBlockers` derives that
+projection from the blockers' status. Rows show marker + text only — no `#id`, no "(blocked by
+#n)": ids are the model's handle, not the user's, and once blockers are hoisted the numbers read
+out of sequence (#1, #8, #4, #5 …), which looked like a sorting bug; the blocked-by note only
+restated what the position already says. No parent/child: the contract has none, and
 dependencies already give the model something real (TaskList's "pending, not blocked") where a
 `metadata.parent` convention would be display-only. Markers are Claude Code's checkbox glyphs
 (☐ pending, ☒ completed, struck through);

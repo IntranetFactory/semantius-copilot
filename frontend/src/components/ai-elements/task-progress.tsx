@@ -12,7 +12,7 @@
  *
  * Row semantics mirror Claude Code's TUI: an in_progress task shows its
  * `activeForm` ("Running tests") when it has one, otherwise the subject; a
- * completed task is struck through; a blocked task names its open blockers.
+ * completed task is struck through.
  * Markers are checkbox glyphs like Claude Code's ☐ / ☒ (pending square,
  * completed checked square); the in_progress marker is a static dotted square
  * and only becomes a spinner while the agent is actually running (`running`,
@@ -24,8 +24,13 @@
  *
  * Rows are in `orderTasks` order (task-fold.ts): id order with each task's
  * blockers hoisted in front of it, so dependency-linked work reads top-down
- * even when it was created later; the `#id` label stays, it is how the model
- * and the user refer to a task.
+ * even when it was created later. That order is the only dependency signal
+ * shown: rows carry neither the `#id` nor a "(blocked by #n)" note. Ids are
+ * the model's handle, not the user's, and once blockers are hoisted the
+ * numbers read out of sequence (#1, #8, #4, #5 …) — noise that made the
+ * panel look broken; the blocked-by note only restated what the position
+ * already says. `openBlockers` (task-fold.ts) still derives the projection
+ * for anything that needs it (tests, TaskList parity).
  */
 import {
   ChevronDownIcon,
@@ -46,7 +51,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
-import { openBlockers, orderTasks, taskProgress, type TrackedTask } from "./task-fold";
+import { orderTasks, taskProgress, type TrackedTask } from "./task-fold";
 
 export type TaskProgressPanelProps = Omit<ComponentProps<"div">, "children"> & {
   /** The current list — `foldTasks(agent.messages)`. */
@@ -121,16 +126,13 @@ export const TaskProgressPanel = ({
         </CollapsibleTrigger>
         <CollapsibleContent className="data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 outline-none data-[state=closed]:animate-out data-[state=open]:animate-in">
           <ul className="max-h-48 space-y-1 overflow-y-auto border-t px-3 py-2">
-            {ordered.map((task) => {
-              const blockers = task.status === "completed" ? [] : openBlockers(task, tasks);
-              return (
+            {ordered.map((task) => (
               <li
                 key={task.id}
                 className="flex min-w-0 items-start gap-2 leading-5"
                 title={task.description || undefined}
               >
                 <span className="mt-0.5">{statusIcon(task.status, running)}</span>
-                <span className="shrink-0 text-muted-foreground text-xs leading-5">#{task.id}</span>
                 <span
                   className={cn(
                     "min-w-0 flex-1 wrap-break-word",
@@ -139,11 +141,6 @@ export const TaskProgressPanel = ({
                   )}
                 >
                   {task.status === "in_progress" ? (task.activeForm ?? task.subject) : task.subject}
-                  {blockers.length > 0 ? (
-                    <span className="ml-1 text-muted-foreground text-xs">
-                      (blocked by {blockers.map((id) => `#${id}`).join(", ")})
-                    </span>
-                  ) : null}
                 </span>
                 {task.owner ? (
                   <Badge variant="secondary" className="shrink-0 font-normal text-xs">
@@ -151,8 +148,7 @@ export const TaskProgressPanel = ({
                   </Badge>
                 ) : null}
               </li>
-              );
-            })}
+            ))}
           </ul>
         </CollapsibleContent>
       </Collapsible>

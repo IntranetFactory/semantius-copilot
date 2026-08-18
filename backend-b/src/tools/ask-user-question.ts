@@ -29,14 +29,21 @@
  * 2026-08-17 (importer flow): `edit` + `AskUserQuestion` in one batch → loop
  * continued → the model "called" the `user_answers` XML tag as a tool → error →
  * "waiting…" text. Nothing was auto-submitted (the card derives its state from
- * the answer signal alone), but the run looked broken. flue exposes no seam to
- * fix this mechanically (`useModel` has no parallel-tool-calls knob; pi's
- * `beforeToolCall`/`afterToolCall` are not wired), so the defense is the tool
- * contract: the description forbids sibling calls and names `user_answers` as
- * an input block, and the output carries a stop directive the model reads if
- * the loop continues anyway. A stub `user_answers` tool was rejected — it would
- * advertise the very name to avoid, and a model calling it INSTEAD of this tool
- * would end the turn with no card shown.
+ * the answer signal alone), but the run looked broken. Seen again 2026-08-18
+ * (admin flow): `TaskUpdate` + `AskUserQuestion` in one batch → loop continued
+ * → the model re-asked ALONE instead of ending silently → two settled
+ * AskUserQuestion parts in one message, both rendering as live cards. flue
+ * exposes no seam to fix this mechanically (`useModel` has no
+ * parallel-tool-calls knob; pi's `beforeToolCall`/`afterToolCall` are not
+ * wired; the harness has no history read a tool could dedupe against), so the
+ * defense is the tool contract: the description forbids sibling calls and
+ * names `user_answers` as an input block, and the output carries a stop
+ * directive the model reads if the loop continues anyway — plus the frontend
+ * folds an earlier unanswered ask that a later ask in the same message
+ * superseded into the tool-call group, so only the last ask is ever the live
+ * card (agent-chat.tsx `supersededQuestionCalls`). A stub `user_answers` tool
+ * was rejected — it would advertise the very name to avoid, and a model calling
+ * it INSTEAD of this tool would end the turn with no card shown.
  */
 import { defineTool } from '@flue/runtime';
 import * as v from 'valibot';

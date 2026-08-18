@@ -149,25 +149,42 @@ const toolName = (part: ToolPart) =>
     ? part.toolName
     : part.type.split("-").slice(1).join("-");
 
-/** The most informative one-liner in a call's input — its first non-empty
- * string value (a file path, a command, …) — so a collapsed row reads as
- * "edit entities/technician.json" rather than just "edit". */
+/** The most informative one-liner in a call's input, so a collapsed row reads
+ * as "edit entities/technician.json" rather than just "edit". Precedence:
+ *
+ * 1. `taskId` (TaskUpdate/TaskGet): "#3 → completed" / "#3 Run tests" beats
+ *    the bare "3" the string rules would pick.
+ * 2. `subject` (TaskCreate) — the title, never the long `description` body.
+ * 3. `description` — the plain-language line the model sends ALONGSIDE a
+ *    technical payload. Claude adds one to every `bash` call on its own
+ *    ("Checking the workspace and downloading the blueprint" next to a
+ *    600-char shell one-liner — the field Claude Code's Bash tool taught it;
+ *    Flue's schema tolerates the extra key), so it is what the collapsed row
+ *    should say. The command itself stays in the row's Parameters panel.
+ * 4. The first non-empty string value (a file path, a pattern, a command when
+ *    the model sent no description).
+ *
+ * The keys are looked up by name, not by position, so the summary does not
+ * depend on the order the model happened to emit the arguments in — which
+ * also matters mid-stream, when `input` is a partial object. */
 const summarizeInput = (input: ToolPart["input"]): string | undefined => {
   const flatten = (text: string) => text.replace(/\s+/g, " ").trim();
   if (typeof input === "string") return flatten(input) || undefined;
   if (!input || typeof input !== "object") return undefined;
-  // Task tools (TaskUpdate/TaskGet): "#3 → completed" / "#3 Run tests" beats
-  // the bare "3" the first-string rule would pick.
-  const { taskId, status, subject } = input as Record<string, unknown>;
+  const record = input as Record<string, unknown>;
+  const text = (value: unknown) =>
+    typeof value === "string" && value.trim() ? flatten(value) : undefined;
+  const { taskId, status } = record;
+  const subject = text(record.subject);
   if (typeof taskId === "string" || typeof taskId === "number") {
-    const detail =
-      typeof status === "string" ? ` → ${status}` : typeof subject === "string" ? ` ${flatten(subject)}` : "";
+    const detail = typeof status === "string" ? ` → ${status}` : subject ? ` ${subject}` : "";
     return `#${taskId}${detail}`;
   }
-  for (const value of Object.values(input as Record<string, unknown>)) {
-    if (typeof value === "string" && value.trim()) return flatten(value);
-  }
-  return undefined;
+  return (
+    subject ??
+    text(record.description) ??
+    Object.values(record).map(text).find((value) => value !== undefined)
+  );
 };
 
 export type ToolCallGroupProps = {
@@ -202,21 +219,25 @@ export const ToolCallGroup = ({ parts, className }: ToolCallGroupProps) => {
   }
 
   const single = parts.length === 1 ? parts[0] : undefined;
+  // The line names what is happening, not just which tool: while a call is
+  // in flight it carries that call's summary ("Running bash  Checking the
+  // workspace…" — read from the partial input as it streams), and a lone
+  // settled call keeps its summary so the common one-call case stays
+  // informative without a click.
+  const summary = active
+    ? summarizeInput(active.input)
+    : errorCount === 0 && single
+      ? summarizeInput(single.input)
+      : undefined;
   const label = active
     ? active.state === "approval-requested"
       ? `Awaiting approval · ${toolName(active)}`
-      : `Running ${toolName(active)}…`
+      : `Running ${toolName(active)}${summary ? "" : "…"}`
     : errorCount > 0
       ? `${parts.length} tool call${parts.length === 1 ? "" : "s"} · ${errorCount} failed`
       : single
         ? toolName(single)
         : `Ran ${parts.length} tool calls`;
-  // A lone settled call keeps its input summary on the line itself, so the
-  // common one-call case stays informative without a click.
-  const summary =
-    !active && errorCount === 0 && single
-      ? summarizeInput(single.input)
-      : undefined;
   const icon = active ? (
     <ClockIcon className="size-4 shrink-0 animate-pulse" />
   ) : errorCount > 0 ? (

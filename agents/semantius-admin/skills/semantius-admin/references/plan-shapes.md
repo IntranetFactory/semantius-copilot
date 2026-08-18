@@ -48,15 +48,13 @@ Then enter the analyst immediately.
 
 **Pattern 3 — Network-fetch plan.** The input is a URL: fetch the artifact first (Step 2 / Step 6.1), then route through Step 6 like any other deploy.
 
-**Print the URL** you're about to fetch, then fetch without a widget: the fetch is harmless, the user can see the URL is right, and if the fetched artifact is unexpected the analyst's parser will catch it. **The fetch is not the plan and is never a task** (it is internal staging). Once the artifact lands, resolve the scope flags (the `customize` question fires here whenever the user only said "deploy this"); only THEN are the tasks created (in Step 6.6) from the resolved flags. Do NOT create fetch → match → apply tasks and run them directly from this pattern: that skips the customize question.
+Fetch without a widget and without a pre-announcement (the URL is already in the user's own message; echoing it back adds nothing): the fetch is harmless, and if the fetched artifact is unexpected the front-matter validation or the analyst's parser will catch it. **The fetch is not the plan and is never a task** (it is internal staging). Its *result* is the one download milestone line (Output discipline, Step 2): the design's `system_name` and the source host, nothing about paths, folders, or validation. Once the artifact lands, resolve the scope flags (the `customize` question fires here whenever the user only said "deploy this"); only THEN are the tasks created (in Step 6.6) from the resolved flags. Do NOT create fetch → match → apply tasks and run them directly from this pattern: that skips the customize question.
 
-Example, where the user said only "deploy the model at `<URL>`". First the fetch result, in chat:
+Example, where the user said only "deploy the model at `<URL>`". First the milestone, in chat, once the front-matter has validated:
 
-> Fetching `https://example.com/blueprints/ats.md` ...
->
-> Fetched the Real Estate Agent design (7 entities). No matching spec in the workspace.
+> Downloaded the Real Estate Agent blueprint from example.com.
 
-Because the prompt carried no edit-first or as-is qualifier, the `customize` question fires next (exact wording in 6.4, through the ledger). Suppose the user picks "Deploy as designed"; the tasks are then created in Step 6.6:
+Nothing else is said about the fetch: not the staging folder, not where the file landed, not whether a matching spec sits in the workspace (that is 1.3 material and either fires its widget or stays in `$DIAG_LOG`). Because the prompt carried no edit-first or as-is qualifier, the `customize` question fires next (exact wording in 6.4, through the ledger). Suppose the user picks "Deploy as designed"; the tasks are then created in Step 6.6:
 
 - Task: `Match \`real-estate-agent\` against your live semantic model and write the spec.`
 - Task: `Apply \`real-estate-agent\` to your live semantic model.`

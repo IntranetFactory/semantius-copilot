@@ -561,7 +561,9 @@ type QuestionCtx = {
 
 /** Card state, derived from history alone (survives reloads and remounts):
  * answered beats everything; anything not on the LAST visible message is
- * stale (the user typed past it, or a newer response exists). */
+ * stale (the user typed past it, or a newer response exists). An earlier ask
+ * that a later ask in the SAME message superseded never gets here — it is
+ * folded into the tool-call group (supersededQuestionCalls). */
 function questionStatus(
   part: Extract<AgentPart, { type: 'dynamic-tool' }>,
   messageId: string,
@@ -591,19 +593,45 @@ function isQuestionCard(part: AgentPart): boolean {
   );
 }
 
+/** toolCallIds of question cards the model itself moved past: an earlier
+ * AskUserQuestion in the same message that was never answered and is followed
+ * by a later one. This is the tool's batch caveat as it plays out in practice
+ * (README "AskUserQuestion", backend-b/src/tools/ask-user-question.ts): a
+ * sibling call beside the widget cancels the pause, the model is handed
+ * another step and — instead of ending silently — asks again, alone this
+ * time, so the message ends with two settled AskUserQuestion parts on the
+ * last visible message and both would derive `pending`. Seen live 2026-08-18
+ * (`TaskUpdate` + `AskUserQuestion` in one batch → an identical re-ask): two
+ * interactive cards for one question. Only the LAST ask is live — its
+ * toolCallId is the one the answer must carry (an answer addressed to the
+ * earlier call would leave the later call's "no <user_answers> for THIS
+ * toolCallId → end silently" directive in force). The earlier ones fold into
+ * the tool-call group like any other settled call: not a "Skipped" card, which
+ * would say the user passed over a question they never had a chance to
+ * answer. An earlier ask that DID get an answer (a delivery joined into the
+ * running response) keeps its answered card. */
+function supersededQuestionCalls(parts: AgentPart[], answers: ReadonlyMap<string, AskUserAnswerPayload>): Set<string> {
+  const cards: ToolRunPart[] = [];
+  for (const part of parts) if (part.type === 'dynamic-tool' && isQuestionCard(part)) cards.push(part);
+  const superseded = new Set<string>();
+  for (const card of cards.slice(0, -1)) if (!answers.has(card.toolCallId)) superseded.add(card.toolCallId);
+  return superseded;
+}
+
 /** The transcript in render order, with runs of consecutive tool calls fused
  * into one segment for ToolCallGroup — a card per call was filling the
  * viewport with chrome. Only parts that render something inline (text, files,
  * question cards) break a run; reasoning (consolidated separately) and other
- * invisible parts pass through without splitting it. */
+ * invisible parts pass through without splitting it. A superseded question
+ * card (see supersededQuestionCalls) counts as an ordinary tool call. */
 type Segment =
   | { kind: 'tools'; key: string; parts: ToolRunPart[] }
   | { kind: 'part'; key: string; part: AgentPart };
 
-function toSegments(parts: AgentPart[]): Segment[] {
+function toSegments(parts: AgentPart[], superseded: ReadonlySet<string>): Segment[] {
   const segments: Segment[] = [];
   for (const [index, part] of parts.entries()) {
-    if (part.type === 'dynamic-tool' && !isQuestionCard(part)) {
+    if (part.type === 'dynamic-tool' && (!isQuestionCard(part) || superseded.has(part.toolCallId))) {
       const previous = segments.at(-1);
       if (previous?.kind === 'tools') previous.parts.push(part);
       else segments.push({ kind: 'tools', key: `tools-${index}`, parts: [part] });
@@ -633,7 +661,7 @@ function MessageView({ message, questions }: { message: AgentMessage; questions:
             <ReasoningContent>{reasoningText}</ReasoningContent>
           </Reasoning>
         ) : null}
-        {toSegments(message.parts).map((segment) =>
+        {toSegments(message.parts, supersededQuestionCalls(message.parts, questions.answers)).map((segment) =>
           segment.kind === 'tools' ? (
             <ToolCallGroup key={segment.key} parts={segment.parts} />
           ) : (
