@@ -13,9 +13,10 @@
 import { useFlueAgent } from '@flue/react';
 import type { FlueClient } from '@flue/sdk';
 import type { ChatStatus } from 'ai';
-import { MessageSquareIcon } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { MessageSquareIcon, RotateCcwIcon } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -46,6 +47,8 @@ import {
   PromptInputTools,
 } from './prompt-input';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from './reasoning';
+import { deriveRunNotices, retryMessageFor, settlementErrorOf, type RunNotice } from './run-outcome';
+import { RunOutcomeNotice } from './run-outcome-notice';
 import { seedFromMeta, useAgentMeta, withAgentSeed, type ChatAuth } from './session';
 import { foldTasks } from './task-fold';
 import { TaskProgressPanel } from './task-progress';
@@ -152,7 +155,10 @@ export function AgentChat({
   useEffect(() => {
     if (!client || !initialMessage || sentInitial.current) return;
     sentInitial.current = true;
-    void agent.sendMessage(initialMessage);
+    // Every hook send here is `.catch(() => {})`: a rejected POST is already
+    // recorded in agent.failedSends by the hook (and rendered above the
+    // composer with a Retry); the rejection itself carries nothing more.
+    void agent.sendMessage(initialMessage).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per mount
   }, []);
 
@@ -194,6 +200,18 @@ export function AgentChat({
   // so reloads and the key-flip remount re-derive the same panel.
   const tasks = useMemo(() => foldTasks(agent.messages), [agent.messages]);
 
+  // Failed / stopped runs, derived from settlements + the visible transcript
+  // (run-outcome.ts). Durable across reloads and the key-flip remount, unlike
+  // agent.status/agent.error, which the hook pins to THIS tab's submissions
+  // and forgets on the next send. Flue appends no advisory on the normal
+  // failure path, so this scan is the only source of the notice.
+  const runNotices = useMemo(() => deriveRunNotices(messages, agent.settlements), [messages, agent.settlements]);
+  const noticeByAnchor = useMemo(
+    () => new Map(runNotices.flatMap((notice) => (notice.anchorMessageId ? [[notice.anchorMessageId, notice] as const] : []))),
+    [runNotices],
+  );
+  const tailNotice = runNotices.find((notice) => !notice.anchorMessageId);
+
   // Answer sends in flight: toolCallId → submissionId once admitted. Transient
   // UI only ("Sending…" + busy strip) — the signal echo above takes over the
   // moment it lands. Entries are pruned when their submission settles.
@@ -225,6 +243,41 @@ export function AgentChat({
       return next;
     });
   }, [agent.settlements, answersInFlight]);
+
+  // Retry = a VISIBLE hook-managed user message naming the reason
+  // (retryMessageFor): the model reads its own partial output in history and
+  // continues, the user sees exactly what was asked, and the hook's status
+  // machinery (busy strip, ⏹, clearing the pinned ✕) works because it is an
+  // ordinary send. A rejected POST lands in failedSends like any other send.
+  const retryDisabled = busy || answerInFlight;
+  function retryRun(notice: RunNotice) {
+    if (retryDisabled) return;
+    void agent.sendMessage(retryMessageFor(notice.error?.message, notice.hasPartialReply)).catch(() => {});
+  }
+  const renderNotice = (notice: RunNotice) => (
+    <RunOutcomeNotice
+      key={`notice-${notice.key}`}
+      notice={notice}
+      onRetry={notice.atTail && notice.outcome === 'failed' ? () => retryRun(notice) : undefined}
+      retryDisabled={retryDisabled}
+    />
+  );
+
+  // A dropped/failed observation (history fetch or SSE): status 'error' that
+  // neither a failed send nor a failed settlement explains. The reducer builds
+  // the settlement flavour of agent.error as new Error(String(settlement.error
+  // .message)) — settlementErrorOf mirrors that string — so a message match
+  // rules it out; refresh() re-runs history catch-up and resumes live updates.
+  const transportError =
+    !draft &&
+    agent.status === 'error' &&
+    agent.error &&
+    agent.failedSends.length === 0 &&
+    !agent.settlements.some(
+      (settlement) => settlement.outcome === 'failed' && settlementErrorOf(settlement.error).message === agent.error?.message,
+    )
+      ? agent.error
+      : undefined;
 
   async function sendQuestionAnswer(toolCallId: string, result: { answers: Record<string, string>; cancelled: boolean }) {
     if (!seededClient) return;
@@ -302,7 +355,7 @@ export function AgentChat({
       return;
     }
     setInput('');
-    void agent.sendMessage(text);
+    void agent.sendMessage(text).catch(() => {});
   }
 
   function handleStop() {
@@ -372,7 +425,7 @@ export function AgentChat({
               ) : welcome ? (
                 <WelcomeCard
                   welcome={welcome}
-                  onSend={draft ? draftSend : (text) => void agent.sendMessage(text)}
+                  onSend={draft ? draftSend : (text) => void agent.sendMessage(text).catch(() => {})}
                   onPrefill={setInput}
                   onHint={onHint}
                 />
@@ -384,7 +437,22 @@ export function AgentChat({
                 />
               )
             ) : (
-              messages.map((message) => <MessageView key={message.id} message={message} questions={questionCtx} />)
+              <>
+                {messages.map((message) => {
+                  // A failed/stopped run's notice follows the last visible
+                  // message of its turn (the partial reply, else the user
+                  // bubble); one that no visible message anchors (a
+                  // signal-triggered run) closes the transcript.
+                  const notice = noticeByAnchor.get(message.id);
+                  return (
+                    <Fragment key={message.id}>
+                      <MessageView message={message} questions={questionCtx} />
+                      {notice ? renderNotice(notice) : null}
+                    </Fragment>
+                  );
+                })}
+                {tailNotice ? renderNotice(tailNotice) : null}
+              </>
             )}
           </ConversationContent>
           <ConversationScrollButton />
@@ -410,6 +478,31 @@ export function AgentChat({
           ) : null}
           {uploadError ? <div className="mb-2 text-destructive text-sm">upload failed — {uploadError}</div> : null}
           {answerError ? <div className="mb-2 text-destructive text-sm">answer failed — {answerError}</div> : null}
+          {/* The POST never reached the server (401 / 5xx / offline): resend the
+              text verbatim. The optimistic bubble stays in the transcript until
+              the next dispatch clears failedSends/failedOptimistic (reducer);
+              normally there is at most one entry — a new send clears the list. */}
+          {agent.failedSends.map((failed) => (
+            <div key={failed.id} className="mb-2 flex items-center gap-2 text-sm">
+              <span className="min-w-0 flex-1 wrap-break-word text-destructive">send failed — {failed.error.message}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={retryDisabled}
+                onClick={() => void agent.sendMessage(failed.message).catch(() => {})}
+              >
+                <RotateCcwIcon /> Retry
+              </Button>
+            </div>
+          ))}
+          {transportError ? (
+            <div className="mb-2 flex items-center gap-2 text-sm">
+              <span className="min-w-0 flex-1 wrap-break-word text-destructive">connection error — {transportError.message}</span>
+              <Button size="xs" variant="outline" onClick={() => agent.refresh()}>
+                Reconnect
+              </Button>
+            </div>
+          ) : null}
           <PromptInput onSubmit={handleSubmit}>
             <PromptInputBody>
               <PromptInputTextarea
@@ -433,8 +526,12 @@ export function AgentChat({
               </PromptInputTools>
               {/* No status text — the submit icon reflects agent.status via
                   toChatStatus: ready ↵ / submitted ⟳ / streaming ⏹ / error ✕.
-                  While generating the button is enabled and onStop wires the
-                  click to client.abort() (kills the run and any queued work). */}
+                  The ✕ is never the only signal: a failed run renders its
+                  inline notice in the transcript (run-outcome.ts), a failed
+                  send / dropped connection its line above the composer, each
+                  with a retry. While generating the button is enabled and
+                  onStop wires the click to client.abort() (kills the run and
+                  any queued work). */}
               <PromptInputSubmit
                 status={chatStatus}
                 disabled={draft ? draftPending || !meta || !input.trim() : !busy && !input.trim()}

@@ -533,6 +533,7 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
     ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
     ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
+    ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
     ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });

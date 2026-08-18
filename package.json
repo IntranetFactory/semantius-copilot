@@ -7,7 +7,7 @@
   "scripts": {
     "bundle": "node scripts/bundle.mjs",
     "smoke": "node scripts/node-smoke.mjs",
-    "test": "node scripts/admin.test.mjs && node scripts/model-limits.test.mjs && node scripts/tasks.test.mjs",
+    "test": "node scripts/admin.test.mjs && node scripts/model-limits.test.mjs && node scripts/openrouter-routing.test.mjs && node scripts/tasks.test.mjs && node scripts/run-outcome.test.mjs",
     "dev:b": "pnpm --filter backend-b dev",
     "dev:frontend": "pnpm --filter frontend dev",
     "build:b": "pnpm --filter backend-b build",

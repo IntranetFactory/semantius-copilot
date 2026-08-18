@@ -114,6 +114,7 @@ async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown
         ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
         ...(typeof bundle.maxTokens === 'number' ? { maxTokens: bundle.maxTokens } : {}),
         ...(typeof bundle.contextWindow === 'number' ? { contextWindow: bundle.contextWindow } : {}),
+        ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
       },
     };
   } catch {

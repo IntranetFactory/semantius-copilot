@@ -10,6 +10,46 @@
   // that applies. This agent needs well over 300k output for single-shot
   // blueprint spec writes.
   "model": "deepseek/deepseek-v4-flash-0731", // alternative: "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
+  // OpenRouter provider routing, forwarded verbatim as the request's `provider`
+  // object (every model turn + the title side call). Filters apply BEFORE the
+  // ranking; all facts below measured 2026-08-18 against the 28 hosts serving
+  // the -0731 slug (GET openrouter.ai/api/v1/models/<slug>/endpoints, public).
+  //  - sort "throughput" = the :nitro shortcut: rank hosts by tokens/s instead
+  //    of price. Turns OFF OpenRouter's price-based load balancing.
+  //  - max_price: USD per MILLION tokens, input and output capped separately.
+  //    0.14/0.28 is this model's catalog list rate: ~20 hosts sit at or under
+  //    it, the rest run 1.5–3× (DeepSeek first-party 0.22/0.66, Wafer
+  //    0.28/0.56, Cloudflare 0.44/1.32) — without the cap the throughput sort
+  //    landed on a 2× host.
+  //  - quantizations: DeepSeek V4 is FP8-native, so fp8/bf16/fp16/fp32 =
+  //    "native or better". Excludes the fp4 hosts (Relace, Inceptron,
+  //    AtlasCloud, Ambient, Decart, OpenInference, Sail Research) AND hosts
+  //    that do not disclose their quant (Fireworks, DigitalOcean, Together,
+  //    Wafer, Phala, Venice, Cloudflare — verified: OpenRouter answers "No
+  //    endpoints found for the request with quantization: …" for an
+  //    undisclosed host). Add "unknown" to the list to readmit those.
+  //  - >300k output / 1M context: NOT a routing field, and not needed as one.
+  //    OpenRouter routes only to hosts whose output cap covers the request's
+  //    max_tokens (docs: "if you set a max_tokens, OpenRouter will only route
+  //    to providers that support a response of that length"; verified: a
+  //    price sort over {baidu 131k-out, novita} served from Novita), and pi-ai
+  //    requests this catalog entry's 393216 (shrinking only as the context
+  //    fills), so every sub-300k host (Baidu 131k, AkashML 131k, Io Net 65k,
+  //    the 262k hosts CoreWeave/Decart/OpenInference/Sail Research) is skipped
+  //    per request — also for hosts added later, unlike a static `ignore`
+  //    list. Caveat: an `only` list with a single incapable host is still
+  //    tried (and fails mid-stream). Side effect: StreamLake/DeepInfra (fp8,
+  //    cheap, 384000-out) are excluded on fresh sessions because 384000 <
+  //    393216 — an agent-level "max_tokens": 384000 would readmit them.
+  //  Eligible after all filters: BaseTen, Novita, Parasail, SiliconFlow,
+  //  GMICloud (fp8; output cap undisclosed), Morph (bf16, low uptime).
+  //  Other fields (only/ignore, require_parameters, zdr, …) pass straight
+  //  through — see the schema's openrouter_routing for the list.
+  "openrouter_routing": {
+    "sort": "throughput",
+    "max_price": { "prompt": 0.14, "completion": 0.28 },
+    "quantizations": ["fp8", "bf16", "fp16", "fp32"]
+  },
   "proxy_whitelist": [
     "registry.npmjs.org",  // for  dependencies
     "registry.npmjs.org",  // for  dependencies

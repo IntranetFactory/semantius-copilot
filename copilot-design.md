@@ -79,6 +79,12 @@ are added to schema + `validateAgentConfig` together):
   as-is, else `openrouter/` is prepended. Missing → the backend's env default (§ LLM).
 - `model_base_url` — optional http(s) URL; per-agent transport override (auth stays the
   worker-wide `LLM_API_KEY`).
+- `max_tokens` / `context_window` — optional integers; explicit model limits winning over
+  catalog metadata (README "LLM configuration").
+- `openrouter_routing` — optional object; OpenRouter provider-routing preferences
+  (`sort`, `order`, `only`, `max_price`, …) forwarded VERBATIM as the request-body
+  `provider` object on every model turn and the title side call — no key whitelist, only
+  "plain object, ≤4 KiB" (README "OpenRouter provider routing").
 - `proxy_whitelist` — optional array of egress globs: a hostname or a URL, `*` allowed
   anywhere (`abc.com`, `*.suffix`, `api.*.acme.io`, `https://x/abc/*`), ≤32 entries.
   **DENY-ALL WHEN ABSENT**: an agent without it can make no outbound request from its
@@ -128,6 +134,7 @@ instructions, optional model overrides, and every file of every skill:
   "instructions":"…agent.jsonc instructions + INSTRUCTIONS.md…",
   "model":"openrouter/…",            // optional, pre-normalized (prefix rule, §3)
   "modelBaseUrl":"https://…",        // optional
+  "openRouterRouting":{"sort":"throughput"},  // optional — OpenRouter `provider` object, verbatim (§3)
   "proxyWhitelist":["postman-echo.com"],  // optional — DENY-ALL egress when absent (§7)
   "skills": { "planner": { "SKILL.md":"…", "references/echo-basin.md":"…",
                            "references/north-ridge.md":"…", "scripts/opening-times.js":"…" } } }

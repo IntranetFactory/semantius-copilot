@@ -89,6 +89,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
   hash.update(config.model_base_url ?? '').update('\0');
   hash.update(String(config.max_tokens ?? '')).update('\0');
   hash.update(String(config.context_window ?? '')).update('\0');
+  hash.update(config.openrouter_routing ? JSON.stringify(config.openrouter_routing) : '').update('\0');
   hash.update((config.proxy_whitelist ?? []).join(',')).update('\0');
   hash.update(config.welcome ? JSON.stringify(config.welcome) : '').update('\0');
   hash.update(options.baseImage ?? 'node').update('\0');
@@ -108,6 +109,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
     ...(config.model_base_url ? { modelBaseUrl: config.model_base_url } : {}),
     ...(config.max_tokens !== undefined ? { maxTokens: config.max_tokens } : {}),
     ...(config.context_window !== undefined ? { contextWindow: config.context_window } : {}),
+    ...(config.openrouter_routing !== undefined ? { openRouterRouting: config.openrouter_routing } : {}),
     ...(config.proxy_whitelist ? { proxyWhitelist: config.proxy_whitelist } : {}),
     ...(config.welcome ? { welcome: config.welcome } : {}),
     skills,

@@ -167,6 +167,9 @@ The backend contract the surface speaks (any backend-b-shaped Worker, addressed 
 sessions, whitelisted meta), `POST /sessions/agent`, `/agents/main/:sessionId` (flue v2
 + SSE).
 
+Failed / stopped runs, failed sends, and connection errors are surfaced by the transcript
+itself, with a Retry — see "Failed runs, stopped runs, retry" below.
+
 ## Layout
 
 ```
@@ -222,6 +225,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "instructions": "…",                // agent.jsonc instructions + INSTRUCTIONS.md (appended)
   "model": "openrouter/…",            // optional, pre-normalized (see LLM configuration)
   "modelBaseUrl": "https://…",        // optional, from model_base_url
+  "openRouterRouting": { "sort": "throughput" },  // optional, from openrouter_routing — forwarded verbatim as OpenRouter's `provider` object
   "proxyWhitelist": ["postman-echo.com"],  // optional — hosts/URLs, `*` anywhere; unioned with the org's list at egress
   "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
@@ -640,7 +644,8 @@ Two layers:
   `LLM_API_KEY` is a secret (`.dev.vars` locally, `wrangler secret put` deployed). Default:
   OpenRouter + `deepseek/deepseek-v4-flash`. Keep the vars/secret split — the key is the
   only secret value.
-- **Per-agent override** (`agent.jsonc`): optional `model` and `model_base_url`. The
+- **Per-agent override** (`agent.jsonc`): optional `model`, `model_base_url`,
+  `max_tokens`/`context_window`, and `openrouter_routing` (next subsection). The
   bundler normalizes `model` with a prefix rule — a first path segment that is a known
   provider (`openrouter`, `custom`, `cloudflare`) is kept as-is, anything else gets
   `openrouter/` prepended (so `"tencent/hy3"` means `openrouter/tencent/hy3`). At runtime
@@ -677,6 +682,52 @@ predicate, so they cannot drift):
 - **after the fact** — `pnpm sessions` has a `len-stops` column (per session, and per
   message with `--session <id>`) counting truncated responses from the Braintrust spans
   (`flue.stop_reason`).
+
+### OpenRouter provider routing (per-agent `openrouter_routing`)
+
+`agent.jsonc` may carry an `openrouter_routing` object — OpenRouter's
+[provider-routing preferences](https://openrouter.ai/docs/features/provider-routing) —
+which the bundler ships as `openRouterRouting` and the backend forwards **verbatim** as the
+request-body `provider` object on every model turn *and* the session-title side call.
+There is no key whitelist: `validateAgentConfig` only checks "plain object, ≤4 KiB
+serialized" (`AGENT_LIMITS.maxRoutingBytes`) — OpenRouter validates its own fields, so a
+new OpenRouter routing field needs no code change here, and an unknown/ill-typed one fails
+the turn with OpenRouter's error. The schema (`core/agent.schema.json`) lists the known
+fields for editor completion: `sort` (`"price"` = the `:floor` shortcut, `"throughput"` =
+`:nitro`, `"latency"`, or `{ by, partition }`), `order`, `only`, `ignore`,
+`allow_fallbacks`, `require_parameters`, `data_collection`, `zdr`,
+`enforce_distillable_text`, `quantizations`, `max_price` (USD **per million tokens, per
+direction** — `prompt` = input and `completion` = output are independent ceilings, plus
+per-unit `request`/`image`/`audio`), `preferred_min_throughput`, `preferred_max_latency`.
+Setting `sort` or `order` disables OpenRouter's default price-based load balancing.
+
+Mechanics (`backend-b/src/llm.ts`): the routing rides on the per-agent `agent-<name>`
+provider entry as pi-ai's `compat.openRouterRouting`, which its openai-completions API
+sends as `params.provider` unchanged — so it works for catalog-known models (full catalog
+metadata kept, only the routing added), dated slugs and catalog misses alike, for the
+`openrouter` and `custom` providers (an OpenRouter-compatible proxy is the agent author's
+call), and is silently ignored for `cloudflare` (AI binding, no HTTP body). The title call
+(`src/title.ts`) sends the same object, so an agent pinned to e.g. `zdr`/`data_collection:
+"deny"` hosts never leaks its transcript to another host for a title. Prefer this over the
+`:nitro`/`:floor` model-id suffixes: those are not Pi catalog ids, so they would resolve
+through the placeholder path (see above) and lose the model's metadata.
+`scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, bundler
+plumbing, and drives the installed pi-ai dist against a canned fetch to assert the request
+body's `provider` is the routing object byte-for-byte. `semantius-admin` runs with
+`{ "sort": "throughput", "max_price": { "prompt": 0.14, "completion": 0.28 },
+"quantizations": ["fp8", "bf16", "fp16", "fp32"] }` — fastest FP8-or-better host at or
+under the model's catalog list rate (filters apply *before* the throughput ranking; without
+the cap the sort landed on a 2×-priced host). Per-host prices, quantization and output caps
+for a model: `GET https://openrouter.ai/api/v1/models/<slug>/endpoints` (public).
+
+Verified against the deployed worker (2026-08-18, hand-crafted turn-1 seeds via
+`chat-probe`): a `quantizations` allow-list excludes hosts with *undisclosed* quant
+(OpenRouter: "No endpoints found for the request with quantization: …"); minimum
+context/output is NOT a routing field but OpenRouter routes only to hosts whose output cap
+covers the request's `max_tokens` (a price sort over `{baidu (131k out), novita}` served
+from Novita) — pi-ai requests the catalog entry's `maxTokens`, so sub-300k hosts are
+skipped per request; a single-host `only` pinned to an incapable host is still tried and
+fails mid-stream.
 
 ## Welcome card (per-agent `welcome`)
 
@@ -1469,6 +1520,74 @@ constant, README, and probe; old sessions carry it in history).
 `node scripts/ask-user-question-probe.mjs` verifies the full round-trip against the
 deployed backend: ask turn settles `completed` with the tool part, the answer signal wakes
 the agent and projects `system/dispatch/diagnostic`, and the reply repeats the chosen label.
+
+## Failed runs, stopped runs, retry
+
+Three things can go wrong with a chat turn, and until 2026-08-18 the surface showed none of them
+beyond the submit button flipping to ✕ (`toChatStatus`): the run **failed** server-side (an LLM
+upstream error mid-stream, a context overflow, a tool crash), the **send** never reached the
+server (401 / 5xx / offline), or the **observation** dropped (history fetch / SSE). The trigger
+was session `tests-user3-01f28da3ae2c4450be9db37564b40dd5`: OpenRouter's Inceptron host
+crashed mid-stream (`Upstream error from Inceptron: EngineCore encountered an issue…` — vLLM's
+`EngineDeadError` text), the reasoning stopped mid-sentence, and the message existed only in
+the admin console's raw JSON `settlements`. Nothing retries a turn on its own: pi-ai's
+`retryProviderRequest` retries only request *establishment*, a mid-stream `error` chunk becomes
+`stopReason: "error"` and the loop ends; OpenRouter's fallbacks apply only before the first token.
+
+**Failed / stopped runs render inline in the transcript** (`run-outcome.ts` +
+`run-outcome-notice.tsx`, wired in `agent-chat.tsx`). Truth is `agent.settlements` joined to
+the *visible* messages by `submissionId` — the user message that opened a submission and the
+partial assistant reply it produced share one id — never `agent.status` / `agent.error`:
+
+- Flue appends **no advisory message on the normal failure path** (verified live: the
+  conversation held the user message, the partial assistant message — both `display:
+  'visible'` — and one `failed` settlement, nothing else). Only the reconciliation and abort
+  paths append a `submission_interrupted` / `submission_aborted` advisory, and that projects
+  `display: 'diagnostic'`, which the transcript filter drops anyway.
+- `useFlueAgent().status === 'error'` for a failed run applies only to submissions sent by
+  **this tab** (`localSubmissionIds`) and is cleared only by the next hook-managed
+  `sendMessage()`; after a reload a failed tail reads `idle`. So, like the AskUserQuestion
+  answer state and the task fold, the notice is re-derived from history on every render and
+  survives reloads and the container's key-flip remount.
+
+`deriveRunNotices(messages, settlements)` anchors each `failed` / `aborted` settlement on the
+LAST visible message carrying its id (the partial reply if any, else the user bubble) and marks
+it `atTail` when nothing visible follows — the only place a Retry is offered. A settlement no
+visible message carries (a signal-triggered run — its input projects `diagnostic` — that failed
+before any output) renders at the end of the transcript, only when it is the newest settlement
+and the transcript is at rest (no pending echo, last message settled). Joined deliveries
+(`answeredBySubmissionId`) fold into their host's notice. `completed` settlements render nothing —
+the reply is the marker. Mid-run there is no settlement, so no notice appears while streaming.
+
+What the user sees: `run failed — <settlement.error.message>` in a destructive-bordered box
+under the failed turn, `details` collapsed when the settlement carries any (Flue's own
+`internal_error` text asks the user to quote the submission id, so it is in there), and
+**Retry** at the tail; a stopped run gets a muted `Stopped.` (Flue folds an aborted partial
+into the next turn on its own, so no action is offered).
+
+**Retry sends a visible, hook-managed user message** (`retryMessageFor`): with a partial reply
+in history, `Continue — your previous response was interrupted by an error: <first line of the
+message, without Flue's direct(<sub>) failed: wrapper>. Pick up where you stopped; do not
+repeat work that already completed.`; without one, `Try again — your previous response failed
+before producing anything: <reason>.` A visible message was chosen over a hidden `kind: 'signal'`
+nudge because it goes through the hook: the busy strip and ⏹ work, the pinned ✕ clears, and
+after a reload the transcript explains itself. The button is inert while a send/run is in
+flight and disappears as soon as anything newer is in the transcript.
+
+**Failed sends** render above the composer as `send failed — <message>` with a Retry that
+re-sends the text verbatim (`agent.failedSends[i].message` — nothing reached the server); the
+optimistic bubble stays in the transcript until the next dispatch clears it (reducer). Every
+`agent.sendMessage(...)` call in the surface is `.catch(() => {})`: the hook records the
+rejection in `failedSends` before rethrowing, so the rejection itself carries nothing more.
+**Connection errors** (`status: 'error'` explained by neither a failed send nor a failed
+settlement — the reducer builds the settlement flavour of `agent.error` as
+`new Error(String(settlement.error.message))`, which `settlementErrorOf` mirrors, so a message
+match rules it out) render as `connection error — <message>` with a **Reconnect** button →
+`agent.refresh()`.
+
+`scripts/run-outcome.test.mjs` (part of `pnpm test`) covers the derivation over the real
+session's shape plus aborted / completed / older-failed / unanchored / pending-echo / joined
+cases and the message helpers.
 
 ## Task tracking (TaskCreate / TaskUpdate / TaskList / TaskGet)
 

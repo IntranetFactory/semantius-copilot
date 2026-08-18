@@ -10,7 +10,7 @@
  */
 import { env } from 'cloudflare:workers';
 import { setProvider } from '@flue/runtime';
-import { createProvider } from '@earendil-works/pi-ai';
+import { createProvider, type OpenRouterRouting } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
 import { applyModelLimits, configureLlm, resolveCatalogModel } from '@semantius-copilot/core';
@@ -76,7 +76,25 @@ export type AgentLlm = {
   maxTokens?: number;
   /** agent.jsonc context_window — explicit window, wins over catalog metadata. */
   contextWindow?: number;
+  /** agent.jsonc openrouter_routing — OpenRouter provider-routing preferences,
+   * forwarded verbatim as the request-body `provider` object (pi-ai's
+   * `compat.openRouterRouting`) on every model turn and the title side call. */
+  openRouterRouting?: Record<string, unknown>;
 };
+
+/** Attach the agent's routing preferences to a catalog/placeholder entry:
+ * pi-ai's openai-completions API sends `model.compat.openRouterRouting` as the
+ * request-body `provider` field verbatim, so this is the whole forwarding —
+ * no key mapping, no pi-ai patch. Untouched when the agent set none. The cast
+ * only satisfies pi-ai's advisory type: the object is whatever agent.jsonc
+ * declared, and OpenRouter (not this code) validates its fields. */
+function withRouting<T extends { compat?: object }>(entry: T, agent: AgentLlm): T {
+  if (agent.openRouterRouting === undefined) return entry;
+  return {
+    ...entry,
+    compat: { ...(entry.compat ?? {}), openRouterRouting: agent.openRouterRouting as OpenRouterRouting },
+  };
+}
 
 /**
  * The one predicate for "this agent's model resolves through the degrading
@@ -128,12 +146,15 @@ const warnedPlaceholderSpecs = new Set<string>();
  * for one-shot side calls (session title generation) that must not run
  * through the Flue harness. Same resolution order as agentModelSpecifier:
  * agent model override -> env default; agent model_base_url -> LLM_BASE_URL
- * -> the provider's stock endpoint. Null when there is no HTTP endpoint
- * (cloudflare AI binding) or no key — callers skip the feature.
+ * -> the provider's stock endpoint. `routing` is the agent's OpenRouter
+ * routing object for the caller to send as the body's `provider` field, so a
+ * side call honors the same provider preferences as the agent's turns. Null
+ * when there is no HTTP endpoint (cloudflare AI binding) or no key — callers
+ * skip the feature.
  */
 export function chatCompletionsTarget(
   agent?: AgentLlm | null,
-): { baseUrl: string; model: string; apiKey: string } | null {
+): { baseUrl: string; model: string; apiKey: string; routing?: Record<string, unknown> } | null {
   const spec = agent?.model ?? MODEL_SPECIFIER;
   const slash = spec.indexOf('/');
   const provider = spec.slice(0, slash);
@@ -142,7 +163,7 @@ export function chatCompletionsTarget(
   const baseUrl = agent?.modelBaseUrl ?? vars.LLM_BASE_URL ?? PROVIDER_BASE_URLS[provider];
   const apiKey = vars.LLM_API_KEY;
   if (!baseUrl || !apiKey) return null;
-  return { baseUrl, model, apiKey };
+  return { baseUrl, model, apiKey, ...(agent?.openRouterRouting ? { routing: agent.openRouterRouting } : {}) };
 }
 
 /**
@@ -155,17 +176,23 @@ export function chatCompletionsTarget(
  *     limit overrides -> return the specifier unchanged; it resolves against
  *     the `openrouter` provider (re-registered by configureLlm with the
  *     LLM_API_KEY secret) and keeps the full catalog entry.
- *  2. catalog-resolvable model + model_base_url and/or explicit limits ->
- *     dedicated one-model provider `agent-<name>` reusing the catalog entry,
- *     only the transport/limits swapped. "Catalog-resolvable" includes the
- *     dated-slug fallback (resolveCatalogModel): a pinned `…-0731` slug
- *     reuses the undated base entry's metadata while the request keeps the
- *     dated model id, so snapshot pinning no longer degrades to the
- *     placeholder (the 2026-08-12 truncation incident).
+ *  2. catalog-resolvable model + model_base_url, explicit limits and/or
+ *     openrouter_routing -> dedicated one-model provider `agent-<name>`
+ *     reusing the catalog entry, only the transport/limits/routing swapped.
+ *     "Catalog-resolvable" includes the dated-slug fallback
+ *     (resolveCatalogModel): a pinned `…-0731` slug reuses the undated base
+ *     entry's metadata while the request keeps the dated model id, so
+ *     snapshot pinning no longer degrades to the placeholder (the 2026-08-12
+ *     truncation incident).
  *  3. catalog miss (custom endpoints, models newer than the catalog) ->
  *     dedicated provider with a conservative placeholder entry (no
  *     reasoning, 128k window, 8k output) — the only degrading path, and
  *     agent.jsonc max_tokens/context_window override even that.
+ * openrouter_routing rides along on paths 2 and 3 as the entry's
+ * `compat.openRouterRouting` (withRouting) — pi-ai sends it verbatim as the
+ * request-body `provider` object; it is forwarded for any HTTP provider
+ * (openrouter, custom — an OpenRouter-compatible proxy is the agent author's
+ * call) and silently ignored for the cloudflare AI binding.
  * The `agent-<name>` id is unique per agent so concurrent agents in one
  * isolate never clobber each other; setProvider replaces same-id
  * registrations, so re-registering on every render is idempotent. Auth
@@ -173,7 +200,14 @@ export function chatCompletionsTarget(
  * transport only.
  */
 export function agentModelSpecifier(agent?: AgentLlm | null): string {
-  if (!agent || (!agent.model && !agent.modelBaseUrl && agent.maxTokens === undefined && agent.contextWindow === undefined)) {
+  if (
+    !agent ||
+    (!agent.model &&
+      !agent.modelBaseUrl &&
+      agent.maxTokens === undefined &&
+      agent.contextWindow === undefined &&
+      agent.openRouterRouting === undefined)
+  ) {
     return MODEL_SPECIFIER;
   }
   // The bundler pre-normalizes `model` to a full provider/model specifier.
@@ -181,14 +215,15 @@ export function agentModelSpecifier(agent?: AgentLlm | null): string {
   const slash = spec.indexOf('/');
   const upstreamProvider = spec.slice(0, slash);
   const modelId = spec.slice(slash + 1);
-  if (upstreamProvider === 'cloudflare') return spec; // AI binding; no base-url override
+  if (upstreamProvider === 'cloudflare') return spec; // AI binding; no base-url/routing override
 
   const { entry: catalogEntry, exact } =
     upstreamProvider === 'openrouter'
       ? resolveCatalogModel(openrouterProvider().getModels(), modelId)
       : { entry: undefined, exact: false };
   const hasLimitOverride = agent.maxTokens !== undefined || agent.contextWindow !== undefined;
-  if (exact && catalogEntry && !agent.modelBaseUrl && !hasLimitOverride) return spec;
+  const hasRouting = agent.openRouterRouting !== undefined;
+  if (exact && catalogEntry && !agent.modelBaseUrl && !hasLimitOverride && !hasRouting) return spec;
 
   // modelCatalogWarning is the single predicate for "this resolution
   // degrades" — it already accounts for the dated-slug fallback and an
@@ -213,21 +248,24 @@ export function agentModelSpecifier(agent?: AgentLlm | null): string {
       id,
       auth,
       models: [
-        applyModelLimits(
-          catalogEntry
-            ? { ...catalogEntry, provider: id, baseUrl: agent.modelBaseUrl ?? catalogEntry.baseUrl }
-            : {
-                id: modelId,
-                name: modelId,
-                api: 'openai-completions' as const,
-                provider: id,
-                baseUrl: agent.modelBaseUrl ?? vars.LLM_BASE_URL ?? PROVIDER_BASE_URLS[upstreamProvider] ?? '',
-                reasoning: false,
-                input: ['text' as const],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 8192,
-              },
+        withRouting(
+          applyModelLimits(
+            catalogEntry
+              ? { ...catalogEntry, provider: id, baseUrl: agent.modelBaseUrl ?? catalogEntry.baseUrl }
+              : {
+                  id: modelId,
+                  name: modelId,
+                  api: 'openai-completions' as const,
+                  provider: id,
+                  baseUrl: agent.modelBaseUrl ?? vars.LLM_BASE_URL ?? PROVIDER_BASE_URLS[upstreamProvider] ?? '',
+                  reasoning: false,
+                  input: ['text' as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                },
+            agent,
+          ),
           agent,
         ),
       ],

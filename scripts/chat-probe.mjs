@@ -98,6 +98,7 @@ const seed = {
   ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
   ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
   ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
+  ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
   ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
   ...(payload !== undefined ? { payload } : {}),
 };

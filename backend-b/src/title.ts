@@ -112,6 +112,12 @@ async function generateTitle(transcript: string, agent: AgentLlm | null | undefi
       max_tokens: 100,
       temperature: 0.3,
       ...(target.baseUrl.includes('openrouter.ai') ? { reasoning: { enabled: false } } : {}),
+      // The agent's openrouter_routing, verbatim — same provider preferences
+      // as its model turns (an agent pinned to ZDR/no-data-collection hosts
+      // must not leak its transcript to another host for a title). Sent
+      // whenever the agent set it: unlike `reasoning` above this is the
+      // agent author's explicit opt-in, so a custom endpoint gets it too.
+      ...(target.routing ? { provider: target.routing } : {}),
     }),
   });
   if (!res.ok) return null;

@@ -153,6 +153,9 @@ type AgentMeta = {
    * over catalog metadata (see AgentLlm in ../llm.ts). */
   maxTokens?: number;
   contextWindow?: number;
+  /** agent.jsonc openrouter_routing — forwarded verbatim as the OpenRouter
+   * request-body `provider` object (see AgentLlm in ../llm.ts). */
+  openRouterRouting?: Record<string, unknown>;
   binding: string;
   /**
    * Explicit skill catalog (name + SKILL.md description) mounted via
@@ -246,6 +249,11 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
     ...(typeof seed.modelBaseUrl === 'string' ? { modelBaseUrl: seed.modelBaseUrl } : {}),
     ...(typeof seed.maxTokens === 'number' ? { maxTokens: seed.maxTokens } : {}),
     ...(typeof seed.contextWindow === 'number' ? { contextWindow: seed.contextWindow } : {}),
+    // Same shape gate as the bundle validator (a plain object); the contents
+    // are OpenRouter's to validate, exactly as for a deployed definition.
+    ...(seed.openRouterRouting !== null && typeof seed.openRouterRouting === 'object' && !Array.isArray(seed.openRouterRouting)
+      ? { openRouterRouting: seed.openRouterRouting }
+      : {}),
     ...(skillCatalog && skillCatalog.length > 0 ? { skillCatalog } : {}),
     binding,
   };
@@ -488,6 +496,7 @@ export function Main({ id }: AgentProps) {
         ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
         ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
         ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
+        ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
         ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
         binding,
       });

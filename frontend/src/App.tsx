@@ -47,6 +47,7 @@ type AgentBundle = {
   instructions: string;
   model?: string;
   modelBaseUrl?: string;
+  openRouterRouting?: Record<string, unknown>;
   proxyWhitelist?: string[];
   welcome?: AgentWelcome;
   skills: Record<string, Record<string, string>>;
@@ -939,6 +940,14 @@ function BundleView({ bundle }: { bundle: AgentBundle }) {
             <dt>modelBaseUrl</dt>
             <dd>
               <code>{bundle.modelBaseUrl}</code>
+            </dd>
+          </div>
+        ) : null}
+        {bundle.openRouterRouting ? (
+          <div className="meta-row">
+            <dt>routing</dt>
+            <dd>
+              <code>{JSON.stringify(bundle.openRouterRouting)}</code>
             </dd>
           </div>
         ) : null}

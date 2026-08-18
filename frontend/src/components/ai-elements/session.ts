@@ -43,6 +43,8 @@ export type AgentSeed = {
   /** agent.jsonc max_tokens/context_window — explicit model limits the backend applies over catalog metadata. */
   maxTokens?: number;
   contextWindow?: number;
+  /** agent.jsonc openrouter_routing — OpenRouter provider-routing preferences the backend forwards verbatim. */
+  openRouterRouting?: Record<string, unknown>;
   /** Explicit skill catalog (name + description) so turn 1 mounts skills via useSkill(). */
   skillCatalog?: Array<{ name: string; description: string }>;
 };

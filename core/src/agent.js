@@ -16,6 +16,9 @@
  * @property {string} [modelBaseUrl] OpenAI-compatible endpoint override
  * @property {number} [maxTokens]  output-token cap override (wins over catalog metadata)
  * @property {number} [contextWindow] context-window override in tokens (wins over catalog metadata)
+ * @property {Record<string, unknown>} [openRouterRouting] OpenRouter provider-routing
+ *   preferences, forwarded VERBATIM as the request-body `provider` object (sort, order,
+ *   only, ignore, require_parameters, max_price, …)
  * @property {string[]} [proxyWhitelist] egress allow list (host/URL globs), unioned at
  *   egress with the org's own list; DENY-ALL when both are absent/empty
  * @property {AgentWelcome} [welcome] welcome card shown by the chat UI while a conversation is empty
@@ -55,6 +58,11 @@ export const AGENT_LIMITS = {
   // for any plausible model (100M tokens), small enough to catch unit slips
   // (bytes, characters) at bundle time.
   maxModelLimitTokens: 100_000_000,
+  // Serialized-size cap on openrouter_routing. The object is forwarded to
+  // OpenRouter verbatim (no key whitelist — OpenRouter is the authority on
+  // its own routing fields, so new ones need no code change here); the cap
+  // only bounds what a hostile bundle can make every request carry.
+  maxRoutingBytes: 4 * 1024,
 };
 
 /** Per-string caps on the welcome card. Deliberately no caps on the NUMBER of
@@ -247,19 +255,41 @@ function checkTokenLimit(value, label) {
 }
 
 /**
+ * Shared check for the OpenRouter routing object (agent.jsonc
+ * `openrouter_routing` / bundle `openRouterRouting`): a plain JSON object of
+ * bounded size. Deliberately NO field validation — the object is forwarded to
+ * OpenRouter verbatim as the request-body `provider` field, and OpenRouter
+ * validates its own routing fields (an unknown/ill-typed one fails the request
+ * with OpenRouter's error, visible in the session). Whitelisting keys here
+ * would only make every new OpenRouter routing field a code change.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ */
+function checkRouting(value, label) {
+  if (value === undefined) return;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new BundleValidationError(`${label} must be a JSON object (OpenRouter provider-routing preferences)`);
+  }
+  if (utf8Length(JSON.stringify(value)) > AGENT_LIMITS.maxRoutingBytes) {
+    throw new BundleValidationError(`${label} too large (> ${AGENT_LIMITS.maxRoutingBytes} bytes serialized)`);
+  }
+}
+
+/**
  * Validate a parsed agent.jsonc against the contract in
  * agents/agent.schema.json. Unknown keys are rejected so typos and
  * not-yet-supported keys (future egress allow list etc.) fail at bundle time.
  *
  * @param {unknown} raw
- * @returns {{ instructions?: string, model?: string, model_base_url?: string, max_tokens?: number, context_window?: number, welcome?: AgentWelcome }}
+ * @returns {{ instructions?: string, model?: string, model_base_url?: string, max_tokens?: number, context_window?: number, openrouter_routing?: Record<string, unknown>, welcome?: AgentWelcome }}
  */
 export function validateAgentConfig(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BundleValidationError('agent.jsonc must be a JSON object');
   }
   const config = /** @type {Record<string, unknown>} */ (raw);
-  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'max_tokens', 'context_window', 'proxy_whitelist', 'welcome'];
+  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'max_tokens', 'context_window', 'openrouter_routing', 'proxy_whitelist', 'welcome'];
   for (const key of Object.keys(config)) {
     if (!allowed.includes(key)) {
       throw new BundleValidationError(`agent.jsonc has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
@@ -276,6 +306,7 @@ export function validateAgentConfig(raw) {
   }
   checkTokenLimit(config.max_tokens, 'agent.jsonc "max_tokens"');
   checkTokenLimit(config.context_window, 'agent.jsonc "context_window"');
+  checkRouting(config.openrouter_routing, 'agent.jsonc "openrouter_routing"');
   if (config.proxy_whitelist !== undefined) {
     validateWhitelist(config.proxy_whitelist, 'agent.jsonc "proxy_whitelist"');
   }
@@ -354,6 +385,7 @@ export function validateAgentBundle(raw) {
   }
   checkTokenLimit(bundle.maxTokens, 'maxTokens');
   checkTokenLimit(bundle.contextWindow, 'contextWindow');
+  checkRouting(bundle.openRouterRouting, 'openRouterRouting');
   if (bundle.proxyWhitelist !== undefined) {
     validateWhitelist(bundle.proxyWhitelist, 'proxyWhitelist');
   }
