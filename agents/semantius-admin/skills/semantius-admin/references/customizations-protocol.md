@@ -100,6 +100,6 @@ Not a paragraph. Not a section header. One line. The user sees that policy resol
 ## 7.6 What is NOT written to the file
 
 - **Modeler's pre-execute `y/n`.** The modeler always asks before writing. Policy does not change this.
-- **Free-text "Other" answers** that the user typed in. The slug-collision-naming widget (3d sub) has an "Other" option; when picked, use the value for the current decision but do NOT write to `.slug_collision_naming` — the next collision should re-ask. The user's typed value is a one-off, not a standing rule.
+- **Free-text "Other" answers** that the user typed in. The slug-collision-naming widget (3d sub) lists no "Other" option (the tool adds its own free-text slot); a name typed into that slot is used for the current decision but is NOT written to `.slug_collision_naming` — the next collision should re-ask. The user's typed value is a one-off, not a standing rule.
 - **Explicit-cancel selections.** Master-vs-master option 4 ("Stop, I want to think about it") and any other cancel-style choice halts the run without writing.
 - **Decisions inside the modeler.** The modeler consumes specs only; the spec already carries every decision by the time the modeler runs.

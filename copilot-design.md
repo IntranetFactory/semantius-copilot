@@ -306,7 +306,11 @@ agent reached the container: image-baked + build-time meta (A) vs runtime-recons
   its SessionEnv (`backend-b/src/lazy-env.ts`): discovery + skills-tree reads are answered from the KV
   bundle (byte-identical to the disk extraction), and the first op that needs a live machine
   (exec/write/out-of-tree read) boots the container and reconstructs right there. Chat-only turns never
-  start a container; the 1-3 s boot lands inside the first shell-using tool call.
+  start a container; the 1-3 s boot lands inside the first shell-using tool call. The wrapper holds ONE
+  sandbox-DO stub per submission; since 2026-08-19 a stub-break failure (`internal error; reference = …`,
+  `.retryable`, DO reset) drops it so the next op builds a fresh stub, replays reads / probe / writeFile once
+  (per-op bound of 1), and never replays `exec` / `mkdir` / `rm` (at-least-once hazard — the model re-runs
+  after a check-then-re-run error). README "Mid-turn stub break" has the incident and the rules.
 - **Bundle validation (untrusted input)**, server-side before reconstruction: reject `..`, absolute,
   backslashes, symlinks, resolve-outside-dir; size/count caps. Flue/adapters validate nothing.
 - Any dir cleanup uses **`env.exec('rm -rf …')`** (the CF SandboxApi `rm()` throws on `recursive`/`force`,

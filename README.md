@@ -1275,6 +1275,63 @@ gap (design: `add_backup_restore_plan.md`):
   `provisionWorkspace` (restore + skills + env) before the op proceeds. The window that
   can still be lost is one tool call: mutations after the last completed persist and
   before the reset.
+- **Mid-turn stub break (the 2026-08-19 incident)** — the reset probe's sibling self-heal,
+  for the *other* thing that can die under a running turn: not the container but the
+  **stub**, the client-side handle the agent DO holds on the sandbox DO (every method call
+  on it is an RPC). The lazy env memoizes ONE stub per submission. workerd's contract is
+  that a stub whose connection breaks stays broken: every later call on it rejects at
+  once, while the DO and its container answer a NEW stub normally. Session
+  `tests-user3-84351d826fa44ee1961c1439f094e58e` ("deploy <it-ops-starter URL>", Worker
+  deployed 15:30:19Z, container image unchanged since 09:02): two `bash` calls fine
+  (`ls`, toolchain check), then `semantius call crud getCurrentUser` failed after **28.9 s**
+  with `internal error; reference = unbhcaukga1o6dadc9klavln` (workerd's opaque
+  internal-failure text — the string lives in the workerd binary, not in our code, the
+  Sandbox SDK, or the CLI), and the next five `bash` calls (`getCurrentUser` again,
+  `semantius --help`, `env | grep`, `echo`, `true`) each failed in **9–12 ms** with a fresh
+  reference id. The agent concluded "the shell is dead" and stopped cleanly (nothing
+  written). Meanwhile the sandbox was healthy the whole time: the backup path builds a
+  fresh stub per call (`getSandbox` → `binding.get(id)`) and landed **8** persists in
+  75 s, the last at 15:34:19Z — 3 s after the turn ended — with the `.restored` marker
+  present (so the container was never restarted either); `semantius whoami` on the same
+  sandbox DO succeeded minutes later. The sandbox DO's own Workers Logs (read back the
+  same day once `pnpm logs:query` existed — `--from 2026-08-19T15:33:00Z --to
+  2026-08-19T15:35:00Z`, see Observability) settle the root cause: the CLI really ran
+  (its MCP calls left `ContainerProxy … POST https://tests.semantius.ai/mcp` egress events
+  at 15:33:32–39, so the command's result existed and was lost — the reason `exec` is not
+  replayed below); at 15:33:43.567 the SDK's `containerFetch` (the DO's fetch to the
+  container's port) failed with that very `internal error; reference = unbhcaukga1o6…`
+  (`Error proxying request to container 22c64a…: at … containerFetch … CommandClient.execute
+  … execWithSession`), the `exec` RPC event ended `exception` after 28 821 ms, AND the
+  @cloudflare/containers keep-alive `alarm` that had been sleeping since 15:33:06 ended
+  `exception` in the same millisecond, its retry was `canceled`, and the next event on the
+  DO (the backup path's probe, 15:33:47.9) was served by a **fresh instance** (`Using http
+  transport` = the SDK constructing a new container client) — i.e. the runtime's container
+  proxy threw an internal error and the sandbox DO instance was **reset** under the
+  in-flight call, while the container itself kept running. The agent's memoized stub was
+  bound to the dead instance: for its next five calls the agent DO logged `lazy-env: reset
+  probe failed, assuming live: Error: internal error; reference = <new id>` and the sandbox
+  DO logged **nothing** — they never left the agent — while `backup:` persists #3–#8 ran
+  through fresh stubs in between, all `ok`. Platform-side trigger (the proxy's internal
+  error — Cloudflare's reference id); the cascade — five dead calls on a dead handle — was
+  ours. Fix (`lazy-env.ts`, tests `scripts/lazy-env.test.mjs`):
+  - every op that fails with a stub-break error (`isStubBreak`: `.retryable === true`,
+    `internal error; reference = …`, `Durable Object reset because…`, `Network connection
+    lost`) **drops the memoized stub** — the next op, whatever it is, builds a fresh one
+    (`makeInner` again; the reset probe on it decides whether the container also needs
+    re-provisioning); log line `lazy-env: sandbox stub broke during <op>: … — dropped`;
+  - the failed op is **re-run on the fresh stub once** (`STUB_RETRY_LIMIT = 1`, a per-op
+    counter — a second break in a row surfaces; never a third stub) when replaying is
+    safe: reads, the reset probe itself (a probe that breaks re-probes on a fresh stub),
+    and `writeFile` (idempotent by content);
+  - **`exec`, `mkdir`, `rm` are never replayed**: the RPC may have failed on the way *back*,
+    after the container ran the command (the 29 s call most likely did run), and a shell
+    replay is at-least-once — a `semantius` write would double-apply. They fail with
+    `sandbox connection dropped during this exec — it may or may not have taken effect;
+    the connection is re-established, so check its effect and re-run only what is
+    missing (<original error>)`, which Flue renders as the tool result: the model's own
+    retry is the retry, and it lands on the fresh stub. `onMutation` still fires once.
+  Replaying `exec` is a one-line flip (`REPLAY_SAFE` in `lazy-env.ts`) if at-least-once
+  shell is ever preferred over the extra model round-trip; it is deliberately off.
 - **Transport** — the SDK's `localBucket: true` mode: the sandbox DO streams bytes over
   its own control channel and uses the R2 binding directly. No presigned URLs, no R2
   access keys, no container egress — nothing new for the egress whitelist or the
@@ -1902,6 +1959,32 @@ project `semantius-copilot` → the session should appear with the full
 invoke_agent → chat → execute_tool tree. Export failures surface as
 `arize: OTLP export …` warnings in `wrangler tail`. A direct probe of the
 endpoint from Node (same serializer + headers) returned 200 on 2026-07-26.
+
+### Workers Logs after the fact (`pnpm logs:query`)
+
+The three sinks above see what the *agent* did (spans, tool calls, tokens). What the
+*Worker and its Durable Objects* logged — the `lazy-env:` boot / reset / stub-break
+breadcrumbs, `backup:` persist outcomes, the egress broker, and the runtime's own
+exception events with their `reference =` ids — is Workers Logs (`observability.enabled`
+in wrangler.jsonc, retained for days). `pnpm logs` (`wrangler tail`) only shows it live;
+`scripts/logs.mjs` reads it back through the Workers Observability query API:
+
+```bash
+pnpm logs:query                                    # last 30 min
+pnpm logs:query --from -2h --level error
+pnpm logs:query --from 2026-08-19T15:33:00Z --to 2026-08-19T15:35:00Z
+pnpm logs:query --grep unbhcaukga1o6dadc9klavln    # a runtime reference id
+pnpm logs:query --session <session id>             # lines that carry the id (backup:, request URLs)
+pnpm logs:query --do <durableObjectId> --json      # one DO's events, raw
+```
+
+It needs a Cloudflare API token with **Account → Workers Observability → Read** —
+`CLOUDFLARE_OBSERVABILITY_TOKEN` in `backend-b/.dev.vars` (local only, never a Worker
+secret), falling back to `CLOUDFLARE_API_TOKEN` if that one is widened to carry the
+permission. Neither token the repo held before (Analytics-read, the wrangler OAuth login)
+can read logs (`10000 Authentication error`) — which is why the 2026-08-19 stub-break
+post-mortem ("Mid-turn stub break" above) had to be reconstructed from Braintrust span
+timings and the session record instead of the DO's own log lines.
 
 ## Acceptance
 

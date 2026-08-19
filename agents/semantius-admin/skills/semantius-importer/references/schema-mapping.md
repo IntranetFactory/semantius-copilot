@@ -195,7 +195,7 @@ Otherwise keep the column scalar (`integer` or `string` as introspected) and not
 
 1. A column named `name`, `title`, or `*_name` / `*_title`.
 2. Otherwise the required `string` column with the highest uniqueness in `sample_values`.
-3. Otherwise ask; any human-identifying string column works.
+3. Otherwise ask (`Q: Which column should name each row?`, `multiSelect: false`): any human-identifying string column works, so the options are the string columns ranked by uniqueness, **2 to 4 of them** (the tool rejects a 1-option or 5-option question). Exactly 1 string column: no question, it is the label column. No string column at all: no question; propose the most unique column of any format and flag it in the mapping review. More than 4: list the 4 best and end the question text with ` The 4 best candidates are listed; type another header if you prefer.` (the tool adds its own free-text slot; never list an "Other" option).
 
 The user confirms (or picks another column) in the mapping review. Mechanics for a new entity:
 
@@ -331,7 +331,7 @@ Four diff buckets:
 
 | Change | Why | Alternatives |
 |---|---|---|
-| Format change across Postgres primitives (`string` → `date`, `integer` → `string`, `number` → `boolean`, ...) | The platform rejects it; existing data cannot be retyped in place | coerce in the import script into the **live** format when lossless (e.g. CSV `integer` into live `string`); drop the column; or abort and let the user remodel |
+| Format change across Postgres primitives (`string` → `date`, `integer` → `string`, `number` → `boolean`, ...) | The platform rejects it; existing data cannot be retyped in place | coerce in the import script into the **live** format when lossless (e.g. CSV `integer` into live `string`); drop the column; report only; or abort and let the user remodel (abort is never a listed option on the mismatch question: the user types "stop" into its free-text slot) |
 | Removing `enum_values` in use | Would orphan existing rows | leave the value; treat the CSV's smaller set as a subset |
 | Touching auto-generated fields (`id`, `label`, `<label_column>` structure, `created_at`, `updated_at`) | Platform-owned | section 4 renames on the CSV side instead |
 

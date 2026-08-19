@@ -232,9 +232,9 @@ A request can produce zero, one, or many match candidates. **All must be surface
   3. label `"Start over (build new)"`, description: *"Ignore `<file>` and build a fresh design from scratch. You'll be asked where to move the existing file so it isn't accidentally re-used (the admin never deletes a file it didn't create)."*
   4. label `"Cancel"`, description: *"Stop without doing anything."*
 
-**Multiple match candidates.** When the workspace has more than one matching artifact (e.g. both a blueprint and a spec for the same slug, or two distinct slugs that both could be what the user meant), enumerate them in the question body and let the user pick which one to act on (`AskUserQuestion` with one option per candidate plus "Start over" and "Cancel"). Never silently pick "the newer one" or "the one that matches more closely" — picking is the user's decision.
+**Multiple match candidates.** When the workspace has more than one matching artifact (e.g. both a blueprint and a spec for the same slug, or two distinct slugs that both could be what the user meant), enumerate them in the question body and let the user pick which one to act on (`AskUserQuestion`, `multiSelect: false`, one option per candidate plus "Start over" and "Cancel"). The tool accepts 2 to 4 options per question, so list **at most 2 candidates** as options (the two whose slug or system name match the request most closely); when there are more, name every candidate in the question body and end it with *"Type the file name of another candidate if it isn't listed."* (the tool adds its own free-text slot; never list an "Other" option). Once the user has picked a candidate, the single-match widget above fires for that file (deploy / audit / start over / cancel). Never silently pick "the newer one" or "the one that matches more closely" — picking is the user's decision.
 
-**On option 3 (Start over).** Fire a follow-up `AskUserQuestion` asking where to move the pre-existing artifact: an archive folder (`semantius/archive/`), a user-specified path, or "leave in place and I'll rename my new build's slug to avoid the collision." The admin never deletes pre-existing files (per the rules at the bottom of this SKILL); it can only move them, and only with explicit user direction.
+**On option 3 (Start over).** Fire a follow-up `AskUserQuestion` (`multiSelect: false`, 2 options) asking where to move the pre-existing artifact: `"Move it to semantius/archive/ (Recommended)"` or `"Leave it in place; I'll give the new build a different slug"`. A different folder is typed into the tool's free-text slot, not listed as an option. The admin never deletes pre-existing files (per the rules at the bottom of this SKILL); it can only move them, and only with explicit user direction.
 
 **On option 1 / 2.** Skip Step 0's classification result and route directly to the appropriate pipeline (deploy through Step 6 for option 1; architect Audit or analyst Audit for option 2). The user's choice here overrides whatever Step 0 originally classified the request as.
 
@@ -269,7 +269,7 @@ Given the request type from Step 0 and the workspace state from Step 1/2, decide
 | **Deploy existing** | **Any (1 or N blueprints/specs)** | **Hand off to Step 6.** This is the universal deploy path regardless of how many items. Scope flags (`customize` / `review`, plus `deploy`) are resolved FIRST per "Resolve scope flags BEFORE presenting the plan" below (inference in 6.4.1, asked when ambiguous), so a bare "deploy this" still fires the customize question before anything runs. |
 | Audit | Blueprint named | `architect (Audit)` on the blueprint (does NOT route through Step 6). |
 | Audit | Spec named | `analyst (Audit)` on the spec (does NOT route through Step 6). |
-| Audit | Both, no name | Ask user which to audit, or audit both serially. |
+| Audit | Both, no name | Ask which to audit (`AskUserQuestion`, `multiSelect: false`, 3 options: the blueprint, the spec, both one after the other). |
 | Status | n/a | Admin-only (Step 5). |
 | Admin (backup, list, ...) | n/a | Admin-only (Step 5). |
 

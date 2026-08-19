@@ -271,7 +271,7 @@ Each entry carries an optional `source_module` field. The deployer sets it autom
 **Merge logic (per array, per master entity).** Read the live entity's arrays first; build the merged result by walking each incoming entry against the live state. The natural key is `name` for `computed_fields` and `code` for `validation_rules`, treated **globally within the entity** — `source_module` is reconciliation metadata, not part of the uniqueness key.
 
 1. **Incoming entry, same key, same `source_module` as a live entry** → incoming replaces the live entry (per-source wholesale replacement, scoped). Tag the merged entry with the same `source_module`.
-2. **Incoming entry, same key, different `source_module` from a live entry** → conflict. Surface as a 🛑 via `AskUserQuestion` with the comparison block printed as prose first:
+2. **Incoming entry, same key, different `source_module` from a live entry** → conflict. Surface as a 🛑 via `AskUserQuestion` with the comparison block printed as prose first (one question object per conflict, header `"Rule clash"`, exactly these 4 options; when several conflicts surface at once, batch up to four question objects per call rather than one call per conflict):
    - keep live (drop incoming, recommended when live is admin-authored or from a stable source);
    - keep incoming (replace live, sets `source_module` to the incoming model's slug);
    - rename the incoming code (e.g. `vendor_email_required` → `<incoming_slug>_vendor_email_required`) and add as a new entry;
@@ -300,7 +300,7 @@ Sequence per entity:
 
 - **`input_type_rule` (per field, then in aggregate).** For each entry in the entity's parsed `Input type rules` list:
   - Resolve the entry's `field` against the entity's live field list (it must exist — Stage 4d created it if it didn't). Call `update_field` on `<table_name>.<field>` with `data.input_type_rule = <entry.jsonlogic>`. Pass the JsonLogic object verbatim; do not normalize, reformat, or attempt to validate the return-type. The platform's per-render fallback to the static `input_type` handles malformed or out-of-enum returns gracefully.
-  - For each live field whose `input_type_rule` is non-empty but whose name does NOT appear in the model's `Input type rules` list: **ambiguous, same rule as the entity-level case above**. Do not silently clear. Surface the field + its live rule to the user and ask whether to keep or remove (pass `{}` to clear).
+  - For each live field whose `input_type_rule` is non-empty but whose name does NOT appear in the model's `Input type rules` list: **ambiguous, same rule as the entity-level case above**. Do not silently clear. Surface the field + its live rule to the user and ask whether to keep or remove (pass `{}` to clear): one question object per field, header `"Live rule"`, 2 options (`"Keep the live rule (Recommended)"` / `"Remove it"`), batched up to four fields per `AskUserQuestion` call rather than one call per field.
 
 - For 🔒 **built-ins**, never push `select_rule` or `input_type_rule` from the model onto a built-in entity or its fields — those tables run platform logic and the model's rules would conflict. Stop and surface this to the user before any write (same posture as the write-side built-in guard in 4e).
 

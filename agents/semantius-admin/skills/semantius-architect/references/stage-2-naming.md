@@ -37,9 +37,9 @@ Draw on your general knowledge of the market to identify **the top 3 cloud platf
 
 **You MUST use the AskUserQuestion tool here, through the question ledger** (SKILL.md → Task tracking): on a policy miss, `TaskCreate` the `Q:` task (subject `Q: How should we name things in this <domain> module?`, description `Recorded in: .naming.mode`) and set it `in_progress` in one response, fire the widget alone in the next, then write the answer to the policy file and complete the task. Do not enumerate the vendors or describe the choices in prose before calling the tool, the option descriptions carry all the information the user needs. The only prose preceding the tool call should be one short framing sentence (e.g. *"{Domain} is a well-established category, here's the choice that drives naming for the rest of this session."*).
 
-Construct exactly one question with **4 options**: "Agent-optimized" first (the recommended default), followed by the 3 named vendors. The runtime auto-adds an "Other" option for free-text input, that's how a user picks a vendor outside your top 3.
+Construct exactly one question with **2 to 4 options**: "Agent-optimized" first (the recommended default), followed by the named vendors, **at most 3** (so 4 options with 3 vendors, 3 with 2, 2 with 1; never a 5th). The runtime auto-adds an "Other" option for free-text input, that's how a user picks a vendor outside your list; never list "Other" yourself. With zero confident vendors, skip the widget entirely (last paragraph of this section).
 
-Use this exact structure:
+Use this exact structure, dropping the vendor rows you do not have (the option count follows the vendor count above):
 
 - **question**: `"How should we name things in this {domain} module?"`
 - **header**: `"Naming style"`
