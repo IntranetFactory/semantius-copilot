@@ -35,9 +35,27 @@
  * Costs (README "Task tracking"): the first task op of a submission provisions
  * the container like any bash/read; every op after that pays one resetProbe
  * RPC; each write triggers a coalesced R2 persist. Same as any workspace file.
+ *
+ * Latency is NOT a function of list size (a 14-task store is ~4 KB; parse and
+ * serialize are microseconds) — it is sandbox round trips (probe + read [+
+ * write]), contention with the persist the previous write kicked off (mksquashfs
+ * + upload on the same container), and the mutex: calls the model batched in
+ * one message run one after another, and Flue times each from invocation, so
+ * the Nth call's duration includes the wait for calls 1..N-1. To tell these
+ * apart every op logs ONE line — to the console (Workers Logs / `wrangler
+ * tail`, next to the `lazy-env:` and `backup:` lines) and, with the same
+ * numbers as attributes, to Flue's logger (the conversation activity stream):
+ *
+ *   tasks: TaskUpdate #3 queue=1804ms read=212ms write=188ms n=14 bytes=4120 persist=inflight
+ *
+ * queue = time spent waiting for earlier task ops of this session (the mutex);
+ * read/write = the sandbox I/O incl. the reset probe (write omitted when
+ * nothing was written); n/bytes = store size after the op; persist = whether a
+ * workspace persist was running for this session when the op arrived.
  */
 import { defineTool, type Sandbox } from '@flue/runtime';
 import * as v from 'valibot';
+import { isPersistInFlight } from '../backups';
 import {
   createTask,
   EMPTY_STORE,
@@ -79,7 +97,8 @@ function withTaskLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 // Store I/O against the session sandbox
 
-type Logger = { info(message: string): void; warn?(message: string): void };
+/** The slice of Flue's FlueLogger the tools use (events go to the conversation activity stream). */
+type Logger = { info(message: string, attributes?: Record<string, unknown>): void };
 
 /**
  * Read the index. Any read failure is disambiguated with `exists` — by then
@@ -164,8 +183,9 @@ const TASK_UPDATE_DESCRIPTION = `Update one task in the task list by id: status,
 
 Status flow: pending → in_progress → completed. Set status "deleted" to remove a task permanently (also drops it from other tasks' dependencies).
 Mark a task in_progress when you start it and completed ONLY when it is fully done — never while tests fail, the implementation is partial, or errors are unresolved; if blocked, keep it in_progress and create a task describing what must be resolved. Read the latest state with TaskGet before updating a task you have not touched recently.
+Combine fields in ONE call per task — status, addBlockedBy and addBlocks together, and both arrays take several ids (each link is mirrored onto the other task) — never one call per field; every call is a round trip.
 
-Examples: {"taskId":"1","status":"in_progress"} · {"taskId":"1","status":"completed"} · {"taskId":"1","status":"deleted"} · {"taskId":"2","addBlockedBy":["1"]}`;
+Examples: {"taskId":"1","status":"in_progress"} · {"taskId":"1","status":"completed"} · {"taskId":"1","status":"deleted"} · {"taskId":"2","addBlockedBy":["1"]} · {"taskId":"5","status":"in_progress","addBlockedBy":["4"],"addBlocks":["1"]} · {"taskId":"3","addBlockedBy":["6","7","8"]}`;
 
 const TASK_LIST_DESCRIPTION = `List every task in this session's task list: id, subject, status (pending / in_progress / completed), owner (if any) and blockedBy (ids of still-open tasks that must finish first). Use it to check overall progress, find what to work on next (pending, not blocked — prefer the lowest id, earlier tasks set up context for later ones), and after completing a task to see what it unblocked. Use TaskGet for a task's full description.`;
 
@@ -177,7 +197,44 @@ const TASK_GET_DESCRIPTION = `Retrieve one task by id with its full details: sub
 // tool objects are fine; `useTool` just registers them for this render).
 
 export function taskTools(sessionId: string) {
-  const locked = <T>(fn: () => Promise<T>) => withTaskLock(sessionId, fn);
+  /**
+   * Run one task op under the session mutex and log its timing line (header
+   * comment). `op` reads the store once and returns the result plus, when it
+   * wrote, the store it wrote. The lock wait is measured from invocation, so
+   * `queue` is exactly the share of the tool's reported duration that was
+   * spent behind earlier task ops of the same batch.
+   */
+  const timed = <T>(
+    label: string,
+    sandbox: Sandbox,
+    log: Logger,
+    op: (store: TaskStore) => Promise<{ output: T; written?: TaskStore }>,
+  ): Promise<{ output: T }> => {
+    const invokedAt = Date.now();
+    const persist = isPersistInFlight(sessionId) ? 'inflight' : 'idle';
+    return withTaskLock(sessionId, async () => {
+      const queueMs = Date.now() - invokedAt;
+      const readStart = Date.now();
+      const store = await readStore(sandbox, log);
+      const opStart = Date.now();
+      const { output, written } = await op(store);
+      const final = written ?? store;
+      const readMs = opStart - readStart;
+      const writeMs = written ? Date.now() - opStart : undefined;
+      const n = final.tasks.length;
+      const bytes = new TextEncoder().encode(serializeStore(final)).length;
+      const parts = [`tasks: ${label}`, `queue=${queueMs}ms`, `read=${readMs}ms`];
+      if (writeMs !== undefined) parts.push(`write=${writeMs}ms`);
+      parts.push(`n=${n}`, `bytes=${bytes}`, `persist=${persist}`);
+      const line = parts.join(' ');
+      // Two sinks on purpose: console → Workers Logs / `wrangler tail` (where
+      // the lazy-env and backup lines live, so the three can be correlated);
+      // the Flue logger → the conversation activity stream, with attributes.
+      console.log(line);
+      log.info(line, { queueMs, readMs, writeMs, n, bytes, persist });
+      return { output };
+    });
+  };
 
   const taskCreate = defineTool({
     name: 'TaskCreate',
@@ -185,11 +242,10 @@ export function taskTools(sessionId: string) {
     input: taskCreateInput,
     harness: true,
     run({ data, harness, log }) {
-      return locked(async () => {
-        const store = await readStore(harness.sandbox, log);
+      return timed('TaskCreate', harness.sandbox, log, async (store) => {
         const { store: next, output } = createTask(store, data);
         await writeStore(harness.sandbox, next);
-        return { output };
+        return { output, written: next };
       });
     },
   });
@@ -200,11 +256,11 @@ export function taskTools(sessionId: string) {
     input: taskUpdateInput,
     harness: true,
     run({ data, harness, log }) {
-      return locked(async () => {
-        const store = await readStore(harness.sandbox, log);
+      return timed(`TaskUpdate #${data.taskId}`, harness.sandbox, log, async (store) => {
         const { store: next, output } = updateTask(store, data);
-        if (next !== store) await writeStore(harness.sandbox, next);
-        return { output };
+        if (next === store) return { output };
+        await writeStore(harness.sandbox, next);
+        return { output, written: next };
       });
     },
   });
@@ -215,7 +271,7 @@ export function taskTools(sessionId: string) {
     input: taskListInput,
     harness: true,
     run({ harness, log }) {
-      return locked(async () => ({ output: listTasks(await readStore(harness.sandbox, log)) }));
+      return timed('TaskList', harness.sandbox, log, async (store) => ({ output: listTasks(store) }));
     },
   });
 
@@ -225,7 +281,9 @@ export function taskTools(sessionId: string) {
     input: taskGetInput,
     harness: true,
     run({ data, harness, log }) {
-      return locked(async () => ({ output: getTask(await readStore(harness.sandbox, log), data.taskId) }));
+      return timed(`TaskGet #${data.taskId}`, harness.sandbox, log, async (store) => ({
+        output: getTask(store, data.taskId),
+      }));
     },
   });
 

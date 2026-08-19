@@ -1661,12 +1661,46 @@ order, so ids come out in message order). The tools reach the sandbox via `harne
 `harness.sandbox` — the lazy env `useSandbox` created — so writes fire `onMutation →
 requestWorkspacePersist` with no extra wiring.
 
+**Call economy and latency.** `TaskUpdate` takes `status`, `addBlockedBy` and `addBlocks` in ONE
+call, both arrays take several ids, and every link is mirrored onto the other task — so "chain
+it, point it at its parent, start it" is one round trip per task, and gating a stage on N open
+questions is one `{"taskId":"<stage>","addBlockedBy":[<N ids>]}`, not N calls (the tool
+description says so; a skill that prescribes one call per field triples the bookkeeping — see
+`task-tools-skill-change-request.md`). `TaskCreate` stays Claude Code's schema (no edge fields),
+deliberately. Per-call latency is NOT a function of list size — a 14-task store is ~4 KB and
+parse/serialize is microseconds — but of sandbox I/O and scheduling: a write is probe + read +
+write RPCs; every write starts a workspace persist (marker `exec` + mksquashfs + upload over the
+~0.6 MB/s channel, on the same container) that later ops contend with and that grows with the
+workspace over a run; and calls the model batched into one message queue behind each other on
+the mutex while Flue times each from invocation, so the Nth call reports the wait for calls
+1..N-1 (an escalating 0.2 s → 2.4 s → 6 s series is that shape, not a slow store). Every op logs
+one line in `wrangler tail` to tell these apart:
+`tasks: TaskUpdate #3 queue=1804ms read=212ms write=188ms n=14 bytes=4120 persist=inflight` —
+`queue` is the mutex wait, `read`/`write` the sandbox I/O (incl. the reset probe; `write`
+omitted when nothing changed), `n`/`bytes` the store after the op, `persist` whether a
+workspace persist was running for the session when the call arrived (`backups.ts
+isPersistInFlight`). The same line goes to Flue's logger with the numbers as attributes (the
+conversation activity stream). Measured 2026-08-19 with `task-tools-probe.mjs` (three
+`TaskCreate` in one message): `queue=0ms read=3594ms` (the boot), then `queue=3673ms
+read=141ms write=123ms`, `queue=3937ms read=82ms write=123ms` — the second and third calls
+reported ~4 s each for ~0.25 s of work; warm ops read in 80–140 ms and write in 80–130 ms; each
+persist of that 4 KB workspace took 0.7–0.8 s (one 2.6 s). Size check, same day: 20 creates with
+~200-char descriptions (365 B/task, 7 KB at the end), one per turn so `queue=0` — `read` stayed
+55–120 ms and `write` 90–300 ms from n=2 to n=19 with no trend against bytes (outliers `read=582`
+and `read=245 persist=inflight` sat next to persists, not large lists); persists ran back-to-back
+at 0.7–2.5 s each for a constant 4 KB archive. In that run the container died during the 9th
+consecutive persist (`container is not listening`, the persist's `rm -f` → 500), the lazy env
+restored backup #8 inside the next call (`read=7293ms`), and the write that had triggered the
+fatal persist was lost (19 tasks for 20 creates) — the one-call loss window above, provoked by
+the per-write persist load itself. One observation, not proof of causation; a debounce of task
+persists is the lever if it recurs.
+
 **The UI** (`frontend/src/components/ai-elements/task-fold.ts` + `task-progress.tsx`, part of the
 copyable folder) folds the conversation's settled task tool parts — `TaskCreate` results and
 `TaskUpdate` inputs into a map keyed by id, `TaskList`/`TaskGet` results merged and pruned — into a
-collapsible checklist + progress bar pinned above the composer (in_progress rows show
-`activeForm`, completed rows are struck through, blocked rows name their open blockers, owners
-get a badge). Durable truth is history: reloads and the key-flip remount re-derive the same
+collapsible checklist + progress bar pinned above the composer (starts collapsed — the header
+row shows count, bar and the current task; in_progress rows show `activeForm`, completed rows
+are struck through, blocked rows name their open blockers, owners get a badge). Durable truth is history: reloads and the key-flip remount re-derive the same
 panel; `output-error` parts and `success:false` updates never phantom-update it. Individual calls
 stay collapsed in the tool-call group (`TaskUpdate #3 → completed` on the row).
 

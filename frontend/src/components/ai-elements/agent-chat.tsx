@@ -60,6 +60,14 @@ import { WorkspaceUploadButton } from './workspace-upload';
 type AgentMessage = ReturnType<typeof useFlueAgent>['messages'][number];
 type AgentPart = AgentMessage['parts'][number];
 
+/** The reading column: transcript, task panel, strips and composer are all
+ * capped at 760px and centered, whatever width the host gives the frame. The
+ * frame itself (border, scroll area, scrollbar) still fills the host — only
+ * the content is narrowed, so a wide host (a full-width dashboard page) keeps
+ * its scrollbar at the edge and reads like any mainstream chat instead of a
+ * 1900px-wide paragraph. */
+const CHAT_COLUMN = 'mx-auto w-full max-w-[760px]';
+
 /** flue AgentStatus → ai-elements ChatStatus (drives the submit-button icon). */
 function toChatStatus(status: ReturnType<typeof useFlueAgent>['status']): ChatStatus {
   if (status === 'streaming') return 'streaming';
@@ -410,7 +418,7 @@ export function AgentChat({
       <WorkspaceLinkContext.Provider value={linkCtx}>
       <div className={cn('mt-2 flex h-[60vh] flex-col overflow-hidden rounded-lg border bg-background text-foreground', className)}>
         <Conversation>
-          <ConversationContent>
+          <ConversationContent className={CHAT_COLUMN}>
             {messages.length === 0 ? (
               echo ? (
                 <Message from="user">
@@ -458,90 +466,95 @@ export function AgentChat({
           <ConversationScrollButton />
         </Conversation>
 
+        {/* The border spans the whole frame; the column inside is capped and
+            centered like the transcript above, so panel, strips and composer
+            line up with the messages. */}
         <div className="border-t p-3">
-          {/* The task checklist sits topmost: it is the longest-lived thing here
-              (the whole conversation) and must not jump when tips/strips come
-              and go beneath it. Renders nothing while there are no tasks.
-              `running` is the same busy signal as the "Working…" strip below,
-              so in_progress rows spin only while the agent actually runs. */}
-          <TaskProgressPanel tasks={tasks} running={showBusy} />
-          {/* The clicked prompt's tip, above the transient strips: it outlives
-              them (it stays until dismissed, including once the welcome card
-              itself is gone), so the moving parts stay nearest the input. */}
-          {hint ? <HintTip onDismiss={onDismissHint}>{hint}</HintTip> : null}
-          {/* Busy strip: visible for the whole run (submitted AND streaming), not
-              just before the first token — during streaming the agent can spend
-              long stretches in server-side tool calls with nothing new rendering,
-              and the chat must not look idle while the stop icon shows. */}
-          {showBusy ? (
-            <div className="mb-2 flex items-center gap-2 text-muted-foreground text-sm">
-              <Spinner /> Working…
-            </div>
-          ) : null}
-          {uploadError ? <div className="mb-2 text-destructive text-sm">upload failed — {uploadError}</div> : null}
-          {answerError ? <div className="mb-2 text-destructive text-sm">answer failed — {answerError}</div> : null}
-          {/* The POST never reached the server (401 / 5xx / offline): resend the
-              text verbatim. The optimistic bubble stays in the transcript until
-              the next dispatch clears failedSends/failedOptimistic (reducer);
-              normally there is at most one entry — a new send clears the list. */}
-          {agent.failedSends.map((failed) => (
-            <div key={failed.id} className="mb-2 flex items-center gap-2 text-sm">
-              <span className="min-w-0 flex-1 wrap-break-word text-destructive">send failed — {failed.error.message}</span>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={retryDisabled}
-                onClick={() => void agent.sendMessage(failed.message).catch(() => {})}
-              >
-                <RotateCcwIcon /> Retry
-              </Button>
-            </div>
-          ))}
-          {transportError ? (
-            <div className="mb-2 flex items-center gap-2 text-sm">
-              <span className="min-w-0 flex-1 wrap-break-word text-destructive">connection error — {transportError.message}</span>
-              <Button size="xs" variant="outline" onClick={() => agent.refresh()}>
-                Reconnect
-              </Button>
-            </div>
-          ) : null}
-          <PromptInput onSubmit={handleSubmit}>
-            <PromptInputBody>
-              <PromptInputTextarea
-                value={input}
-                placeholder={placeholder ?? 'Type a message…'}
-                onChange={(event) => setInput(event.currentTarget.value)}
-              />
-            </PromptInputBody>
-            <PromptInputFooter>
-              <PromptInputTools>
-                <WorkspaceUploadButton
-                  auth={auth}
-                  sessionId={sessionId}
-                  onEnsureSession={onEnsureSession}
-                  baseUrl={baseUrl}
-                  // Requirement: the landed name goes into the composer with a
-                  // leading AND trailing space, so it can be typed around.
-                  onUploaded={(name) => setInput((prev) => `${prev} ${name} `)}
-                  onError={setUploadError}
+          <div className={CHAT_COLUMN}>
+            {/* The task checklist sits topmost: it is the longest-lived thing here
+                (the whole conversation) and must not jump when tips/strips come
+                and go beneath it. Renders nothing while there are no tasks.
+                `running` is the same busy signal as the "Working…" strip below,
+                so in_progress rows spin only while the agent actually runs. */}
+            <TaskProgressPanel tasks={tasks} running={showBusy} />
+            {/* The clicked prompt's tip, above the transient strips: it outlives
+                them (it stays until dismissed, including once the welcome card
+                itself is gone), so the moving parts stay nearest the input. */}
+            {hint ? <HintTip onDismiss={onDismissHint}>{hint}</HintTip> : null}
+            {/* Busy strip: visible for the whole run (submitted AND streaming), not
+                just before the first token — during streaming the agent can spend
+                long stretches in server-side tool calls with nothing new rendering,
+                and the chat must not look idle while the stop icon shows. */}
+            {showBusy ? (
+              <div className="mb-2 flex items-center gap-2 text-muted-foreground text-sm">
+                <Spinner /> Working…
+              </div>
+            ) : null}
+            {uploadError ? <div className="mb-2 text-destructive text-sm">upload failed — {uploadError}</div> : null}
+            {answerError ? <div className="mb-2 text-destructive text-sm">answer failed — {answerError}</div> : null}
+            {/* The POST never reached the server (401 / 5xx / offline): resend the
+                text verbatim. The optimistic bubble stays in the transcript until
+                the next dispatch clears failedSends/failedOptimistic (reducer);
+                normally there is at most one entry — a new send clears the list. */}
+            {agent.failedSends.map((failed) => (
+              <div key={failed.id} className="mb-2 flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 wrap-break-word text-destructive">send failed — {failed.error.message}</span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={retryDisabled}
+                  onClick={() => void agent.sendMessage(failed.message).catch(() => {})}
+                >
+                  <RotateCcwIcon /> Retry
+                </Button>
+              </div>
+            ))}
+            {transportError ? (
+              <div className="mb-2 flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 wrap-break-word text-destructive">connection error — {transportError.message}</span>
+                <Button size="xs" variant="outline" onClick={() => agent.refresh()}>
+                  Reconnect
+                </Button>
+              </div>
+            ) : null}
+            <PromptInput onSubmit={handleSubmit}>
+              <PromptInputBody>
+                <PromptInputTextarea
+                  value={input}
+                  placeholder={placeholder ?? 'Type a message…'}
+                  onChange={(event) => setInput(event.currentTarget.value)}
                 />
-              </PromptInputTools>
-              {/* No status text — the submit icon reflects agent.status via
-                  toChatStatus: ready ↵ / submitted ⟳ / streaming ⏹ / error ✕.
-                  The ✕ is never the only signal: a failed run renders its
-                  inline notice in the transcript (run-outcome.ts), a failed
-                  send / dropped connection its line above the composer, each
-                  with a retry. While generating the button is enabled and
-                  onStop wires the click to client.abort() (kills the run and
-                  any queued work). */}
-              <PromptInputSubmit
-                status={chatStatus}
-                disabled={draft ? draftPending || !meta || !input.trim() : !busy && !input.trim()}
-                onStop={handleStop}
-                className="ml-auto"
-              />
-            </PromptInputFooter>
-          </PromptInput>
+              </PromptInputBody>
+              <PromptInputFooter>
+                <PromptInputTools>
+                  <WorkspaceUploadButton
+                    auth={auth}
+                    sessionId={sessionId}
+                    onEnsureSession={onEnsureSession}
+                    baseUrl={baseUrl}
+                    // Requirement: the landed name goes into the composer with a
+                    // leading AND trailing space, so it can be typed around.
+                    onUploaded={(name) => setInput((prev) => `${prev} ${name} `)}
+                    onError={setUploadError}
+                  />
+                </PromptInputTools>
+                {/* No status text — the submit icon reflects agent.status via
+                    toChatStatus: ready ↵ / submitted ⟳ / streaming ⏹ / error ✕.
+                    The ✕ is never the only signal: a failed run renders its
+                    inline notice in the transcript (run-outcome.ts), a failed
+                    send / dropped connection its line above the composer, each
+                    with a retry. While generating the button is enabled and
+                    onStop wires the click to client.abort() (kills the run and
+                    any queued work). */}
+                <PromptInputSubmit
+                  status={chatStatus}
+                  disabled={draft ? draftPending || !meta || !input.trim() : !busy && !input.trim()}
+                  onStop={handleStop}
+                  className="ml-auto"
+                />
+              </PromptInputFooter>
+            </PromptInput>
+          </div>
         </div>
       </div>
       </WorkspaceLinkContext.Provider>

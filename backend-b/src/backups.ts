@@ -289,6 +289,13 @@ export const PERSIST_MIN_SPACING_MS = 1500;
 type PersistState = { run: Promise<PersistOutcome>; pending: boolean; startedAt: number };
 const persistBySession = new Map<string, PersistState>();
 
+/**
+ * Read-only: is a persist (marker exec + mksquashfs + upload) running for
+ * this session right now? The task tools stamp it into their timing log line
+ * (tasks.ts) so a slow task op can be told apart from a persist-contended one.
+ */
+export const isPersistInFlight = (sessionId: string): boolean => persistBySession.has(sessionId);
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**

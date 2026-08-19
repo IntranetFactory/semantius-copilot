@@ -600,8 +600,16 @@ wedging the tools.
 message would race the read-modify-write and mint duplicate ids. `defineTool` exposes no
 sequential-execution flag, so every task op runs under a per-session promise-chain mutex (one
 conversation = one Durable Object = one isolate; pi starts the parallel executions in call order,
-so ids come out in message order). The pure semantics live in `task-store.ts` (no I/O) and the
-I/O + mutex in `tasks.ts`, so the contract is unit-testable without a sandbox.
+so ids come out in message order). A consequence worth knowing when reading traces: Flue times
+each call from invocation, so the Nth task call of one batch reports the wait for calls 1..N-1
+on top of its own probe + read (+ write) RPCs and any contention with the persist the previous
+write started — an escalating series across a batch is scheduling, not store size (a 14-task
+store is ~4 KB). Each op logs `tasks: <op> queue= read= write= n= bytes= persist=` so the three
+can be told apart. Call economy is the model's side of it: `TaskUpdate` carries `status` +
+`addBlockedBy` + `addBlocks` in one call and both arrays take several ids (the description says
+so) — `TaskCreate` deliberately keeps Claude Code's edge-less schema. The pure semantics live in
+`task-store.ts` (no I/O) and the I/O + mutex in `tasks.ts`, so the contract is unit-testable
+without a sandbox.
 
 **UI.** The chat surface folds the conversation's settled task tool parts (`task-fold.ts`:
 TaskCreate results and TaskUpdate inputs accumulate into a map keyed by id; TaskList/TaskGet

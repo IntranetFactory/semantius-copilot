@@ -10,6 +10,12 @@
  * Rendered by AgentChat above the composer, next to the HintTip. Nothing to
  * render when the conversation has no tasks.
  *
+ * Starts COLLAPSED: the header row alone carries the count, the progress bar
+ * and the task the agent is on right now, which is what a glance wants; the
+ * full checklist is one click away. Open by default it pinned up to max-h-48
+ * of rows over the composer for the whole conversation — a permanent slab of
+ * chrome most turns never look at.
+ *
  * Row semantics mirror Claude Code's TUI: an in_progress task shows its
  * `activeForm` ("Running tests") when it has one, otherwise the subject; a
  * completed task is struck through.
@@ -56,7 +62,7 @@ import { orderTasks, taskProgress, type TrackedTask } from "./task-fold";
 export type TaskProgressPanelProps = Omit<ComponentProps<"div">, "children"> & {
   /** The current list — `foldTasks(agent.messages)`. */
   tasks: readonly TrackedTask[];
-  /** Initial open state (the user can toggle it). Default open. */
+  /** Initial open state (the user can toggle it). Default collapsed. */
   defaultOpen?: boolean;
   /**
    * Whether the agent is running right now (the host's busy signal, the same
@@ -84,7 +90,7 @@ const statusIcon = (status: TrackedTask["status"], running: boolean) => {
 
 export const TaskProgressPanel = ({
   tasks,
-  defaultOpen = true,
+  defaultOpen = false,
   running = false,
   className,
   ...props
