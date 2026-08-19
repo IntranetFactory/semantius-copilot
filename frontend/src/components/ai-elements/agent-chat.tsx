@@ -208,6 +208,21 @@ export function AgentChat({
   // so reloads and the key-flip remount re-derive the same panel.
   const tasks = useMemo(() => foldTasks(agent.messages), [agent.messages]);
 
+  // The message hosting the transcript's most recent tool-call group: that
+  // group names its last call once settled (ToolCallGroup `latest`, "Ran bash
+  // Downloading the blueprint  and 3 more") while older groups keep the bare
+  // count. Found across the WHOLE visible transcript, not just the last
+  // message, so the line holds until a newer group exists — a user send that
+  // appends a bubble must not flip the line above it back to a count.
+  const latestToolGroupMessageId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      const segments = toSegments(message.parts, supersededQuestionCalls(message.parts, questionAnswers));
+      if (segments.some((segment) => segment.kind === 'tools')) return message.id;
+    }
+    return undefined;
+  }, [messages, questionAnswers]);
+
   // Failed / stopped runs, derived from settlements + the visible transcript
   // (run-outcome.ts). Durable across reloads and the key-flip remount, unlike
   // agent.status/agent.error, which the hook pins to THIS tab's submissions
@@ -454,7 +469,11 @@ export function AgentChat({
                   const notice = noticeByAnchor.get(message.id);
                   return (
                     <Fragment key={message.id}>
-                      <MessageView message={message} questions={questionCtx} />
+                      <MessageView
+                        message={message}
+                        questions={questionCtx}
+                        hostsLatestToolGroup={message.id === latestToolGroupMessageId}
+                      />
                       {notice ? renderNotice(notice) : null}
                     </Fragment>
                   );
@@ -655,7 +674,18 @@ function toSegments(parts: AgentPart[], superseded: ReadonlySet<string>): Segmen
   return segments;
 }
 
-function MessageView({ message, questions }: { message: AgentMessage; questions: QuestionCtx }) {
+function MessageView({
+  message,
+  questions,
+  hostsLatestToolGroup,
+}: {
+  message: AgentMessage;
+  questions: QuestionCtx;
+  /** This message holds the transcript's most recent tool-call group (the
+   * parent's latestToolGroupMessageId) — its LAST tools segment renders with
+   * ToolCallGroup `latest`. */
+  hostsLatestToolGroup: boolean;
+}) {
   // Consolidate all reasoning parts into one block (a model may emit several) so
   // there's a single "Thinking…" affordance rather than one per part.
   const reasoningParts = message.parts.filter(
@@ -664,6 +694,11 @@ function MessageView({ message, questions }: { message: AgentMessage; questions:
   const reasoningText = reasoningParts.map((part) => part.text).join('\n\n');
   const lastPart = message.parts.at(-1);
   const isReasoningStreaming = lastPart?.type === 'reasoning' && lastPart.state === 'streaming';
+
+  const segments = toSegments(message.parts, supersededQuestionCalls(message.parts, questions.answers));
+  const latestToolsKey = hostsLatestToolGroup
+    ? segments.filter((segment) => segment.kind === 'tools').at(-1)?.key
+    : undefined;
 
   return (
     <Message from={message.role}>
@@ -674,9 +709,9 @@ function MessageView({ message, questions }: { message: AgentMessage; questions:
             <ReasoningContent>{reasoningText}</ReasoningContent>
           </Reasoning>
         ) : null}
-        {toSegments(message.parts, supersededQuestionCalls(message.parts, questions.answers)).map((segment) =>
+        {segments.map((segment) =>
           segment.kind === 'tools' ? (
-            <ToolCallGroup key={segment.key} parts={segment.parts} />
+            <ToolCallGroup key={segment.key} parts={segment.parts} latest={segment.key === latestToolsKey} />
           ) : (
             <PartView key={segment.key} part={segment.part} messageId={message.id} questions={questions} />
           ),

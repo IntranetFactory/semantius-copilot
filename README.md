@@ -173,6 +173,12 @@ itself, with a Retry — see "Failed runs, stopped runs, retry" below.
 **Tool calls** (`tool.tsx`). A run of consecutive tool calls collapses to one line ("Ran 10
 tool calls ✓", or "Running bash  Checking the workspace…" while one is in flight); expanding
 shows a slim row per call, and each row opens into the call's Parameters and Result panels.
+The transcript's most recent group keeps naming its last call once it settles — "Ran bash
+Downloading the blueprint  and 3 more" (the live line, tense flipped) — so the line still says
+where the agent got to; older groups show the bare count (`latest` prop, decided in
+`agent-chat.tsx` across the whole visible transcript, so a user send that appends a bubble
+doesn't flip the line above it back). A group with a failed call keeps "N tool calls · k
+failed" + red icon and auto-opens, latest or not.
 The text on a row/line is `summarizeInput`: `#id → status` for task ops, else the call's
 `subject` (TaskCreate), else its `description`, else its first string argument (a path, a
 pattern). `description` is what makes a `bash` row read as plain language rather than a

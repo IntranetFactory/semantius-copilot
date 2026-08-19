@@ -190,6 +190,11 @@ const summarizeInput = (input: ToolPart["input"]): string | undefined => {
 export type ToolCallGroupProps = {
   /** The run's tool parts, in stream order. */
   parts: ToolPart[];
+  /** True for the transcript's most recent group (the caller decides; see
+   * agent-chat.tsx `latestToolGroupMessageId`). Once settled it names its
+   * last call instead of a bare count — what the agent did LAST is the one
+   * thing worth a glance without a click. */
+  latest?: boolean;
   className?: string;
 };
 
@@ -197,12 +202,15 @@ export type ToolCallGroupProps = {
  * A run of consecutive tool calls collapsed to ONE summary line ("Ran 7 tool
  * calls ✓") instead of a bordered card per call — long agent runs were filling
  * the viewport with ~65px of repeated chrome each. While the run is live the
- * line names the call in flight; expanding shows a slim row per call, and each
- * row opens into the same ToolInput/ToolOutput panels the per-call card used.
- * Styled after ReasoningTrigger so tool activity and "Thought for…" read as
- * one family of affordances.
+ * line names the call in flight; the transcript's latest group keeps naming
+ * its last call once settled ("Ran bash  Downloading the blueprint  and 3
+ * more" — the live line with its tense flipped), older groups keep the count.
+ * Expanding shows a slim row per call, and each row opens into the same
+ * ToolInput/ToolOutput panels the per-call card used. Styled after
+ * ReasoningTrigger so tool activity and "Thought for…" read as one family of
+ * affordances.
  */
-export const ToolCallGroup = ({ parts, className }: ToolCallGroupProps) => {
+export const ToolCallGroup = ({ parts, latest, className }: ToolCallGroupProps) => {
   const active = parts.find((part) => !isSettled(part.state));
   const errorCount = parts.filter(
     (part) => part.state === "output-error"
@@ -219,6 +227,16 @@ export const ToolCallGroup = ({ parts, className }: ToolCallGroupProps) => {
   }
 
   const single = parts.length === 1 ? parts[0] : undefined;
+  // The settled latest group names its LAST call: "Running bash  Downloading
+  // the blueprint" becomes "Ran bash  Downloading the blueprint  and 3 more"
+  // the moment the run moves on, so the line still says where the agent got
+  // to. The tool name stays in the line (as on the live line) because only
+  // `bash` carries a plain-language description — a path, a `Q:` subject or
+  // `#3 → completed` on its own would not read as a sentence. A failure keeps
+  // the failure label below: the count + red icon must not be traded for a
+  // summary.
+  const latestSettled =
+    latest && !active && errorCount === 0 ? parts.at(-1) : undefined;
   // The line names what is happening, not just which tool: while a call is
   // in flight it carries that call's summary ("Running bash  Checking the
   // workspace…" — read from the partial input as it streams), and a lone
@@ -226,18 +244,29 @@ export const ToolCallGroup = ({ parts, className }: ToolCallGroupProps) => {
   // informative without a click.
   const summary = active
     ? summarizeInput(active.input)
-    : errorCount === 0 && single
-      ? summarizeInput(single.input)
-      : undefined;
+    : latestSettled
+      ? summarizeInput(latestSettled.input)
+      : errorCount === 0 && single
+        ? summarizeInput(single.input)
+        : undefined;
   const label = active
     ? active.state === "approval-requested"
       ? `Awaiting approval · ${toolName(active)}`
       : `Running ${toolName(active)}${summary ? "" : "…"}`
     : errorCount > 0
       ? `${parts.length} tool call${parts.length === 1 ? "" : "s"} · ${errorCount} failed`
-      : single
-        ? toolName(single)
-        : `Ran ${parts.length} tool calls`;
+      : latestSettled
+        ? `Ran ${toolName(latestSettled)}`
+        : single
+          ? toolName(single)
+          : `Ran ${parts.length} tool calls`;
+  // "…and 3 more" after the named call — its own span so the summary can
+  // truncate without swallowing the count. No ellipsis: in this family the
+  // trailing "…" means in flight, and this group is done.
+  const trailer =
+    latestSettled && parts.length > 1
+      ? `and ${parts.length - 1} more`
+      : undefined;
   const icon = active ? (
     <ClockIcon className="size-4 shrink-0 animate-pulse" />
   ) : errorCount > 0 ? (
@@ -258,6 +287,7 @@ export const ToolCallGroup = ({ parts, className }: ToolCallGroupProps) => {
         {summary ? (
           <span className="min-w-0 truncate text-xs">{summary}</span>
         ) : null}
+        {trailer ? <span className="shrink-0 text-xs">{trailer}</span> : null}
         <ChevronDownIcon className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 outline-none data-[state=closed]:animate-out data-[state=open]:animate-in">
