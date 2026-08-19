@@ -17,7 +17,7 @@ Every import run gets its own scratch folder under the **current working directo
 
 ```
 <cwd>/.tmp_import/run-<yyyymmdd-hhmmss>/
-├── package.json          # {"dependencies": {"csv-parse": "^6"}} — created by `bun add csv-parse`
+├── package.json          # {"dependencies": {"csv-parse": "^6"}} — created by `bun add --cwd <run-folder> csv-parse`
 ├── mapping.json          # the approved mapping (schema-mapping.md section 8) — the single runtime input
 ├── <file>.csvschema.json # copied introspection output
 ├── render-plan.ts        # copied helper: renders the mapping table + plan facts (Stage 2/4)
@@ -27,7 +27,7 @@ Every import run gets its own scratch folder under the **current working directo
 └── import-summary.json   # written at the end of every run
 ```
 
-The workspace is created at the start of Stage 2 (the helpers need `mapping.json` beside them from the first review round). **One canonical setup block, run in full at Stage 2** — every copy lands under its **final name**, so no later stage renames anything. In particular `import.template.ts` becomes `import.ts` here; defer that rename to Stage 5 and `bun run import.ts` dies with "Module not found":
+The workspace is created at the start of Stage 2 (the helpers need `mapping.json` beside them from the first review round). **One canonical setup block, run in full at Stage 2** — every copy lands under its **final name**, so no later stage renames anything. In particular `import.template.ts` becomes `import.ts` here; defer that rename to Stage 5 and `bun run …/import.ts` dies with "Module not found":
 
 ```bash
 mkdir -p .tmp_import/run-<ts>                                          # from <cwd>
@@ -35,16 +35,18 @@ cp <csv-folder>/<file>.csvschema.json     .tmp_import/run-<ts>/
 cp <skill-folder>/references/render-plan.ts    .tmp_import/run-<ts>/render-plan.ts
 cp <skill-folder>/references/create-fields.ts  .tmp_import/run-<ts>/create-fields.ts
 cp <skill-folder>/references/import.template.ts .tmp_import/run-<ts>/import.ts   # note the final name
-cd "<cwd>/.tmp_import/run-<ts>" && bun add csv-parse
+bun add --cwd .tmp_import/run-<ts> csv-parse                           # still from <cwd>: --cwd targets the run folder, no `cd`
 ```
 
-Run commands (inside the run folder, as each stage arrives):
+**Never `cd` into the run folder.** Preflight check 1 (`../semantius-admin/references/preflight.md`) applies to this skill's scripts exactly as it does to a bare `semantius call`: `create-fields.ts` and `import.ts` spawn `semantius call crud …` as child processes, and a child inherits the shell's current working directory, from which the CLI reads its `.env`. Run from inside `.tmp_import/run-<ts>/` there is no `.env` there, so on an API-key install every `create_field` call and every batch insert fails with an auth error (exit 5) that looks like a CLI bug; an install authenticated by a JWT or by environment variables the harness injected merely hides the mistake. Nothing in the scripts needs the run folder as cwd: `mapping.json`, `node_modules/csv-parse`, `import-summary.json`, and `failed-batches.json` all resolve relative to the script file's own location (`import.meta.url` / Bun's upward module lookup), so they run identically from `<cwd>` by path — the same shape as the modeler's `bun run .tmp_deploy/deploy_<slug>.ts`. `bun add --cwd` covers the one step that does need the run folder as its working directory. Do not "solve" this by copying or symlinking `.env` into the run folder either: the run folder is gitignored scratch and must never carry credentials.
+
+Run commands (from `<cwd>`, by path, as each stage arrives; `<run-folder>` = `.tmp_import/run-<ts>`):
 
 ```bash
-bun run render-plan.ts                       # Stage 2: mapping table + facts
-bun run create-fields.ts --dry-run           # Stage 4: exact create_field payloads
-bun run create-fields.ts                     # Stage 4: create the fields (one bulk create_field call)
-bun run import.ts <absolute-path-to>/<file>.csv   # Stage 5
+bun run <run-folder>/render-plan.ts                       # Stage 2: mapping table + facts (offline)
+bun run <run-folder>/create-fields.ts --dry-run           # Stage 4: exact create_field payloads (offline)
+bun run <run-folder>/create-fields.ts                     # Stage 4: create the fields (one bulk create_field call)
+bun run <run-folder>/import.ts <absolute-path-to>/<file>.csv   # Stage 5
 ```
 
 The workspace lives under the project's working directory but stays out of `git status` via the `.tmp_import/` gitignore entry; it never goes into the CSV's folder or the skill folder. Always report the run folder's **absolute path** in the final summary so the user can open `failed-batches.json` and `import-summary.json` directly. Re-running an import for the same table: prefer updating `mapping.json` in the existing run folder over generating a fresh one, so `failed-batches.json` history stays in one place.

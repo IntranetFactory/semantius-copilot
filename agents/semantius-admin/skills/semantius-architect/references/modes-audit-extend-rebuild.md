@@ -13,7 +13,7 @@ The goal is to give the user a clear, actionable quality report — not just a l
 Read the file in full, then work through each check in the audit checklist (`audit-checklist.md`). Group your findings into three severity levels:
 
 - **🔴 Blocker** — the downstream agent will fail or produce incorrect results (e.g., missing required front-matter, `id` field manually declared, `reference` field missing target table, enum field with no values)
-- **🟡 Warning** — the model will work but is fragile or misleading (e.g., ambiguous field names, missing label_column, relationship in §3 but not in §4)
+- **🟡 Warning** — the model will work but is fragile or misleading (e.g., ambiguous data_object names, a §3 entity with no role, a relationship drawn in the §2 diagram but missing from §5)
 - **🟢 Suggestion** — improvements to clarity or long-term maintainability (e.g., a field that could be more descriptive, an open question that should be closed)
 
 After listing findings, give an overall summary: how many issues of each severity, and a one-line verdict ("Ready to implement", "Needs minor fixes before implementation", "Significant rework needed").

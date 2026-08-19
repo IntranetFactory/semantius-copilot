@@ -65,7 +65,7 @@ The platform ships core provenance columns the modeler is the only writer of. **
 | `icon_name` | `icon_name` | `users` | top-level column |
 | `home_page` | `home_page` | _(omitted)_ | top-level column; include **only** when the front-matter carries a non-empty value (default `''`) |
 | `logo_color` | `logo_color` | _(omitted)_ | top-level column; include **only** when the front-matter provides it (else the fallback random-fills an empty live value; never overwrite a provided value) |
-| `settings.module_kind` | `module_kind` | `starter` | |
+| `settings.module_kind` | `module_kind` | `starter` | include **only** when the front-matter carries a non-empty, non-null value (the key is optional and informational; never write `null`) |
 | `settings.naming_mode` | `naming_mode` | `agent-optimized` | |
 | `settings.catalog_snapshot` | `reconciled_against_catalog_snapshot` | `2026-06-25T15:12:29Z` | **the key renames** — front-matter `reconciled_against_catalog_snapshot` → settings `catalog_snapshot` |
 | `access_scope` | Stage 2.5 resolved scope (`access_scope`, else resolved at deploy) | `full` | top-level column; `basic` / `full` |
@@ -87,7 +87,7 @@ await call("create_module", {
     // logo_color: "#1a3a2e",                    // frontmatter logo_color: ONLY when provided (else fallback fills empty live); never overwrite
     access_scope: "full",                       // Stage 2.5 resolved scope (top-level column)
     settings: {
-      module_kind: "starter",                   // frontmatter module_kind
+      module_kind: "starter",                   // frontmatter module_kind: ONLY when present/non-empty (drop the key otherwise; never null)
       naming_mode: "agent-optimized",           // frontmatter naming_mode
       catalog_snapshot: "2026-06-25T15:12:29Z", // frontmatter reconciled_against_catalog_snapshot (renamed)
       // promotion_decisions: [ ... ],           // ONLY when frontmatter carries it
@@ -419,9 +419,9 @@ In `documentation` mode, none of the above runs — point 2's grant compilation 
 
 Plan line: `🏢 Functional ownership: owner = <function>.<role>, contributor = <function>.<role>`. Per-row grants summary in Stage 5.
 
-**4m. Boundary-crossing handoff wiring.** **Skipped entirely under the Stage 2.5 `basic` projection** (handoffs are part of the lifecycle-gating surface basic access drops). For each parsed §6.2 outbound and §6.3 inbound handoff row whose `event_category` is `lifecycle` or `state_change`:
+**4m. Boundary-crossing handoff wiring.** **Skipped entirely under the Stage 2.5 `basic` projection** (handoffs are part of the lifecycle-gating surface basic access drops). Input: the rows parsed from the spec's §6 `### Outbound handoffs` / `### Inbound handoffs` sub-sections (template v5.5+; **when present** — a spec without them, or with `_(none: …)_` placeholders, makes this stage a no-op). For each parsed outbound and inbound handoff row whose `event_category` is `lifecycle` or `state_change`:
 
-1. Verify the source entity's §7 lifecycle table contains the `to_state` named in the row's `transition` column. Parse-time has already enforced this; this is the deploy-boundary re-check.
+1. For an outbound row (or an inbound row whose `payload` is an entity this spec declares), verify the `payload` entity's `workflow_state` enum values contain the `to_state` named in the row's `transition` column. Parse-time has already enforced this; this is the deploy-boundary re-check. Inbound payloads owned by the source module are not checked.
 2. Compute `source_module`: follow the **entity-owning-module rule** — the source_module is the source entity's CURRENT owning module slug in the live catalog, not the installing unit. When the source entity is an `embedded_master` whose catalog owner is absent, the source_module IS the installing unit (the entity's current owning module IS the installing unit). When catalog owner is present, the source_module is the catalog module.
 3. If the platform exposes a transition trigger registry (`transition_event_triggers` or equivalent), call the appropriate `create_*` CLI to wire the trigger: `(source_module, source_entity, from_state, to_state, event_name, event_category)` → target module's handler. Today the platform may not expose this; in that case, emit a 🟡 informational row in Stage 5: *"Handoff `<source>.<entity>.<event>` → `<target>.<module>` not wired (no trigger registry support); the analyst's spec documents the intent."*
 4. **Entity-event handoffs** (`event_category = entity_event`) don't have a state to bind; wire as a raw insert/update/delete listener (when supported) or surface as 🟡.

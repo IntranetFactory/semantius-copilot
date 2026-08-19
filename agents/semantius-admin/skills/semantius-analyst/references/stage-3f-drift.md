@@ -164,7 +164,7 @@ function rename_in_jsonlogic(node, renames):
 | Rename kind | Apply across |
 |---|---|
 | Field rename on entity E | Every JsonLogic on E. Also every JsonLogic on any OTHER entity that references `E.<old_field>` (the dotted form). |
-| Permission code rename | Every JsonLogic across all entities (permission codes are global). Also every §8.1 Permissions catalog row, §3 `Edit permission:` annotation, §7 lifecycle states' `requires_permission?` column, §8 hierarchy rows. |
+| Permission code rename | Every JsonLogic across all entities (permission codes are global). Also every §8.1 Permissions catalog row, §3 `Edit permission:` annotation, §9.1 permission-hierarchy row, §9.1 RACI realization grant list, and §9.1 `process_gates` / enforcement-rule row that names the code. |
 | Enum value rename (3f.2 option 1 won't trigger this; option 2's migration table might) | Every JsonLogic that compares against the renamed enum literal (`{"==": [{"var": "field"}, "<old_value>"]}` patterns). Also the field's `enum_values` and `default`. |
 
 **Post-cascade verification** (catches incomplete walks, runs as part of Stage 11):

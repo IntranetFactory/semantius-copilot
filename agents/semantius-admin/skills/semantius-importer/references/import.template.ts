@@ -11,7 +11,12 @@
  * only with `natural_key` set in mapping.json (the field marked unique):
  * rows whose key already exists are skipped. Otherwise re-running duplicates rows.
  *
- * Run (inside the run folder): bun run import.ts <absolute-path-to-csv>
+ * Run FROM THE SESSION CWD (repo root), by path — never `cd` into the run folder:
+ *   bun run .tmp_import/run-<ts>/import.ts <absolute-path-to-csv>
+ * Every batch spawns `semantius call`, and the CLI reads its `.env` from the
+ * spawning shell's cwd (preflight check 1). Nothing here needs the run folder
+ * as cwd: mapping.json and the two output files resolve via import.meta.url,
+ * csv-parse via Bun's upward node_modules lookup from this file.
  */
 import { parse } from "csv-parse";
 import { createReadStream, readFileSync, writeFileSync } from "node:fs";
@@ -81,6 +86,10 @@ const EXPECTED_RECORDS: number | null = M.expected_records ?? null;
 const MAPPING: ColumnSpec[] = M.columns.filter((c) => c.disposition !== "skip");
 
 // ------------------------------------------------------------- transport --
+// The child inherits process.cwd(); the CLI reads `.env` from there. Printed on
+// exit 5 so a run started from inside the run folder names its likely cause.
+const AUTH_HINT = `hint: semantius reads .env from the current working directory (${process.cwd()}); run this script from the session cwd by path (bun run .tmp_import/run-<ts>/import.ts ...), never from inside the run folder.`;
+
 async function pgRequest(payload: unknown): Promise<{ code: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn(["semantius", "call", "crud", "postgrestRequest"], {
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
@@ -99,7 +108,7 @@ async function postBatch(rows: Record<string, unknown>[], attempt = 1): Promise<
   // No prefer key: the server strips it and always answers with the representation envelope.
   const res = await pgRequest({ method: "POST", path: `/${TABLE}`, body: rows });
   if (res.code === 0) return { ok: true };
-  if (res.code === 5) { console.error(`auth failure, aborting:\n${res.stderr}`); process.exit(5); }
+  if (res.code === 5) { console.error(`auth failure, aborting:\n${res.stderr}\n${AUTH_HINT}`); process.exit(5); }
   if (res.code === 3 && attempt <= 3) {
     const delay = 1000 * 3 ** (attempt - 1);
     console.error(`  transient failure, retry ${attempt}/3 in ${delay / 1000}s`);

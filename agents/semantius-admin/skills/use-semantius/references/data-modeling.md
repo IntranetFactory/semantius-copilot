@@ -176,7 +176,7 @@ Platform meta-schema. **Never declare in a domain model.** The deployer manages 
 | `table_name` | **Plural** snake_case. Renaming is supported but think twice: integrations, saved queries, and external consumers reference the entity by name. |
 | `singular_label` | Human-readable name for **one record** (e.g. `Product`). Must be grammatically symmetric with `plural_label`, if `plural_label` is "Products", this must be "Product", never "Product Name". Field-level titles like "Product Name" belong on the auto-created `label` field, not here (see Customizing the `label` field's title below). |
 | `plural_label` | e.g. "Products" |
-| `label_column` | Snake_case **field name** that identifies a record (e.g. `product_name`). NOT a human-readable title |
+| `label_column` | Snake_case **field name** that identifies a record (e.g. `product_name`). NOT a human-readable title. Optional on `create_entity`: set it on every entity that has a natural local label; omit it for a junction table, whose `_label` the platform composes from the parent legs (see "Junction tables" below). |
 | `module_id` | Required on `create_entity` — must be a valid (non-null) integer module id; `null` is rejected. Find with `read_module`. On `update_entity` it stays optional, but a provided value must still be a non-null integer. |
 | `view_permission` | Required, name string (e.g. `"catalog:read"`) |
 | `edit_permission` | Required, name string (e.g. `"catalog:manage"`) |

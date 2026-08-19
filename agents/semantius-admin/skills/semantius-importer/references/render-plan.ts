@@ -11,7 +11,10 @@
  * instead of restating numbers in prose, so the rendered table, the plan,
  * and what actually executes can never disagree.
  *
- * Run (inside the run folder): bun run render-plan.ts
+ * Run from the session cwd by path (offline, no CLI calls — but the same
+ * invocation shape as its siblings, which do spawn `semantius`; preflight
+ * check 1 says never `cd` into the run folder):
+ *   bun run .tmp_import/run-<ts>/render-plan.ts
  */
 import { readFileSync } from "node:fs";
 
