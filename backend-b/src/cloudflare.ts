@@ -36,7 +36,9 @@
  *     outright. A whitelisted request with no sentinel is forwarded as-is;
  *     anything to a non-whitelisted host is rejected — even carrying the
  *     sentinel (exfiltration guard) — and so is a sentinel aimed at a host that
- *     is reachable but outside SEMANTIUS_HOSTS. A session with no JWT (channel
+ *     is reachable but outside SEMANTIUS_HOSTS (plus, for an agent that opts in
+ *     with `$SEMANTIUS_DATA_HOST`, the one data host its org's lookup named —
+ *     the CLI's Neon postgrest_url since v0.8.9). A session with no JWT (channel
  *     conversation, expired 24 h TTL) has NO credential to lend, so a
  *     sentinel-bearing request fails closed with 503.
  *
@@ -135,7 +137,7 @@ const LAST_RUN_KEY = 'semantius-copilot:snapshotLastRun';
 export class SemantiusCopilotSandbox extends Sandbox<Env> {
   enableInternet = false;
   // Intercept HTTPS egress too (SDK default is false). semantius calls
-  // https://<org>.semantius.ai, so without this the catch-all `outbound` swap
+  // the Semantius API over HTTPS (<org>.semantius.ai, or since v0.8.9 the org's postgrest_url), so without this the catch-all `outbound` swap
   // would never see its request. The container trusts the interceptor CA via
   // NODE_EXTRA_CA_CERTS baked in the Dockerfile.
   interceptHttps = true;
@@ -432,6 +434,10 @@ SemantiusCopilotSandbox.outbound = async (request: Request, env: Env, ctx: { con
     policy && typeof policy.context?.semantius_jwt === 'string' && policy.context.semantius_jwt
       ? policy.context.semantius_jwt
       : undefined;
+  // THIS session's credential scope: the static Semantius hosts, plus — only
+  // for an agent that opted in with $SEMANTIUS_DATA_HOST — the org's own data
+  // host, exactly one looked-up hostname (resolveEgressPolicy), never a glob.
+  const jwtHosts = policy?.semantiusDataHost ? [...SEMANTIUS_HOSTS, policy.semantiusDataHost] : SEMANTIUS_HOSTS;
   return brokerEgress(request, {
     // The union of the agent's proxy_whitelist and the org's copilot allow list
     // (resolveEgressPolicy). It can legitimately be ['*'] — an org running with
@@ -447,8 +453,8 @@ SemantiusCopilotSandbox.outbound = async (request: Request, env: Env, ctx: { con
     // WHERE that credential may travel, independent of where the sandbox may
     // talk. Widening egress must never widen the JWT's reach: a sentinel aimed
     // at a merely-reachable host is a 403, not a swap.
-    secretHosts: SEMANTIUS_HOSTS,
-    ...(jwt ? { jwt: { token: jwt, hosts: SEMANTIUS_HOSTS } } : {}),
+    secretHosts: jwtHosts,
+    ...(jwt ? { jwt: { token: jwt, hosts: jwtHosts } } : {}),
   });
 };
 

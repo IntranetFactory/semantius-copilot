@@ -34,7 +34,7 @@
  * ORG's copilot settings — may this org use copilot at all, and what egress does
  * it permit. It runs once at session creation, not on the auth path.
  */
-import { sanitizeAllowlist } from './egress.js';
+import { isPlainDnsHost, sanitizeAllowlist } from './egress.js';
 
 /** A Semantius org slug — the subdomain label, so DNS-label shaped. */
 export const SEMANTIUS_ORG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -191,6 +191,9 @@ export function semantiusSessionTokenUrl(baseUrl = SEMANTIUS_SESSION_BASE_URL) {
 }
 export function semantiusSessionCopilotUrl(baseUrl = SEMANTIUS_SESSION_BASE_URL) {
   return `${String(baseUrl).replace(/\/+$/, '')}/session/copilot`;
+}
+export function semantiusOrganizationUrl(org, baseUrl = SEMANTIUS_SESSION_BASE_URL) {
+  return `${String(baseUrl).replace(/\/+$/, '')}/organization/${encodeURIComponent(org)}`;
 }
 
 /**
@@ -426,4 +429,54 @@ export async function fetchCopilotSettings(value, options, fetchImpl = fetch) {
     firewallEnabled: body.copilotFirewallEnabled !== false,
     allowlist: sanitizeAllowlist(body.copilotFirewallAllowlist),
   };
+}
+
+/**
+ * Look up an org's DATA HOST: `GET /organization/<org>` — the same public,
+ * unauthenticated lookup semantius CLI v0.8.9+ makes at startup — answers the
+ * org's `postgrest_url` (a Neon Data API endpoint such as
+ * `https://ep-….apirest.….aws.neon.tech/neondb/rest/v1`), where the CLI then
+ * sends every data call with the user's JWT. Only the HOSTNAME is kept: it
+ * becomes the session's `semantius_data_host`, which `$SEMANTIUS_DATA_HOST`
+ * expands to at egress (SEMANTIUS_DATA_HOST_TOKEN, egress.js).
+ *
+ * Called ONCE PER SESSION, at creation, and only for an agent that opts in;
+ * `org` is the VERIFIED org, never client input. Strict: the answer must be an
+ * https URL on a plain DNS host (isPlainDnsHost) — anything else is a failure,
+ * never a wider scope. Never throws, like the calls above.
+ *
+ * @param {unknown} org the verified org
+ * @param {{ baseUrl?: string }} [options]
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<{ ok: true, host: string } | { ok: false, error: string, status?: number }>}
+ */
+export async function fetchOrgDataHost(org, options, fetchImpl = fetch) {
+  const { baseUrl = SEMANTIUS_SESSION_BASE_URL } = options ?? {};
+  if (typeof org !== 'string' || !SEMANTIUS_ORG_RE.test(org)) {
+    return { ok: false, error: 'organization lookup needs a valid org' };
+  }
+
+  const url = semantiusOrganizationUrl(org, baseUrl);
+  let response;
+  try {
+    response = await fetchImpl(url, { headers: { accept: 'application/json' } });
+  } catch (err) {
+    return { ok: false, error: `organization lookup unreachable at ${url}: ${String(err).slice(0, 200)}` };
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    return { ok: false, status: response.status, error: `organization ${response.status} from ${url}: ${detail.slice(0, 200)}` };
+  }
+
+  const body = await response.json().catch(() => null);
+  let parsed;
+  try {
+    parsed = new URL(body && typeof body === 'object' ? body.postgrest_url : undefined);
+  } catch {
+    return { ok: false, error: `organization at ${url} returned no usable postgrest_url` };
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !isPlainDnsHost(parsed.hostname)) {
+    return { ok: false, error: `organization at ${url} returned a postgrest_url that is not https://<plain host>` };
+  }
+  return { ok: true, host: parsed.hostname };
 }

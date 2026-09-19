@@ -22,6 +22,7 @@
  * pointer or record means DENY ALL egress (fail-closed).
  */
 import { mergeSessionRecord, readSession } from './admin.js';
+import { SEMANTIUS_DATA_HOST_TOKEN } from './config.js';
 
 export const CONTAINER_KEY_PREFIX = 'container:';
 export const DEFAULT_SECRET_TTL_SECONDS = 24 * 60 * 60;
@@ -185,6 +186,22 @@ export function isWhitelistedHost(host, whitelist) {
   );
 }
 
+const DNS_HOST_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * A plain DNS hostname and nothing else: lowercase labels, at least two, a
+ * TLD starting with a letter. That rules out IP literals, ports, userinfo —
+ * and glob characters, which matter most: the data host is used AS a pattern
+ * by both the allow-list and credential-scope matchers, so a `*` in it would
+ * widen both.
+ *
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+export function isPlainDnsHost(value) {
+  return typeof value === 'string' && DNS_HOST_RE.test(value);
+}
+
 /** Per-entry cap, and the cap on an ORG list (the agent-side cap is
  * AGENT_LIMITS.maxWhitelistHosts, enforced at bundle validation). */
 export const ALLOWLIST_ENTRY_MAX_CHARS = 255;
@@ -331,9 +348,17 @@ export async function sessionIdForContainer(kv, containerId) {
  * per-message self-heal below rewrites the agent half from the bundle, so a
  * pre-merged field would lose the org half on the next turn.
  *
+ * A `$SEMANTIUS_DATA_HOST` entry in the AGENT's half is expanded here to the
+ * record's `semantius_data_host` (the org's data API host, looked up at session
+ * creation), or dropped when the record has none. Only then does
+ * `semantiusDataHost` come back, and the broker adds it to this session's JWT
+ * scope — so an agent that did not opt in never gets its user's JWT sent there,
+ * even when an unfirewalled org makes the host reachable. The org's half is
+ * never expanded: the token is an agent-definition concept.
+ *
  * @param {{ get(k: string): Promise<string | null> }} kv
  * @param {string} containerId
- * @returns {Promise<{ sessionId: string, egressSecrets?: Record<string, string>, semantiusOrg?: string, whitelist: string[], context?: Record<string, unknown> } | null>}
+ * @returns {Promise<{ sessionId: string, egressSecrets?: Record<string, string>, semantiusOrg?: string, semantiusDataHost?: string, whitelist: string[], context?: Record<string, unknown> } | null>}
  */
 export async function resolveEgressPolicy(kv, containerId) {
   const sessionId = await sessionIdForContainer(kv, containerId);
@@ -341,7 +366,15 @@ export async function resolveEgressPolicy(kv, containerId) {
   const record = await readSession(kv, sessionId);
   if (!record) return null; // fail closed
   const strings = (value) => (Array.isArray(value) ? value.filter((h) => typeof h === 'string' && h) : []);
-  const whitelist = [...strings(record.whitelist), ...strings(record.org_whitelist)];
+  const agentList = strings(record.whitelist);
+  // Re-checked on read (defense in depth): a stored value that is not a plain
+  // host is treated as absent, never matched as a pattern.
+  const dataHost = isPlainDnsHost(record.semantius_data_host) ? record.semantius_data_host : undefined;
+  const semantiusDataHost = agentList.includes(SEMANTIUS_DATA_HOST_TOKEN) ? dataHost : undefined;
+  const whitelist = [
+    ...agentList.flatMap((h) => (h !== SEMANTIUS_DATA_HOST_TOKEN ? [h] : semantiusDataHost ? [semantiusDataHost] : [])),
+    ...strings(record.org_whitelist),
+  ];
   const context =
     record.session_context && typeof record.session_context === 'object' && !Array.isArray(record.session_context)
       ? record.session_context
@@ -352,6 +385,7 @@ export async function resolveEgressPolicy(kv, containerId) {
     sessionId,
     ...(egressSecrets ? { egressSecrets } : {}),
     ...(typeof org === 'string' && org ? { semantiusOrg: org } : {}),
+    ...(semantiusDataHost ? { semantiusDataHost } : {}),
     whitelist,
     ...(context ? { context } : {}),
   };
@@ -372,6 +406,9 @@ export async function resolveEgressPolicy(kv, containerId) {
  *    self-heal has no cookie to re-fetch it with, so touching it would silently
  *    narrow a firewall-off session back to the agent's list. resolveEgressPolicy
  *    unions the two;
+ *  - `semantius_data_host` is NEVER written here either — looked up once at
+ *    session creation, it is what `$SEMANTIUS_DATA_HOST` in the (rewritten)
+ *    agent list expands to;
  *  - everything else on the record (session_context, payload, session_data,
  *    session_state, meta) is preserved by the merge, never reconstructed.
  * Writes only on change: a warm session costs two reads, zero writes.

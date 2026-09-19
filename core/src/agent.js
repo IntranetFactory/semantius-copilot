@@ -44,6 +44,7 @@ import {
   SKILL_NAME_RE,
   validateFilesMap,
 } from './bundle.js';
+import { SEMANTIUS_DATA_HOST_TOKEN } from './config.js';
 
 /** Providers the model prefix rule recognizes (first '/'-segment of `model`). */
 export const KNOWN_MODEL_PROVIDERS = ['openrouter', 'custom', 'cloudflare'];
@@ -110,6 +111,13 @@ function validateWhitelist(raw, label) {
     if (typeof host !== 'string' || host.length === 0 || host.length > 255 || !WHITELIST_PATTERN_RE.test(host)) {
       throw new BundleValidationError(
         `${label}: invalid glob: ${String(host)} (a hostname or URL, '*' allowed anywhere, no whitespace)`,
+      );
+    }
+    // `$` opens a placeholder, and there is exactly one: an unknown one would
+    // match nothing at egress and deny silently, so a typo fails here instead.
+    if (host.startsWith('$') && host !== SEMANTIUS_DATA_HOST_TOKEN) {
+      throw new BundleValidationError(
+        `${label}: unknown placeholder ${host} (the only one is ${SEMANTIUS_DATA_HOST_TOKEN}, the org's own data host)`,
       );
     }
   }

@@ -60,7 +60,9 @@ export function buildSkillCheckCommand(req) {
     case 'semantius-whoami':
       // End-to-end egress proof: semantius reads the container's __sak__
       // placeholder and its per-session SEMANTIUS_ORG, and calls
-      // https://<org>.semantius.ai; the Worker's brokerEgress swaps __sak__ for
+      // the Semantius API (v0.8.5: https://<org>.semantius.ai; v0.8.9: the
+      // org's postgrest_url, looked up at api.semantius.cloud); the Worker's
+      // brokerEgress swaps __sak__ for
       // THIS session's user JWT on the whitelisted host. A successful identity
       // response means the whole credential-at-egress path (per-session env +
       // interceptHttps + CA trust + swap + whitelist) works, and the identity

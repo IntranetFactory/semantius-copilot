@@ -30,6 +30,8 @@ import {
   isValidSessionId,
   mintSessionId,
   sandboxNameForSession,
+  SEMANTIUS_DATA_HOST_TOKEN,
+  SEMANTIUS_HOSTS,
   sessionIdSegment,
   sessionIdTail,
   sessionTenantPrefix,
@@ -58,6 +60,7 @@ import {
   ensureEgressPolicy,
   injectAndForward,
   isAllowedEgressUrl,
+  isPlainDnsHost,
   ORG_ALLOWLIST_MAX_ENTRIES,
   putContainerPointer,
   resolveEgressPolicy,
@@ -66,9 +69,11 @@ import {
 import {
   extractSessionCookie,
   fetchCopilotSettings,
+  fetchOrgDataHost,
   verifySemantiusCookie,
   SESSION_JWT_KEY_PREFIX,
 } from '../core/src/identity.js';
+import { validateAgentConfig } from '../core/src/agent.js';
 
 let failures = 0;
 let total = 0;
@@ -438,6 +443,15 @@ await (async function run() {
   sent = null;
   const notReachable = await brokerEgress(new Request('https://nope.example/x'), { ...brokerPolicy, whitelist: ['abc.com'] }, swapCapture);
   check('a non-whitelisted host is still denied first', notReachable.status === 403 && sent === null);
+  // The real scope must cover the Semantius hosts the shipped CLI uses:
+  // v0.8.9 resolves the org at api.semantius.cloud and reports
+  // <org>.semantius.cloud as its host (its data calls then go to the org's
+  // Neon postgrest_url — not in scope yet, see README "CLI host change").
+  const inScope = (url) => isAllowedEgressUrl(url, SEMANTIUS_HOSTS);
+  check('SEMANTIUS_HOSTS covers the CLI control-plane lookup', inScope('https://api.semantius.cloud/organization/tests'));
+  check('SEMANTIUS_HOSTS covers the org host', inScope('https://tests.semantius.cloud/mcp'));
+  check('SEMANTIUS_HOSTS still covers the legacy .ai org host', inScope('https://tests.semantius.ai/mcp'));
+  check('SEMANTIUS_HOSTS does NOT cover a .cloud look-alike', !inScope('https://tests.semantius.cloud.evil.com/x') && !inScope('https://evil-semantius.cloud/x'));
 
   // --- Tenant-prefixed session ids ---------------------------------------
   // The id is what the tenant scoping of the whole key space rests on, and the
@@ -930,6 +944,96 @@ await (async () => {
   const badCookie = fakeCopilot({ copilotEnabled: true });
   const malformedCookie = await fetchCopilotSettings('has space; and semi', copilotOptions, badCookie.fetchImpl);
   check('a malformed cookie never reaches the network', malformedCookie.ok === false && badCookie.calls.length === 0);
+
+  // --- The org's own data host ($SEMANTIUS_DATA_HOST) --------------------
+  // semantius CLI v0.8.9+ sends its data calls, with the user's JWT, to the
+  // org's postgrest_url (a per-org Neon host). The host joins the allow list
+  // AND the JWT scope — so every way it could come out wider than exactly one
+  // looked-up hostname is asserted as a failure here.
+  console.log('\n== org data host ==');
+  const NEON = 'ep-flat-cloud-an449mj3.apirest.c-6.us-east-1.aws.neon.tech';
+
+  check('a plain DNS host is accepted', isPlainDnsHost(NEON) && isPlainDnsHost('tests.semantius.cloud'));
+  check('a glob is NOT a plain host', !isPlainDnsHost('*.neon.tech') && !isPlainDnsHost('ep-*.neon.tech') && !isPlainDnsHost('*'));
+  check('an IP literal is NOT a plain host', !isPlainDnsHost('10.0.0.1') && !isPlainDnsHost('[::1]'));
+  check('a single label, a port, or uppercase is NOT a plain host', !isPlainDnsHost('localhost') && !isPlainDnsHost(`${NEON}:443`) && !isPlainDnsHost('EP.neon.tech'));
+  check('the placeholder itself is NOT a plain host', !isPlainDnsHost(SEMANTIUS_DATA_HOST_TOKEN));
+
+  /** Fake GET /organization/<org>, recording every call. */
+  function fakeOrg(body, status = 200) {
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      calls.push({ url, init });
+      return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+    };
+    return { calls, fetchImpl };
+  }
+  const orgOptions = { baseUrl: 'https://api.semantius.cloud/' };
+  const orgUp = fakeOrg({ id: 'x', name: 'tests', postgrest_url: `https://${NEON}/neondb/rest/v1` });
+  const looked = await fetchOrgDataHost('tests', orgOptions, orgUp.fetchImpl);
+  check('the lookup answers the postgrest_url HOST only', looked.ok === true && looked.host === NEON, looked.error ?? '');
+  check('the endpoint is GET /organization/<org>', orgUp.calls[0].url === 'https://api.semantius.cloud/organization/tests' && !orgUp.calls[0].init.method);
+  check('the lookup sends no credential', !Object.keys(orgUp.calls[0].init.headers ?? {}).some((h) => /authorization|cookie|key/i.test(h)));
+
+  const wildcard = await fetchOrgDataHost('tests', orgOptions, fakeOrg({ postgrest_url: 'https://*.neon.tech/neondb/rest/v1' }).fetchImpl);
+  check('a wildcard postgrest_url host is refused, never stored as a glob', wildcard.ok === false);
+  const plainHttp = await fetchOrgDataHost('tests', orgOptions, fakeOrg({ postgrest_url: `http://${NEON}/neondb/rest/v1` }).fetchImpl);
+  check('an http:// postgrest_url is refused', plainHttp.ok === false);
+  const withUser = await fetchOrgDataHost('tests', orgOptions, fakeOrg({ postgrest_url: `https://u:p@${NEON}/x` }).fetchImpl);
+  check('a postgrest_url with userinfo is refused', withUser.ok === false);
+  const ipHost = await fetchOrgDataHost('tests', orgOptions, fakeOrg({ postgrest_url: 'https://10.0.0.1/x' }).fetchImpl);
+  check('an IP-literal postgrest_url is refused', ipHost.ok === false);
+  const missing = await fetchOrgDataHost('tests', orgOptions, fakeOrg({ id: 'x', name: 'tests' }).fetchImpl);
+  check('no postgrest_url is a failure', missing.ok === false && missing.error.includes('postgrest_url'));
+  const orgMissing = await fetchOrgDataHost('tests', orgOptions, fakeOrg({ error: 'not found' }, 404).fetchImpl);
+  check('a 404 is a verdict carrying the status', orgMissing.ok === false && orgMissing.status === 404);
+  const orgDown = await fetchOrgDataHost('tests', orgOptions, async () => { throw new Error('boom'); });
+  check('a network failure is a verdict, not a throw', orgDown.ok === false && orgDown.error.includes('unreachable'));
+  const orgBad = fakeOrg({ postgrest_url: `https://${NEON}/x` });
+  const badOrgName = await fetchOrgDataHost('../admin', orgOptions, orgBad.fetchImpl);
+  check('an invalid org never reaches the network', badOrgName.ok === false && orgBad.calls.length === 0);
+
+  // resolveEgressPolicy: the token expands ONLY with a stored host, and the
+  // host joins the JWT scope ONLY when the agent opted in.
+  async function policyFor(record) {
+    const pkv = fakeKv();
+    await mergeSessionRecord(pkv, 'sess-d', record);
+    await putContainerPointer(pkv, 'cid-d', 'sess-d');
+    return resolveEgressPolicy(pkv, 'cid-d');
+  }
+  const optedIn = await policyFor({ whitelist: ['*.semantius.cloud', SEMANTIUS_DATA_HOST_TOKEN], semantius_data_host: NEON });
+  check('the token expands to the stored data host', JSON.stringify(optedIn.whitelist) === JSON.stringify(['*.semantius.cloud', NEON]));
+  check('an opted-in session carries semantiusDataHost', optedIn.semantiusDataHost === NEON);
+  const noHost = await policyFor({ whitelist: [SEMANTIUS_DATA_HOST_TOKEN, 'abc.com'] });
+  check('the token WITHOUT a stored host is dropped, not kept as a pattern', JSON.stringify(noHost.whitelist) === '["abc.com"]' && noHost.semantiusDataHost === undefined);
+  const notOpted = await policyFor({ whitelist: ['postman-echo.com'], org_whitelist: ['*'], semantius_data_host: NEON });
+  check('a stored host WITHOUT the token is not in the JWT scope (even when * makes it reachable)', notOpted.semantiusDataHost === undefined && !notOpted.whitelist.includes(NEON));
+  const tampered = await policyFor({ whitelist: [SEMANTIUS_DATA_HOST_TOKEN], semantius_data_host: '*.neon.tech' });
+  check('a stored glob is ignored on read (defense in depth)', tampered.semantiusDataHost === undefined && tampered.whitelist.length === 0);
+  const orgToken = await policyFor({ whitelist: [], org_whitelist: [SEMANTIUS_DATA_HOST_TOKEN], semantius_data_host: NEON });
+  check('the ORG half is never expanded', orgToken.semantiusDataHost === undefined && !orgToken.whitelist.includes(NEON));
+  check('the unexpanded token matches no request', !isAllowedEgressUrl(`https://${NEON}/x`, [SEMANTIUS_DATA_HOST_TOKEN]));
+
+  // The broker with the per-session scope the outbound handler builds.
+  const scope = [...SEMANTIUS_HOSTS, NEON];
+  const dataPolicy = { whitelist: ['*'], sentinel: '__sak__', secret: 'real-jwt', secretHosts: scope, jwt: { token: 'real-jwt', hosts: scope } };
+  let dataSent = null;
+  const dataCapture = async (req) => { dataSent = req; return new Response('ok'); };
+  await brokerEgress(new Request(`https://${NEON}/neondb/rest/v1/rpc/get_userinfo`, { method: 'POST', headers: { authorization: 'Bearer __sak__' } }), dataPolicy, dataCapture);
+  check('the CLI data call reaches the data host WITH the user JWT', dataSent?.headers.get('authorization') === 'Bearer real-jwt');
+  dataSent = null;
+  const otherNeon = await brokerEgress(
+    new Request('https://ep-attacker-123.apirest.c-6.us-east-1.aws.neon.tech/x', { headers: { authorization: 'Bearer __sak__' } }),
+    dataPolicy,
+    dataCapture,
+  );
+  check('ANOTHER Neon endpoint never gets the JWT (403, not forwarded)', otherNeon.status === 403 && dataSent === null);
+
+  // Bundle validation: the one placeholder passes, a typo fails the deploy.
+  const placeholderOk = (() => { try { validateAgentConfig({ instructions: 'x', proxy_whitelist: [SEMANTIUS_DATA_HOST_TOKEN] }); return true; } catch { return false; } })();
+  check('proxy_whitelist accepts $SEMANTIUS_DATA_HOST', placeholderOk);
+  const typoRejected = (() => { try { validateAgentConfig({ instructions: 'x', proxy_whitelist: ['$SEMANTIUS_DATAHOST'] }); return false; } catch (err) { return /unknown placeholder/.test(String(err)); } })();
+  check('an unknown $-placeholder is rejected at validation', typoRejected);
 })();
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);

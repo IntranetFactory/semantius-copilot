@@ -86,6 +86,8 @@ import {
   ensureEgressPolicy,
   extractSessionCookie,
   fetchCopilotSettings,
+  fetchOrgDataHost,
+  SEMANTIUS_DATA_HOST_TOKEN,
   SEMANTIUS_SESSION_BASE_URL,
   SESSION_CONTEXT_MAX_BYTES,
   resolveSandboxBinding,
@@ -690,6 +692,24 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
   }
   const bundle = validateAgentBundle(raw);
 
+  // The org's DATA HOST, for an agent that opts in with `$SEMANTIUS_DATA_HOST`
+  // in its proxy_whitelist: semantius CLI v0.8.9+ sends its data calls (with
+  // the user's JWT) straight to the org's `postgrest_url`, a per-org Neon host
+  // no definition can name. Looked up ONCE, here, for the VERIFIED org and
+  // persisted as `semantius_data_host`; resolveEgressPolicy expands the token
+  // to it and the broker scopes the JWT to it — for this session only. Agents
+  // without the token never pay the round-trip and never reach the host. 502
+  // on failure, like the copilot settings: without the host the CLI cannot
+  // work at all, and failing here is more legible than a 403 mid-turn.
+  let semantiusDataHost: string | undefined;
+  if ((bundle.proxyWhitelist ?? []).includes(SEMANTIUS_DATA_HOST_TOKEN)) {
+    const lookup = await fetchOrgDataHost(org, {
+      baseUrl: c.env.SEMANTIUS_SESSION_BASE_URL || SEMANTIUS_SESSION_BASE_URL,
+    });
+    if (!lookup.ok) return c.json({ error: `semantius data host unavailable: ${lookup.error}` }, 502);
+    semantiusDataHost = lookup.host;
+  }
+
   // Select the Sandbox binding from the bundle's baseImage; BOTH getSandbox
   // and the bearer KV key must derive from this same binding (design §7/§16).
   const binding = resolveSandboxBinding(bundle.baseImage);
@@ -736,6 +756,7 @@ app.post('/sessions/agent', userTokenGuard(), async (c) => {
     whitelist: bundle.proxyWhitelist ?? [],
     org_whitelist: orgWhitelist,
     ...(copilot ? { copilot } : {}),
+    ...(semantiusDataHost ? { semantius_data_host: semantiusDataHost } : {}),
     session_context: sessionContext,
   });
   await putContainerPointer(c.env.STORE, containerId, id);

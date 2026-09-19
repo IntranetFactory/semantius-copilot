@@ -1,59 +1,66 @@
 {
   "$schema": "../../core/agent.schema.json",  
   // Model ids resolve against Pi's openrouter catalog; dated snapshot slugs
-  // (like -0731 here) reuse the undated base entry's metadata (1M window,
-  // 393k output) while the request keeps the dated id, so snapshot pinning is
-  // free (resolveCatalogModel; incident 2026-08-12). A model NO catalog entry
-  // resolves for runs on a conservative placeholder (128k window, 8k output
-  // cap — long single-pass writes truncate); for such models set explicit
-  // "max_tokens"/"context_window" here, and the deploy answer warns when
-  // that applies. This agent needs well over 300k output for single-shot
-  // blueprint spec writes.
-  "model": "deepseek/deepseek-v4-flash-0731", // alternative: "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
+  // (e.g. -0731) reuse the undated base entry's metadata while the request
+  // keeps the dated id (resolveCatalogModel; incident 2026-08-12). A model NO
+  // catalog entry resolves for runs on a conservative placeholder (128k
+  // window, 8k output cap — long single-pass writes truncate) unless
+  // "max_tokens"/"context_window" are set here. This agent needs well over
+  // 300k output for single-shot blueprint spec writes.
+  //
+  // deepseek-v4.1-flash (released 2026-09-10) IS such a miss: neither the
+  // pinned pi-ai 0.83.0 nor the latest 0.85.1 catalog lists it, hence the
+  // explicit limits below. Placeholder side effects, checked 2026-09-19:
+  //  - reasoning: the entry says `reasoning: false`, so pi-ai sends no
+  //    `reasoning` param and uses the `system` role (right for DeepSeek). The
+  //    model still thinks: OpenRouter lists it default_enabled, effort
+  //    "high" — the same effort the old catalog entry requested. Thinking
+  //    blocks replay under the field they arrived in, regardless of the flag.
+  //  - cost: the placeholder's per-token rates are 0, but the billed total
+  //    still comes from OpenRouter's inline usage.cost (pi-ai patch); only
+  //    the per-direction split in traces reads 0.
+  // Once a pi-ai release catalogs this id, drop max_tokens/context_window.
+  "model": "deepseek/deepseek-v4.1-flash", // alternatives: "deepseek/deepseek-v4-flash-0731" (in catalog, 0.14/0.28 list rate), "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
+  // 384000 = DeepSeek first-party's output cap: OpenRouter routes only to
+  // hosts whose cap covers the request's max_tokens (docs: "if you set a
+  // max_tokens, OpenRouter will only route to providers that support a
+  // response of that length"), so 393216 would shut DeepSeek out. pi-ai
+  // shrinks the request as the context fills.
+  "max_tokens": 384000,
+  "context_window": 1048576,
   // OpenRouter provider routing, forwarded verbatim as the request's `provider`
   // object (every model turn + the title side call). Filters apply BEFORE the
-  // ranking; all facts below measured 2026-08-18 against the 28 hosts serving
-  // the -0731 slug (GET openrouter.ai/api/v1/models/<slug>/endpoints, public).
+  // ranking; host facts measured 2026-09-19 against the 22 endpoints serving
+  // deepseek/deepseek-v4.1-flash (GET openrouter.ai/api/v1/models/<slug>/endpoints,
+  // public).
   //  - sort "throughput" = the :nitro shortcut: rank hosts by tokens/s instead
   //    of price. Turns OFF OpenRouter's price-based load balancing.
-  //  - max_price: USD per MILLION tokens, input and output capped separately.
-  //    0.14/0.28 is this model's catalog list rate: ~20 hosts sit at or under
-  //    it, the rest run 1.5–3× (DeepSeek first-party 0.22/0.66, Wafer
-  //    0.28/0.56, Cloudflare 0.44/1.32) — without the cap the throughput sort
-  //    landed on a 2× host.
-  //  - quantizations: DeepSeek V4 is FP8-native, so fp8/bf16/fp16/fp32 =
-  //    "native or better". Excludes the fp4 hosts (Relace, Inceptron,
-  //    AtlasCloud, Ambient, Decart, OpenInference, Sail Research) AND hosts
-  //    that do not disclose their quant (Fireworks, DigitalOcean, Together,
-  //    Wafer, Phala, Venice, Cloudflare — verified: OpenRouter answers "No
-  //    endpoints found for the request with quantization: …" for an
-  //    undisclosed host). Add "unknown" to the list to readmit those.
-  //  - >300k output / 1M context: NOT a routing field, and not needed as one.
-  //    OpenRouter routes only to hosts whose output cap covers the request's
-  //    max_tokens (docs: "if you set a max_tokens, OpenRouter will only route
-  //    to providers that support a response of that length"; verified: a
-  //    price sort over {baidu 131k-out, novita} served from Novita), and pi-ai
-  //    requests this catalog entry's 393216 (shrinking only as the context
-  //    fills), so every sub-300k host (Baidu 131k, AkashML 131k, Io Net 65k,
-  //    the 262k hosts CoreWeave/Decart/OpenInference/Sail Research) is skipped
-  //    per request — also for hosts added later, unlike a static `ignore`
-  //    list. Caveat: an `only` list with a single incapable host is still
-  //    tried (and fails mid-stream). Side effect: StreamLake/DeepInfra (fp8,
-  //    cheap, 384000-out) are excluded on fresh sessions because 384000 <
-  //    393216 — an agent-level "max_tokens": 384000 would readmit them.
-  //  Eligible after all filters: BaseTen, Novita, Parasail, SiliconFlow,
-  //  GMICloud (fp8; output cap undisclosed), Morph (bf16, low uptime).
+  //  - max_price: USD per MILLION tokens, per direction. Only output is capped
+  //    (0.7); every host under it charges ≤0.22 input anyway. List rate is
+  //    0.15/0.60; the FP8 hosts other than DeepInfra run 0.28–0.38/1.13–1.50
+  //    and fall outside the cap. The model listing also carries weekday time-of-day overrides
+  //    (UTC 01–04 & 06–10) at 0.30/1.20 — a host billing that rate drops out
+  //    of the cap during those windows.
+  //  - quantizations: fp4 stays excluded (Relace, Sail Research). "unknown" is
+  //    REQUIRED here: under the cap the only disclosed-quant host is DeepInfra
+  //    (fp8, 131k output — skipped for our max_tokens), so without "unknown"
+  //    OpenRouter answers "No endpoints found". The undisclosed hosts include
+  //    DeepSeek first-party (V4 is FP8-native).
+  //  Eligible on a fresh session: DeepSeek (384k out), Alibaba (393k, 1M
+  //  context), Morph, Wafer, Fireworks (943k) — all 0.135–0.22 / 0.54–0.66.
   //  Other fields (only/ignore, require_parameters, zdr, …) pass straight
   //  through — see the schema's openrouter_routing for the list.
   "openrouter_routing": {
     "sort": "throughput",
-    "max_price": { "prompt": 0.14, "completion": 0.28 },
-    "quantizations": ["fp8", "bf16", "fp16", "fp32"]
+    "max_price": { "completion": 0.7 },
+    "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
   },
   "proxy_whitelist": [
     "registry.npmjs.org",  // for  dependencies
     "registry.npmjs.org",  // for  dependencies
     "*.semantius.ai",
+    "*.semantius.cloud",  // semantius CLI >= 0.8.9: api.semantius.cloud org lookup (-> the org's postgrest_url)
+    "$SEMANTIUS_DATA_HOST",  // that postgrest_url's host (per-org Neon endpoint), looked up per session; the CLI's data calls go there with the user's JWT
     "*.semantius.io",
     "www.semantius.com"
   ],

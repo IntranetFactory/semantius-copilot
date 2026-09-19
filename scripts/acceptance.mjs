@@ -656,7 +656,8 @@ async function main() {
   // The container gets no API key at all: SEMANTIUS_ORG comes from the token's
   // `<org>` half (per session — the image bakes none), and SEMANTIUS_JWT holds
   // only the sentinel, swapped for the user's JWT at egress. Needs the
-  // semantius-admin definition, whose proxy_whitelist covers *.semantius.ai.
+  // semantius-admin definition, whose proxy_whitelist covers *.semantius.cloud
+  // (and *.semantius.ai for older CLIs).
   const semantiusBundle = readBundle('semantius-admin.agent.json');
   if (semantiusBundle) {
     const credOrg = tokenOrg;

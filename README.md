@@ -730,12 +730,16 @@ call), and is silently ignored for `cloudflare` (AI binding, no HTTP body). The 
 through the placeholder path (see above) and lose the model's metadata.
 `scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, bundler
 plumbing, and drives the installed pi-ai dist against a canned fetch to assert the request
-body's `provider` is the routing object byte-for-byte. `semantius-admin` runs with
-`{ "sort": "throughput", "max_price": { "prompt": 0.14, "completion": 0.28 },
-"quantizations": ["fp8", "bf16", "fp16", "fp32"] }` — fastest FP8-or-better host at or
-under the model's catalog list rate (filters apply *before* the throughput ranking; without
-the cap the sort landed on a 2×-priced host). Per-host prices, quantization and output caps
-for a model: `GET https://openrouter.ai/api/v1/models/<slug>/endpoints` (public).
+body's `provider` is the routing object byte-for-byte. `semantius-admin` runs
+`deepseek/deepseek-v4.1-flash` with `{ "sort": "throughput", "max_price": { "completion":
+0.7 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"] }` — the fastest non-fp4
+host at or under $0.70/M output (filters apply *before* the throughput ranking). `"unknown"`
+is load-bearing: under that cap the only disclosed-quant host (DeepInfra, fp8) caps output
+at 131k, so without it no host qualifies. The model is newer than the pi-ai catalog, so the
+agent pins `max_tokens: 384000` / `context_window: 1048576` explicitly (384000 = DeepSeek
+first-party's output cap); `agent.jsonc` records the placeholder-path side effects and the
+eligible hosts. Per-host prices, quantization and output caps for a model:
+`GET https://openrouter.ai/api/v1/models/<slug>/endpoints` (public).
 
 Verified against the deployed worker (2026-08-18, hand-crafted turn-1 seeds via
 `chat-probe`): a `quantizations` allow-list excludes hosts with *undisclosed* quant
@@ -805,8 +809,9 @@ whitelist anymore.
 
 The agent's list rides the bundle as `proxyWhitelist`; the ingest route writes it into
 **THE session record** — `session:<sessionId>`, the single mutable per-session document
-(browse meta, `egress_secrets`, `whitelist`, `org_whitelist`, `copilot`, and the four data
-channels) — plus the `container:<containerId> → sessionId` pointer, the only
+(browse meta, `egress_secrets`, `whitelist`, `org_whitelist`, `copilot`,
+`semantius_data_host`, and the four data channels) — plus the
+`container:<containerId> → sessionId` pointer, the only
 containerId-keyed KV entry (outbound handlers receive only `ctx.containerId`, and
 `idFromName` is one-way; every other code path *computes* the container id — the record's
 `containerId` field is stored for visibility, not read by code). Both outbound handlers in
@@ -847,6 +852,36 @@ whitespace-bearing entries, values over 255 chars, and anything past 64 entries 
 **dropped, not fatal** — a malformed row upstream can only ever narrow egress, never widen
 it and never fail a session. The agent's list is validated at bundle time instead
 (`core/src/agent.js`, max 32 entries) so a bad glob is a deploy error.
+
+### `$SEMANTIUS_DATA_HOST` — the org's own data host
+
+The agent's list may carry one **placeholder**, the exact entry `$SEMANTIUS_DATA_HOST`
+([`SEMANTIUS_DATA_HOST_TOKEN`](core/src/config.js)). It stands for the host of the
+session org's `postgrest_url` — the per-org Neon Data API endpoint where semantius CLI
+v0.8.9+ sends every data call with the user's JWT (see "CLI host change" below). No agent
+definition can name that host statically, and `*.neon.tech` is out of the question as a
+JWT scope (anyone can create an endpoint there), so it is resolved **per session**:
+
+1. **Ingest** — only when the bundle's `proxyWhitelist` contains the token —
+   calls [`fetchOrgDataHost`](core/src/identity.js): `GET <SEMANTIUS_SESSION_BASE_URL>/organization/<org>`
+   for the **verified** org (public, no credential sent), keeps the `postgrest_url`'s
+   hostname if and only if it is `https://` on a plain DNS host (`isPlainDnsHost`: no glob,
+   IP literal, userinfo, or single label), and stores it on the record as
+   `semantius_data_host`. A failed lookup is a **502** — the session is not created, like a
+   failed copilot-settings read. Agents without the token never make the call.
+2. **Egress** — [`resolveEgressPolicy`](core/src/egress.js) expands the token in the
+   *agent's* half to that host (re-checked with `isPlainDnsHost` on read), or drops it when
+   the record has none; the literal token can never match a request (`$` is not a hostname
+   character). Only then does the policy carry `semantiusDataHost`, and the catch-all
+   outbound handler adds exactly that host to the JWT scope for this session:
+   `SEMANTIUS_HOSTS ∪ {semantius_data_host}`. The org's half is never expanded, and a stored
+   host without the token never joins the JWT scope, even when an unfirewalled org (`*`)
+   makes it reachable.
+
+The self-heal never writes `semantius_data_host` (like `org_whitelist`). Bundle validation
+rejects any other entry starting with `$`, so a misspelled placeholder fails the deploy
+instead of silently denying at runtime. `hoth-trip-planner` does not opt in and keeps
+`postman-echo.com` as its only host.
 
 ### The org's copilot settings
 
@@ -962,7 +997,8 @@ Three pieces make that work:
 3. **The swap at egress.** The catch-all outbound handler resolves
    `session_context.semantius_jwt` per invocation and hands it to `brokerEgress` as the
    secret: every outbound header containing the sentinel gets it replaced with that JWT,
-   and requests to `SEMANTIUS_HOSTS` (`*.semantius.ai`, `www.semantius.com`)
+   and requests to `SEMANTIUS_HOSTS` (`*.semantius.ai`, `*.semantius.cloud`, `www.semantius.com`
+   — plus, for an agent with `$SEMANTIUS_DATA_HOST`, the session's `semantius_data_host`)
    additionally have `Authorization` overwritten with `Bearer <jwt>` **before** the
    sentinel scan, so the swap never re-touches the injected header. **No fallback:** a
    session without a JWT has no credential to lend, so a sentinel-bearing request fails
@@ -983,6 +1019,47 @@ at all**, and `semantius whoami` comes back as the session's user (`admin@test.c
 Wei Chen / org `tests` against `https://tests.semantius.ai`). The semantius-admin agent's
 instructions tell it the workspace is already authenticated as that user, so it never
 asks for an API key the way the vendored skill docs otherwise would.
+
+**CLI host change (semantius v0.8.9, deployed 2026-09-19).** v0.8.5 called
+`<org>.semantius.ai` (MCP) directly. v0.8.9 instead:
+
+1. `GET https://api.semantius.cloud/organization/<org>` — public (no auth), answers
+   `{ id, name, postgrest_url, client_id, client_id_cli }`; `whoami` then prints
+   `host tests.semantius.cloud` / `host_source org`.
+2. Sends every data call **straight to that `postgrest_url`** — for org `tests`,
+   `https://ep-flat-cloud-an449mj3.apirest.c-6.us-east-1.aws.neon.tech/neondb/rest/v1`
+   (Neon Data API; e.g. `whoami` = `POST …/rpc/get_userinfo`) with
+   `Authorization: Bearer <SEMANTIUS_JWT>`. No traffic to `<org>.semantius.cloud` was
+   observed.
+
+With only `*.semantius.ai` in scope, step 1 was denied at egress (`403 egress denied: host
+not in whitelist`, `whoami` exit 5). `*.semantius.cloud` went into **both** the agent's
+`proxy_whitelist` and `SEMANTIUS_HOSTS` (the latter widens the JWT scope to
+`api.semantius.cloud`, which step 1 does not strictly need — it is public), which fixed
+step 1 but not step 2: the broker refused the Neon call itself (Workers log:
+`ContainerProxy … POST …neon.tech/…/rpc/get_userinfo` → 403 in 14 ms wall / 1 ms CPU,
+never forwarded). `*.neon.tech` must **not** go into `SEMANTIUS_HOSTS` — anyone can create
+a Neon endpoint and collect the live user JWT there — so step 2 is covered **per session**
+by the `$SEMANTIUS_DATA_HOST` placeholder (see "Egress" above): semantius-admin opts in,
+ingest looks up exactly the verified org's `postgrest_url` host, and only that host joins
+the session's allow list and JWT scope. `*.semantius.ai` stays: v0.8.9's `whoami` still
+reports `api_baseurl https://tests.semantius.ai`.
+
+Verified against the deployed Worker (2026-09-19, version `086cd0eb`, agent
+`9c1a26df`): a fresh semantius-admin session's record carries
+`semantius_data_host: ep-flat-cloud-an449mj3.apirest.c-6.us-east-1.aws.neon.tech`;
+`semantius whoami` in its container exits 0 as `admin@test.com` (`auth_method jwt`), with
+egress `GET api.semantius.cloud/organization/tests → 200` then `POST …neon.tech/…/rpc/get_userinfo
+→ 200`. A hoth-trip-planner session (no placeholder, so no lookup) has no
+`semantius_data_host` and its allow list is still `["postman-echo.com"]`. Sessions created before that deploy have no
+stored host and stay unable to reach their data — start a new one. `admin.test.mjs` pins
+the Semantius hosts, the lookup's strictness, the expansion rules, and that another Neon
+endpoint never receives the JWT. A CLI upgrade is an **image** change: it ships with
+`pnpm deploy:b` (Docker build of `linux-x64/`), never with `pnpm deploy:agent`, and only
+containers started after that deploy run it. Check the shipped version with the
+`semantius-env` skill-check op, not a local `docker run` — on an arm64 host the amd64
+image runs under QEMU, where v0.8.9 (unlike v0.8.5) aborts with a JSC
+`MemoryExhaustion` assertion that does not occur on Cloudflare.
 
 **HTTPS transport note:** with `interceptHttps = true` the sandbox runtime provisions the
 interceptor CA at `/etc/cloudflare/certs/cloudflare-containers-ca.crt`, MITMs port 443,
@@ -2053,7 +2130,7 @@ that an invalid cookie is a 401 — and that **the bearer wins**: a valid cookie
 invalid bearer must still 401, or the documented precedence would be a lie.
 
 The **credentials** checks close the loop inside the sandbox, on a semantius-admin
-session (its `proxy_whitelist` covers `*.semantius.ai`): the container carries
+session (its `proxy_whitelist` covers `*.semantius.cloud` and `*.semantius.ai`): the container carries
 `SEMANTIUS_JWT=__sak__` plus the token's `SEMANTIUS_ORG` and **no `SEMANTIUS_API_KEY`**,
 and `semantius whoami` returns the session user's own identity — proving the sentinel was
 swapped for their JWT at egress. Same credential requirement as the identity positives.

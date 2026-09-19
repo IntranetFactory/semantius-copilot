@@ -22,7 +22,7 @@ import { backupStorageMonthlyUsd } from './cost.js';
 
 /** The stable prefixes this app writes, with human labels for the browser. */
 export const KV_GROUPS = {
-  session: 'THE session record: meta, egress fields (whitelist/org_whitelist/copilot/egress_secrets), session_context, payload, session_data, session_state',
+  session: 'THE session record: meta, egress fields (whitelist/org_whitelist/copilot/semantius_data_host/egress_secrets), session_context, payload, session_data, session_state',
   agentdef: 'Named agent definition (deployed via pnpm deploy:agent; no TTL)',
   agent: 'Agent bundle (one immutable per-session snapshot of a named definition)',
   container: 'Container pointer (containerId -> session id; the only containerId-keyed entry)',
@@ -113,7 +113,7 @@ export async function readKvEntry(kv, key) {
 // what makes a session enumerable — and since the single-record refactor it
 // also carries everything else session-scoped that is not the (large,
 // immutable) bundle snapshot: the egress fields (egress_secrets, whitelist,
-// org_whitelist, copilot) the outbound proxy reads via the container pointer,
+// org_whitelist, copilot, semantius_data_host) the outbound proxy reads via the container pointer,
 // and the four data channels
 // (session_context, payload, session_data, session_state) — plus containerId
 // (derivable via idFromName, stored for visibility).
@@ -212,7 +212,7 @@ export async function readSession(kv, id) {
  * Merge a patch into THE session record (`session:<id>`), creating it when
  * absent. The record is the single mutable per-session document: browse meta
  * (agentName, version, createdAt), the egress fields (egress_secrets,
- * whitelist, org_whitelist, copilot), and the four data channels
+ * whitelist, org_whitelist, copilot, semantius_data_host), and the four data channels
  * (session_context, payload, session_data, session_state). All writers go
  * through this read-merge-write
  * so nobody drops another writer's fields; last-write-wins per merge (KV has

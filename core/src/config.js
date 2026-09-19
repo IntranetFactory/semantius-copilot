@@ -33,8 +33,33 @@ export const SEMANTIUS_JWT_SENTINEL = '__sak__';
  * load-bearing once an ORG could contribute `*` to the allow list (a firewall
  * turned off). Where the sandbox may talk and where its credential may travel
  * are different questions; only this constant answers the second one.
+ *
+ * `*.semantius.cloud` since semantius CLI v0.8.9, which resolves the org
+ * through the control plane (`api.semantius.cloud/organization/<org>` — public,
+ * answers the org's `postgrest_url`) and reports `<org>.semantius.cloud` as its
+ * host. `*.semantius.ai` stays for older CLIs. The CLI's DATA calls go to that
+ * `postgrest_url` (a per-org Neon host), which is deliberately NOT a static
+ * entry here — see SEMANTIUS_DATA_HOST_TOKEN below.
  */
-export const SEMANTIUS_HOSTS = ['*.semantius.ai', 'www.semantius.com'];
+export const SEMANTIUS_HOSTS = ['*.semantius.ai', '*.semantius.cloud', 'www.semantius.com'];
+
+/**
+ * The ORG'S OWN DATA HOST, as a proxy_whitelist placeholder an agent opts in
+ * with. semantius CLI v0.8.9+ sends its data calls — carrying the user's JWT —
+ * straight to the org's `postgrest_url`, a per-org Neon Data API host that no
+ * agent definition can name statically. For a session whose agent lists this
+ * token, ingest looks that host up once (fetchOrgDataHost, identity.js) and
+ * stores it as `semantius_data_host`; resolveEgressPolicy (egress.js) expands
+ * the token to it, and the broker adds it to THIS session's JWT scope on top of
+ * SEMANTIUS_HOSTS. Nothing wider: never `*.neon.tech`, under which anyone can
+ * register an endpoint and collect the JWT.
+ *
+ * Unexpanded (no host on the record) the literal entry allows nothing: `$` is
+ * not a hostname character, so the pattern can never match a request. Bundle
+ * validation (agent.js) rejects any OTHER `$`-entry, so a typo fails the deploy
+ * instead of silently denying at runtime.
+ */
+export const SEMANTIUS_DATA_HOST_TOKEN = '$SEMANTIUS_DATA_HOST';
 
 // The egress allow list has TWO sources, unioned at read time by
 // resolveEgressPolicy:
