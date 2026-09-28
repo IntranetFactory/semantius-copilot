@@ -240,9 +240,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "version": "<sha256-16>",           // content hash over config + all skill files
   "baseImage": "node",                // selects the Sandbox binding
   "instructions": "…",                // agent.jsonc instructions + INSTRUCTIONS.md (appended)
-  "model": "openrouter/…",            // optional, pre-normalized (see LLM configuration)
-  "modelBaseUrl": "https://…",        // optional, from model_base_url
-  "openRouterRouting": { "sort": "throughput" },  // optional, from openrouter_routing — forwarded verbatim as OpenRouter's `provider` object
+  "models": ["deepseek-v4.1-flash", "glm-5.3-flash"],  // model registry ids, first = default (see LLM configuration)
   "proxyWhitelist": ["postman-echo.com"],  // optional — hosts/URLs, `*` anywhere; unioned with the org's list at egress
   "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
@@ -469,6 +467,31 @@ build reads the backend URL from [`frontend/.env.production`](./frontend/.env.pr
 The frontend deploy publishes the three fixed pages (`/chat`, `/copilot`, `/admin`), the
 `/agent/<name>` shell + its rewrite Worker, and `404.html` for `/` and everything else.
 
+### Upstream skills & semantius CLI (`./update.sh`)
+
+Two inputs are vendored from upstream and never edited here; `./update.sh` (Git Bash)
+refreshes both:
+
+```bash
+./update.sh            # skills + latest semantius CLI release
+./update.sh v0.8.11    # skills + a pinned CLI tag
+SEMANTIUS_SKILLS_SRC='C:\other\skills' ./update.sh   # other skills checkout
+```
+
+- **Skills** — every folder of `C:\dev\semantius-agent\semantius-plugin\skills` (a
+  `SKILL.md` is required, checked before anything is deleted) **replaces**
+  `agents/semantius-admin/skills/<skill>/`: a mirror, not a merge, so files and whole
+  skills dropped upstream disappear here too. Prints the source's git revision. Ships
+  with `pnpm deploy:agent semantius-admin`; `pnpm bundle` checks the bundle limits.
+- **CLI** — resolves the latest tag via the `releases/latest` redirect (no API token),
+  downloads `semantius-linux-x64` from
+  `github.com/semantius/semantius-cli/releases/download/<tag>/`, verifies it against that
+  release's `checksums.txt`, and only then replaces `linux-x64/semantius-linux-x64`
+  (a no-op when the hash already matches). Ships with `pnpm deploy:b` (image change).
+
+`.gitattributes` pins `*.sh` to LF: with `core.autocrlf=true` a Windows checkout would
+otherwise give the script CRLF endings, which bash rejects.
+
 ## Authentication
 
 The backend has **two auth surfaces** (`core/src/auth.js`), and they take different
@@ -653,30 +676,53 @@ otherwise) and the acceptance suite. Tokens are short-lived (~1 h), so mint per 
 
 ## LLM configuration
 
-Two layers:
+Three pieces:
 
-- **Env default** (`configureLlm()` in `core/src/config.js`, wired per backend in
-  `src/llm.ts`): `LLM_PROVIDER` (`cloudflare` | `openrouter` | `custom`), `LLM_MODEL`, and
-  optional `LLM_BASE_URL` (required for `custom`) are plain wrangler `vars`; only
-  `LLM_API_KEY` is a secret (`.dev.vars` locally, `wrangler secret put` deployed). Default:
-  OpenRouter + `deepseek/deepseek-v4-flash`. Keep the vars/secret split — the key is the
-  only secret value.
-- **Per-agent override** (`agent.jsonc`): optional `model`, `model_base_url`,
-  `max_tokens`/`context_window`, and `openrouter_routing` (next subsection). The
-  bundler normalizes `model` with a prefix rule — a first path segment that is a known
-  provider (`openrouter`, `custom`, `cloudflare`) is kept as-is, anything else gets
-  `openrouter/` prepended (so `"tencent/hy3"` means `openrouter/tencent/hy3`). At runtime
-  `agentModelSpecifier()` (`src/llm.ts`) resolves the override **metadata-preservingly**,
-  because Flue trusts a provider's catalog metadata blindly (`reasoning` gates thinking,
-  `contextWindow` sets the compaction threshold, `maxTokens` caps output): an openrouter
-  model that Pi's catalog knows keeps its `openrouter/...` specifier and full catalog
-  entry (e.g. `tencent/hy3` 256k context, `xiaomi/mimo-v2.5-pro` 1M context — differing
-  per-agent context windows come straight from the catalog); with `model_base_url` set,
-  a dedicated one-model provider `agent-<name>` reuses the catalog entry with only the
-  transport swapped; only a catalog miss falls back to a conservative placeholder entry
-  (no reasoning, 128k window). `model_base_url` overrides transport only — auth is always
-  the worker-wide `LLM_API_KEY` secret. The override is applied per session from the
-  agent's bundle.
+- **Model registry** (`backend-b/agents_config.jsonc`, parsed and validated at worker
+  start by `parseModelsConfig`, `core/src/models.js`): the whitelist of model ids all
+  agents share. The KEY is the stable id agents reference and sessions persist (never
+  rename one in use); each entry has a display `name`, a `provider` — `openrouter` (key:
+  the `LLM_API_KEY` secret) or `openai` (key: the `OPENAI_API_KEY` secret, Responses API)
+  — and the upstream `model`. openrouter entries may add `max_tokens`/`context_window`,
+  `openrouter_routing` (next subsection) and `reasoning_efforts` (the OpenRouter efforts a
+  mandatory-reasoning model accepts, e.g. GLM 5.3's `["low","high","max"]`: the entry
+  becomes reasoning-capable and Flue's default `medium` clamps to the nearest listed
+  effort, `high`, sent as `reasoning: {effort}`; "none" is never sent). An openai entry
+  takes no overrides (rejected at parse) and must be an exact Pi catalog id (anything else
+  gets a deploy-time `modelWarning`, and its turns fail). Registry edits take effect on the
+  next backend-b deploy, for live sessions too — they are not part of the agent bundle.
+- **Per-agent `models`** (`agent.jsonc`, required): the registry ids the agent may run on;
+  the first is the default. `PUT /agents/:name` answers 422 for an id the *deployed*
+  registry doesn't know. `GET /agents/:name/meta` returns them as `models: [{id, name}]`,
+  and the chat composer shows a model dropdown when there is more than one. The pick
+  travels in the turn-1 seed (`modelId`), is persisted in the session's `agentMeta` and
+  mirrored to the session record (`model_id`, listed by `GET /sessions` as `modelId`), and
+  is **fixed for the session**: the dropdown is editable until the first message is sent
+  (also on a session created by a draft upload) and afterwards shows the locked model,
+  disabled. Mid-session switching is
+  deliberately not built (context-window mismatch, lost prompt cache, untested
+  cross-provider replay of reasoning blocks and tool-call ids).
+- **Env default** (`configureLlm()` in `core/src/config.js`, wired in `src/llm.ts`):
+  `LLM_PROVIDER` (`cloudflare` | `openrouter` | `custom`), `LLM_MODEL`, and optional
+  `LLM_BASE_URL` (required for `custom`) are plain wrangler `vars`. It only serves
+  sessions without a model id. Keep the vars/secret split — the keys (`LLM_API_KEY`,
+  `OPENAI_API_KEY`) are the only secret values.
+
+At runtime `modelSpecifierFor()` (`src/llm.ts`) resolves the session's model id
+**metadata-preservingly**, because Flue trusts a provider's catalog metadata blindly
+(`reasoning` gates thinking, `contextWindow` sets the compaction threshold, `maxTokens`
+caps output): a model Pi's catalog knows verbatim, with no overrides, keeps its
+`<provider>/<model>` specifier and full catalog entry (every `openai` entry takes this
+path); with limits, routing or efforts set, a dedicated one-model provider
+`model-<id>` reuses the catalog entry with only those swapped; only a catalog miss falls
+back to a conservative placeholder entry (no reasoning, 128k window, 8k output) that the
+entry's explicit limits override. Usage and cost are reported on every response:
+the total is OpenRouter's billed `usage.cost` whenever OpenRouter reports it (pi-ai patch),
+else pi-ai's catalog estimate (OpenAI). A request OpenRouter serves through a BYOK
+provider key stored in its workspace reports `usage.cost` 0, and the provider bills
+that key's account directly; per-component costs are catalog-rate estimates,
+zero for a placeholder model. The session-title side call (`src/title.ts`) always uses the session's own model
+and provider.
 
 **Catalog misses are detected, not silent.** A placeholder-path model caps output at 8k
 tokens, and that cap truncates long single-pass writes mid-response (`stop_reason:
@@ -687,12 +733,12 @@ exact catalog id). Three seams surface the condition (`modelCatalogWarning`,
 `backend-b/src/llm.ts` — the deploy check and the runtime resolution share the one
 predicate, so they cannot drift):
 
-- **deploy time** — `PUT /agents/:name` answers a `modelWarning` when the bundle's model
-  would resolve through the placeholder path, checked against the *deployed worker's own*
+- **deploy time** — `PUT /agents/:name` answers a `modelWarning` when one of the agent's
+  models would resolve through the placeholder path without explicit `max_tokens`, checked against the *deployed worker's own*
   pi-ai catalog (a local check could drift from the worker's bundled copy);
   `pnpm deploy:agent` prints it as `⚠ MODEL WARNING`. Non-fatal: a model newer than the
   pinned catalog is legitimately deployable, just degraded.
-- **runtime** — `agentModelSpecifier` logs one `[llm]` warning per specifier per isolate
+- **runtime** — `modelSpecifierFor` logs one `[llm]` warning per model id per isolate
   when it synthesizes the placeholder, and a truncation watchdog (`src/braintrust.ts`,
   registered even without a Braintrust key) logs every `finishReason: "length"` turn with
   its session id. Both land in Workers Logs (`pnpm logs`).
@@ -700,17 +746,17 @@ predicate, so they cannot drift):
   message with `--session <id>`) counting truncated responses from the Braintrust spans
   (`flue.stop_reason`).
 
-### OpenRouter provider routing (per-agent `openrouter_routing`)
+### OpenRouter provider routing (per-model `openrouter_routing`)
 
-`agent.jsonc` may carry an `openrouter_routing` object — OpenRouter's
+An openrouter entry in the model registry may carry an `openrouter_routing` object —
+OpenRouter's
 [provider-routing preferences](https://openrouter.ai/docs/features/provider-routing) —
-which the bundler ships as `openRouterRouting` and the backend forwards **verbatim** as the
-request-body `provider` object on every model turn *and* the session-title side call.
-There is no key whitelist: `validateAgentConfig` only checks "plain object, ≤4 KiB
-serialized" (`AGENT_LIMITS.maxRoutingBytes`) — OpenRouter validates its own fields, so a
-new OpenRouter routing field needs no code change here, and an unknown/ill-typed one fails
-the turn with OpenRouter's error. The schema (`core/agent.schema.json`) lists the known
-fields for editor completion: `sort` (`"price"` = the `:floor` shortcut, `"throughput"` =
+which the backend forwards **verbatim** as the request-body `provider` object on every
+model turn *and* the session-title side call. There is no key whitelist:
+`parseModelsConfig` only checks "plain object, ≤4 KiB serialized"
+(`AGENT_LIMITS.maxRoutingBytes`) — OpenRouter validates its own fields, so a new
+OpenRouter routing field needs no code change here, and an unknown/ill-typed one fails the
+turn with OpenRouter's error. Known fields: `sort` (`"price"` = the `:floor` shortcut, `"throughput"` =
 `:nitro`, `"latency"`, or `{ by, partition }`), `order`, `only`, `ignore`,
 `allow_fallbacks`, `require_parameters`, `data_collection`, `zdr`,
 `enforce_distillable_text`, `quantizations`, `max_price` (USD **per million tokens, per
@@ -718,27 +764,26 @@ direction** — `prompt` = input and `completion` = output are independent ceili
 per-unit `request`/`image`/`audio`), `preferred_min_throughput`, `preferred_max_latency`.
 Setting `sort` or `order` disables OpenRouter's default price-based load balancing.
 
-Mechanics (`backend-b/src/llm.ts`): the routing rides on the per-agent `agent-<name>`
+Mechanics (`backend-b/src/llm.ts`): the routing rides on the per-model `model-<id>`
 provider entry as pi-ai's `compat.openRouterRouting`, which its openai-completions API
 sends as `params.provider` unchanged — so it works for catalog-known models (full catalog
-metadata kept, only the routing added), dated slugs and catalog misses alike, for the
-`openrouter` and `custom` providers (an OpenRouter-compatible proxy is the agent author's
-call), and is silently ignored for `cloudflare` (AI binding, no HTTP body). The title call
-(`src/title.ts`) sends the same object, so an agent pinned to e.g. `zdr`/`data_collection:
-"deny"` hosts never leaks its transcript to another host for a title. Prefer this over the
+metadata kept, only the routing added), dated slugs and catalog misses alike. The title
+call (`src/title.ts`) sends the same object, so a model pinned to e.g.
+`zdr`/`data_collection: "deny"` hosts never leaks its transcript to another host for a
+title. Prefer this over the
 `:nitro`/`:floor` model-id suffixes: those are not Pi catalog ids, so they would resolve
 through the placeholder path (see above) and lose the model's metadata.
-`scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, bundler
+`scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, registry
 plumbing, and drives the installed pi-ai dist against a canned fetch to assert the request
-body's `provider` is the routing object byte-for-byte. `semantius-admin` runs
-`deepseek/deepseek-v4.1-flash` with `{ "sort": "throughput", "max_price": { "completion":
+body's `provider` is the routing object byte-for-byte. The `deepseek-v4.1-flash` entry
+(`semantius-admin`'s default) runs `deepseek/deepseek-v4.1-flash` with `{ "sort": "throughput", "max_price": { "completion":
 0.7 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"] }` — the fastest non-fp4
 host at or under $0.70/M output (filters apply *before* the throughput ranking). `"unknown"`
 is load-bearing: under that cap the only disclosed-quant host (DeepInfra, fp8) caps output
 at 131k, so without it no host qualifies. The model is newer than the pi-ai catalog, so the
-agent pins `max_tokens: 384000` / `context_window: 1048576` explicitly (384000 = DeepSeek
-first-party's output cap); `agent.jsonc` records the placeholder-path side effects and the
-eligible hosts. Per-host prices, quantization and output caps for a model:
+entry pins `max_tokens: 384000` / `context_window: 1048576` explicitly (384000 = DeepSeek
+first-party's output cap); `agents_config.jsonc` records the placeholder-path side effects
+and the eligible hosts. Per-host prices, quantization and output caps for a model:
 `GET https://openrouter.ai/api/v1/models/<slug>/endpoints` (public).
 
 Verified against the deployed worker (2026-08-18, hand-crafted turn-1 seeds via

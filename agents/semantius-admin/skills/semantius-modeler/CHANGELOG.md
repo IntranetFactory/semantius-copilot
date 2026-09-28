@@ -8,6 +8,65 @@ Entries below are newest first.
 
 ---
 
+## Analyst 5.8: entity families and enum labels; `EXPECTED_MAJOR = 5` unchanged
+
+2026-09-28. Paired with analyst 5.8 (minor; a 5.7 spec deploys unchanged). The platform added `is_a` / `has_a` key types (an entity based on another through `entities.id_refentity`, sharing its key) and `{"value", "label"}` enum entries.
+
+1. **`deploy-lib.ts`:** new `ensureEntitiesByLevel(rows)`, the entities entry point: groups by `id_refentity` depth and runs one `ensureMany` per level, bases first (one call total without a family); refuses before any write on a cycle, a missing base, `id_refentity` without `is_a` / `has_a`, or `label_column` / `label_parent` / `order_column` on a based row. `updateEntity` also refuses `id_refentity`. New `patchById` for the insert-then-update path (based entities cannot be upserted, 42P10). `seedEnsureMany` / `assertSeedCounts` document family seeding (one insert per `is_a` record at its own table; `has_a` attach sends only its own fields; tally each level from its own inserts, never a base GET).
+2. **Stage 1:** parses `is_a` / `has_a`, the `is_a` prefix and `**Based on:**`; labeled §5 bullets become pairs; 🛑 checks mirror `consistency-check.ts` (label lines on a based entity, repeated base fields, cascade from `is_a`, process gates, `_ext` names, Notes ≠ §5, a label as default). The label-column requirement exempts based entities.
+3. **Stage 2k:** `id_refentity` and an `is_a` prefix are create-only; live bases must be managed and of the right key type; `<table>_ext` must be free; the cross-module edit grant is a hierarchy row Gate A checks.
+4. **Stage 3:** family plan lines; Gate A checks every base is live or created at an earlier level.
+5. **Stage 4:** entities through `ensureEntitiesByLevel` (worked mixed example), `id_refentity` on create only, the label passes skip based entities, enum sync compares by value and applies label changes.
+6. **Stage 5:** `id_refentity` round-trip, the label-column exemption, an enum round-trip by value. **Stage 6:** family seeding rules; seeds write values, never labels.
+7. **conflict-resolution.md:** rows for 23503 / 90240-90252 / 42P10 and the old-CLI preflight failure.
+
+---
+
+## Platform: name-keyed permissions; `SCAFFOLD_LIB_MAJOR = 6`; `EXPECTED_MAJOR = 5` unchanged
+
+2026-09-26. The platform re-keyed the RBAC catalog on `permission_name`. Found by a live deploy that halted in the `scaffoldModule` preflight with zero writes (`create_permission_hierarchy has no field(s) [including_permission_id, included_permission_id]`). The spec format is unchanged, so `EXPECTED_MAJOR` stays 5; the schema-coupled scaffold library takes a major bump because its return shape changed.
+
+**Live schema (verified with `semantius info crud`):**
+
+1. `permissions` has no numeric id; `permission_name` is the primary key. `update_permission` / `delete_permission` are keyed by `permission_name` (string or array).
+2. `permission_hierarchy` links `including_permission_name` to `included_permission_name`; its `id` is the text `"<including>.<included>"`.
+3. `role_permissions` carries `role_id` + `permission_name`; its `id` is the text `"<role_id>.<permission_name>"`. `user_roles.id` is the text `"<user_id>.<role_id>"`.
+4. The module record references `view_permission`, `manage_permission`, `admin_permission` by name. The three `default_*_role_id` columns stay numeric role ids.
+5. `fields.catalog_field_code` is a new write-once provenance column (the field-level twin of `entities.catalog_entity_code`).
+
+**Where the deployer changed.**
+
+1. `scaffold-lib.ts` (`SCAFFOLD_LIB_MAJOR` 5 → 6): permissions converge by a `permission_name` array; hierarchy edges and role grants are written and matched by name; the module wire sets `manage_permission` / `admin_permission` by name; the preflight checks the new keys plus the `update_module` keys; `verifyScaffold` compares the module's permission references by name and reads edges / grants by name. `scaffoldModule()` returns `permissionNames` (was `permissionIds`).
+2. The "resolve the permission name to its id, use, discard" pattern is gone for permissions (names are written directly). It still applies to roles.
+3. Stage 4d stamps `catalog_field_code` (= the spec's `field_name`) on every `create_field`, VALUE-only and write-once, like `catalog_entity_code`; Stage 5 asserts it is non-empty on fields the deploy created.
+4. Docs updated to the name-keyed shape: SKILL.md, stage-1/2/4/5 references, deploy-script-template.md, conflict-resolution.md.
+5. 4b-rename reordered: `update_permission` first (a permission rename cascades to every table that names it), then `update_module`, then `update_role`. Setting `view_permission` to a name that does not exist yet now fails the foreign key.
+
+**Same day, found by the same live deploy (analyst 5.6 → 5.7):**
+
+6. Validation-rule `code` must be a class-99 error code (`^99[0-9]{3}$`; platform error `90905` otherwise). The rule identifier moves to `name` (snake_case, unique within the entity), which is now the natural key for the 4e-merge and the Stage 5 duplicate check. Stage 1 blocks a spec whose rules lack `name` or carry a non-class-99 code and routes it to the analyst. Platform rules on built-in tables carry class-90 codes and `source_module: "platform"`.
+7. The auto-created `label_column` field lands without its §3 `description` and without `catalog_field_code`; the post-create pass now sets both alongside the title correction (the first live deploy left seven label descriptions empty).
+8. JSON columns (`computed_fields`, `validation_rules`, `select_rule`, `input_type_rule`) are compared structurally with sorted keys, because `jsonb` reorders object keys and a string compare reported every rule as drifted.
+
+---
+
+## Analyst 5.5 → 5.6 (entity key type); `EXPECTED_MAJOR = 5` unchanged
+
+2026-09-26. Deployer-side delta for the analyst's 5.6 minor: the optional `**Key type:**` / `**Key prefix:**` entity lines (→ `entities.id_type` / `entities.id_prefix`). The key type is create-only: the platform locks it once the table exists (`90233`).
+
+1. **Stage 1 parse** reads both lines (absent = `auto_increment`, nothing to stamp; every pre-5.6 spec); a `computed` / unknown type, or a missing / stray / malformed prefix, is a 🛑 route-back. Mapping-table rows added.
+2. **Stage 2k (new): key type is create-only.** On an entity that already exists live, a spec `**Key type:**` differing from live `id_type` halts before any write with a plain explanation (the id kind is fixed at creation; changing it means rebuilding the table) and routes back to the analyst; the modeler never offers the rebuild. An absent line compares nothing. A new entity's prefix already used by another live entity halts as catalog drift.
+3. **Stage 4c**: `id_type` / `id_prefix` go on the ✨ New / rename-incoming / promote-create `create_entity` payload when present (payload template updated); `id_type` is never sent on `update_entity`; a differing `id_prefix` on a ♻️ same-module entity is synced. `deploy-lib.ts` `updateEntity()` throws if `id_type` is in the patch. The `deploy-script-template.md` preflight lists `id_type` / `id_prefix` for `create_entity`.
+4. **Stage 5** verifies the key type / prefix landed (a mismatch cannot be repaired by a re-run and is reported as such).
+5. **Stage 6** sample data: `bigint` / `text` entities need a caller-supplied `id` on every row; FK values into non-numeric keys are the ids as given.
+6. **SKILL.md** minor-version tolerance paragraph now covers 5.4 ↔ 5.5 ↔ 5.6.
+
+Files: SKILL.md, `references/stage-1-parse.md`, `stage-2-reconcile.md`, `stage-4-execute.md`, `stage-5-verify.md`, `stage-6-sample-data.md`, `deploy-script-template.md`, `deploy-lib.ts`.
+
+## Unreleased: CLI env-var name correction
+
+Documentation only, no contract change, `EXPECTED_MAJOR` unchanged (2026-09-26). `references/deploy-script-template.md` ("Large deploys") named the CLI's timeout variable `MCP_TIMEOUT`, which the CLI never reads: every operational variable carries the `SEMANTIUS_` prefix (or the `--env` prefix). It now reads `SEMANTIUS_TIMEOUT` (default 1800 s). Entry #13 below keeps the old name as written at the time.
+
 ## Analyst 5.4 → 5.5 (spec-contract clarifications); `EXPECTED_MAJOR = 5` unchanged
 
 2026-08-19. Parser-side delta for the analyst's 5.5 minor (see the analyst CHANGELOG). All changes are tolerant of 5.4 files; nothing in the deploy procedure changes.

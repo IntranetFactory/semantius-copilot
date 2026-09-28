@@ -1,60 +1,8 @@
 {
   "$schema": "../../core/agent.schema.json",  
-  // Model ids resolve against Pi's openrouter catalog; dated snapshot slugs
-  // (e.g. -0731) reuse the undated base entry's metadata while the request
-  // keeps the dated id (resolveCatalogModel; incident 2026-08-12). A model NO
-  // catalog entry resolves for runs on a conservative placeholder (128k
-  // window, 8k output cap — long single-pass writes truncate) unless
-  // "max_tokens"/"context_window" are set here. This agent needs well over
-  // 300k output for single-shot blueprint spec writes.
-  //
-  // deepseek-v4.1-flash (released 2026-09-10) IS such a miss: neither the
-  // pinned pi-ai 0.83.0 nor the latest 0.85.1 catalog lists it, hence the
-  // explicit limits below. Placeholder side effects, checked 2026-09-19:
-  //  - reasoning: the entry says `reasoning: false`, so pi-ai sends no
-  //    `reasoning` param and uses the `system` role (right for DeepSeek). The
-  //    model still thinks: OpenRouter lists it default_enabled, effort
-  //    "high" — the same effort the old catalog entry requested. Thinking
-  //    blocks replay under the field they arrived in, regardless of the flag.
-  //  - cost: the placeholder's per-token rates are 0, but the billed total
-  //    still comes from OpenRouter's inline usage.cost (pi-ai patch); only
-  //    the per-direction split in traces reads 0.
-  // Once a pi-ai release catalogs this id, drop max_tokens/context_window.
-  "model": "deepseek/deepseek-v4.1-flash", // alternatives: "deepseek/deepseek-v4-flash-0731" (in catalog, 0.14/0.28 list rate), "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
-  // 384000 = DeepSeek first-party's output cap: OpenRouter routes only to
-  // hosts whose cap covers the request's max_tokens (docs: "if you set a
-  // max_tokens, OpenRouter will only route to providers that support a
-  // response of that length"), so 393216 would shut DeepSeek out. pi-ai
-  // shrinks the request as the context fills.
-  "max_tokens": 384000,
-  "context_window": 1048576,
-  // OpenRouter provider routing, forwarded verbatim as the request's `provider`
-  // object (every model turn + the title side call). Filters apply BEFORE the
-  // ranking; host facts measured 2026-09-19 against the 22 endpoints serving
-  // deepseek/deepseek-v4.1-flash (GET openrouter.ai/api/v1/models/<slug>/endpoints,
-  // public).
-  //  - sort "throughput" = the :nitro shortcut: rank hosts by tokens/s instead
-  //    of price. Turns OFF OpenRouter's price-based load balancing.
-  //  - max_price: USD per MILLION tokens, per direction. Only output is capped
-  //    (0.7); every host under it charges ≤0.22 input anyway. List rate is
-  //    0.15/0.60; the FP8 hosts other than DeepInfra run 0.28–0.38/1.13–1.50
-  //    and fall outside the cap. The model listing also carries weekday time-of-day overrides
-  //    (UTC 01–04 & 06–10) at 0.30/1.20 — a host billing that rate drops out
-  //    of the cap during those windows.
-  //  - quantizations: fp4 stays excluded (Relace, Sail Research). "unknown" is
-  //    REQUIRED here: under the cap the only disclosed-quant host is DeepInfra
-  //    (fp8, 131k output — skipped for our max_tokens), so without "unknown"
-  //    OpenRouter answers "No endpoints found". The undisclosed hosts include
-  //    DeepSeek first-party (V4 is FP8-native).
-  //  Eligible on a fresh session: DeepSeek (384k out), Alibaba (393k, 1M
-  //  context), Morph, Wafer, Fireworks (943k) — all 0.135–0.22 / 0.54–0.66.
-  //  Other fields (only/ignore, require_parameters, zdr, …) pass straight
-  //  through — see the schema's openrouter_routing for the list.
-  "openrouter_routing": {
-    "sort": "throughput",
-    "max_price": { "completion": 0.7 },
-    "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
-  },
+  // Model ids from backend-b/agents_config.jsonc (limits, routing, rationale live there).
+  // The first is the default; the chat UI offers the others in a dropdown.
+  "models": ["deepseek-v4.1-flash", "glm-5.3-flash", "gpt-6-luna"],
   "proxy_whitelist": [
     "registry.npmjs.org",  // for  dependencies
     "registry.npmjs.org",  // for  dependencies

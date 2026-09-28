@@ -95,6 +95,7 @@ import {
   AGENT_DEF_KEY_PREFIX,
   SKILL_NAME_RE,
   skillCatalogFromBundle,
+  modelOptions,
   STREAM_PROTOCOL_HEADERS,
   COST_BASIS,
   CONTAINER_RATES,
@@ -114,7 +115,7 @@ import {
 } from './backups';
 import { channel } from './channels/github';
 import { fetchContainerCosts } from './costs';
-import { modelCatalogWarning } from './llm';
+import { MODELS, modelCatalogWarning } from './llm';
 import {
   base64ToBytes,
   bytesToBase64,
@@ -461,18 +462,21 @@ app.put('/agents/:name', apiKeyGuard(), async (c) => {
     }
     throw err;
   }
+  // Every listed model must be in the model registry THIS worker runs
+  // (agents_config.jsonc) — the only place the ids are checked.
+  const unknownModels = bundle.models.filter((m) => !Object.hasOwn(MODELS, m));
+  if (unknownModels.length > 0) {
+    return c.json(
+      { error: `unknown model id(s) ${unknownModels.join(', ')} (known: ${Object.keys(MODELS).join(', ')})` },
+      422,
+    );
+  }
   await c.env.STORE.put(`${AGENT_DEF_KEY_PREFIX}${name}`, text);
   // Non-fatal on purpose: a model newer than the pinned pi-ai catalog is
   // legitimately deployable, just degraded — but silently degraded is how a
   // session gets truncated mid-write, so the deploy answer carries the
   // warning and deploy-agent.mjs prints it.
-  const modelWarning = modelCatalogWarning({
-    agentName: bundle.agentName,
-    model: bundle.model,
-    modelBaseUrl: bundle.modelBaseUrl,
-    maxTokens: bundle.maxTokens,
-    contextWindow: bundle.contextWindow,
-  });
+  const modelWarning = bundle.models.map((m) => modelCatalogWarning(m)).filter(Boolean).join('\n') || undefined;
   return c.json({
     ok: true,
     name,
@@ -508,7 +512,7 @@ app.get('/agents', userTokenGuard(), async (c) => {
 });
 
 // One agent's live definition meta: existence, the welcome card, and the
-// turn-1 seed (instructions, model, skillCatalog) — read from `agentdef:
+// turn-1 seed (instructions, skillCatalog) plus the model dropdown options — read from `agentdef:
 // <name>` on every call, so what the chat seeds a new session with can never
 // skew from the definition the session create snapshots. Skill FILES are
 // deliberately not returned — the UI needs the catalog, not the contents.
@@ -531,11 +535,7 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     version: bundle.version,
     baseImage: bundle.baseImage,
     instructions: bundle.instructions,
-    ...(bundle.model ? { model: bundle.model } : {}),
-    ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
-    ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
-    ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
-    ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
+    models: modelOptions(MODELS, bundle.models),
     ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });
@@ -572,6 +572,7 @@ app.get('/sessions', userTokenGuard(), async (c) => {
       ...(typeof r.version === 'string' ? { version: r.version } : {}),
       ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
       ...(typeof r.title === 'string' ? { title: r.title } : {}),
+      ...(typeof r.model_id === 'string' ? { modelId: r.model_id } : {}),
     }));
   return c.json({ sessions, user: verified.user });
 });

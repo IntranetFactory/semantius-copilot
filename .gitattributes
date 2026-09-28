@@ -1,0 +1,3 @@
+# core.autocrlf=true on Windows checkouts would give shell scripts CRLF line
+# endings, which bash rejects ($'\r': command not found). Keep them LF everywhere.
+*.sh text eol=lf

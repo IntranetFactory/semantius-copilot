@@ -2,7 +2,7 @@
  * Agent bundle format and server-side validation of untrusted agent bundles.
  *
  * An agent bundle is the one-JSON-string unit of delivery for backend B: it
- * carries the agent's merged instructions, optional model overrides, and ALL
+ * carries the agent's merged instructions, its allowed model ids, and ALL
  * of its skills (0..maxSkills). It is built by scripts/bundle.mjs from an
  * agents/<name>/ folder (agent.jsonc + optional INSTRUCTIONS.md +
  * skills/<skill>/...) — see agents/agent.schema.json for the config contract.
@@ -12,13 +12,8 @@
  * @property {string} version      content hash over config + all skill files
  * @property {string} baseImage    toolchain the agent needs; selects the Sandbox binding
  * @property {string} instructions merged agent.jsonc instructions + INSTRUCTIONS.md
- * @property {string} [model]      normalized provider/model specifier
- * @property {string} [modelBaseUrl] OpenAI-compatible endpoint override
- * @property {number} [maxTokens]  output-token cap override (wins over catalog metadata)
- * @property {number} [contextWindow] context-window override in tokens (wins over catalog metadata)
- * @property {Record<string, unknown>} [openRouterRouting] OpenRouter provider-routing
- *   preferences, forwarded VERBATIM as the request-body `provider` object (sort, order,
- *   only, ignore, require_parameters, max_price, …)
+ * @property {string[]} models     allowed model ids (keys of backend-b/agents_config.jsonc);
+ *   the first is the default a new session runs on
  * @property {string[]} [proxyWhitelist] egress allow list (host/URL globs), unioned at
  *   egress with the org's own list; DENY-ALL when both are absent/empty
  * @property {AgentWelcome} [welcome] welcome card shown by the chat UI while a conversation is empty
@@ -46,16 +41,12 @@ import {
 } from './bundle.js';
 import { SEMANTIUS_DATA_HOST_TOKEN } from './config.js';
 
-/** Providers the model prefix rule recognizes (first '/'-segment of `model`). */
-export const KNOWN_MODEL_PROVIDERS = ['openrouter', 'custom', 'cloudflare'];
-
 export const AGENT_LIMITS = {
   maxSkills: 16,
   maxInstructionsBytes: 64 * 1024,
   maxAgentTotalBytes: 4 * 1024 * 1024,
-  maxBaseUrlChars: 512,
   maxWhitelistHosts: 32,
-  // Sanity ceiling for max_tokens/context_window overrides — generous enough
+  // Sanity ceiling for max_tokens/context_window overrides (model registry) — generous enough
   // for any plausible model (100M tokens), small enough to catch unit slips
   // (bytes, characters) at bundle time.
   maxModelLimitTokens: 100_000_000,
@@ -181,19 +172,6 @@ function validateWelcome(raw, label) {
 }
 
 /**
- * Model prefix rule: a specifier whose first path segment is a known provider
- * is used as-is; anything else gets the default `openrouter/` prefix, so plain
- * OpenRouter ids like `deepseek/deepseek-v4-flash` work unqualified.
- *
- * @param {string} model
- * @returns {string} full provider/model specifier
- */
-export function normalizeModelSpecifier(model) {
-  const first = model.split('/', 1)[0];
-  return KNOWN_MODEL_PROVIDERS.includes(first) ? model : `openrouter/${model}`;
-}
-
-/**
  * Trailing date suffix on a pinned model slug (`-0731` in
  * `deepseek/deepseek-v4-flash-0731`): 3-4 digits so `-0731`/`-2024` style
  * pins match but semver-ish tails (`-v2`, `-32b`) don't.
@@ -229,8 +207,8 @@ export function resolveCatalogModel(models, modelId) {
 }
 
 /**
- * Apply an agent's explicit token-limit overrides (agent.jsonc `max_tokens` /
- * `context_window`) to a model catalog entry. Explicit overrides win over
+ * Apply a registry entry's explicit token-limit overrides (agents_config.jsonc
+ * `max_tokens` / `context_window`) to a model catalog entry. Explicit overrides win over
  * whatever the entry carries — catalog metadata, dated-slug fallback, or the
  * conservative placeholder — because they exist precisely for models no
  * catalog knows.
@@ -249,13 +227,13 @@ export function applyModelLimits(entry, limits) {
 }
 
 /**
- * Shared check for the max_tokens/context_window override values (agent.jsonc
- * snake_case keys and bundle camelCase fields alike).
+ * Check for the max_tokens/context_window override values of a model registry
+ * entry (see models.js).
  *
  * @param {unknown} value
  * @param {string} label
  */
-function checkTokenLimit(value, label) {
+export function checkTokenLimit(value, label) {
   if (value === undefined) return;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > AGENT_LIMITS.maxModelLimitTokens) {
     throw new BundleValidationError(`${label} must be an integer between 1 and ${AGENT_LIMITS.maxModelLimitTokens}`);
@@ -263,8 +241,8 @@ function checkTokenLimit(value, label) {
 }
 
 /**
- * Shared check for the OpenRouter routing object (agent.jsonc
- * `openrouter_routing` / bundle `openRouterRouting`): a plain JSON object of
+ * Check for the OpenRouter routing object (a model registry entry's
+ * `openrouter_routing`, see models.js): a plain JSON object of
  * bounded size. Deliberately NO field validation — the object is forwarded to
  * OpenRouter verbatim as the request-body `provider` field, and OpenRouter
  * validates its own routing fields (an unknown/ill-typed one fails the request
@@ -274,7 +252,7 @@ function checkTokenLimit(value, label) {
  * @param {unknown} value
  * @param {string} label
  */
-function checkRouting(value, label) {
+export function checkRouting(value, label) {
   if (value === undefined) return;
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new BundleValidationError(`${label} must be a JSON object (OpenRouter provider-routing preferences)`);
@@ -285,19 +263,38 @@ function checkRouting(value, label) {
 }
 
 /**
+ * Agent `models` (agent.jsonc) / bundle `models`: a non-empty array of unique
+ * model ids. Whether each id exists in the model registry is checked by the
+ * backend at deploy time (PUT /agents/:name) — the registry lives there.
+ *
+ * @param {unknown} value
+ * @param {string} label
+ */
+function checkModels(value, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((id) => typeof id !== 'string' || id.length === 0) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new BundleValidationError(`${label} must be a non-empty array of unique model ids`);
+  }
+}
+
+/**
  * Validate a parsed agent.jsonc against the contract in
  * agents/agent.schema.json. Unknown keys are rejected so typos and
  * not-yet-supported keys (future egress allow list etc.) fail at bundle time.
  *
  * @param {unknown} raw
- * @returns {{ instructions?: string, model?: string, model_base_url?: string, max_tokens?: number, context_window?: number, openrouter_routing?: Record<string, unknown>, welcome?: AgentWelcome }}
+ * @returns {{ instructions?: string, models: string[], welcome?: AgentWelcome }}
  */
 export function validateAgentConfig(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BundleValidationError('agent.jsonc must be a JSON object');
   }
   const config = /** @type {Record<string, unknown>} */ (raw);
-  const allowed = ['$schema', 'instructions', 'model', 'model_base_url', 'max_tokens', 'context_window', 'openrouter_routing', 'proxy_whitelist', 'welcome'];
+  const allowed = ['$schema', 'instructions', 'models', 'proxy_whitelist', 'welcome'];
   for (const key of Object.keys(config)) {
     if (!allowed.includes(key)) {
       throw new BundleValidationError(`agent.jsonc has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
@@ -306,15 +303,7 @@ export function validateAgentConfig(raw) {
   if (config.instructions !== undefined && (typeof config.instructions !== 'string' || config.instructions.length === 0)) {
     throw new BundleValidationError('agent.jsonc "instructions" must be a non-empty string when present');
   }
-  if (config.model !== undefined && (typeof config.model !== 'string' || config.model.length === 0)) {
-    throw new BundleValidationError('agent.jsonc "model" must be a non-empty string when present');
-  }
-  if (config.model_base_url !== undefined && (typeof config.model_base_url !== 'string' || !/^https?:\/\//.test(config.model_base_url))) {
-    throw new BundleValidationError('agent.jsonc "model_base_url" must be an http(s) URL when present');
-  }
-  checkTokenLimit(config.max_tokens, 'agent.jsonc "max_tokens"');
-  checkTokenLimit(config.context_window, 'agent.jsonc "context_window"');
-  checkRouting(config.openrouter_routing, 'agent.jsonc "openrouter_routing"');
+  checkModels(config.models, 'agent.jsonc "models"');
   if (config.proxy_whitelist !== undefined) {
     validateWhitelist(config.proxy_whitelist, 'agent.jsonc "proxy_whitelist"');
   }
@@ -347,8 +336,7 @@ export function mergeInstructions(configInstructions, instructionsMd) {
  * Validate an untrusted agent bundle before storing or reconstructing it —
  * the server-side gate on backend B's ingest route. Same defensive posture as
  * the old single-skill validateBundle: path traversal, caps, required
- * SKILL.md per skill, plus agent-level shape (instructions, model,
- * modelBaseUrl) and the ustar 100-char entry-name limit so a hostile path
+ * SKILL.md per skill, plus agent-level shape (instructions, models) and the ustar 100-char entry-name limit so a hostile path
  * fails here (422) instead of inside makeTar (500).
  *
  * @param {unknown} raw bundle object or its JSON string
@@ -377,23 +365,7 @@ export function validateAgentBundle(raw) {
   if (utf8Length(bundle.instructions) > AGENT_LIMITS.maxInstructionsBytes) {
     throw new BundleValidationError(`instructions too large (> ${AGENT_LIMITS.maxInstructionsBytes} bytes)`);
   }
-  if (bundle.model !== undefined) {
-    if (typeof bundle.model !== 'string' || !bundle.model.includes('/') || bundle.model.startsWith('/')) {
-      throw new BundleValidationError('model must be a provider/model specifier (normalize before bundling)');
-    }
-  }
-  if (bundle.modelBaseUrl !== undefined) {
-    if (
-      typeof bundle.modelBaseUrl !== 'string' ||
-      !/^https?:\/\//.test(bundle.modelBaseUrl) ||
-      bundle.modelBaseUrl.length > AGENT_LIMITS.maxBaseUrlChars
-    ) {
-      throw new BundleValidationError('modelBaseUrl must be an http(s) URL');
-    }
-  }
-  checkTokenLimit(bundle.maxTokens, 'maxTokens');
-  checkTokenLimit(bundle.contextWindow, 'contextWindow');
-  checkRouting(bundle.openRouterRouting, 'openRouterRouting');
+  checkModels(bundle.models, 'models');
   if (bundle.proxyWhitelist !== undefined) {
     validateWhitelist(bundle.proxyWhitelist, 'proxyWhitelist');
   }

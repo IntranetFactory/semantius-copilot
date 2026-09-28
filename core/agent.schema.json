@@ -4,6 +4,7 @@
   "description": "Per-agent config in agents/<name>/agent.jsonc. The file is REQUIRED: folders without it are skipped by the bundler. Skills live in agents/<name>/skills/<skill>/; an optional INSTRUCTIONS.md next to the config is appended to `instructions`. This schema mirrors validateAgentConfig in core/src/agent.js — change both together.",
   "type": "object",
   "additionalProperties": false,
+  "required": ["models"],
   "properties": {
     "$schema": {
       "type": "string"
@@ -13,81 +14,12 @@
       "minLength": 1,
       "description": "Agent instructions. An optional INSTRUCTIONS.md in the same folder is appended after this text. At least one of the two must yield non-empty instructions."
     },
-    "model": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Model specifier. If the first path segment is a known provider (openrouter, custom, cloudflare) the value is used as-is; otherwise 'openrouter/' is prepended (e.g. 'deepseek/deepseek-v4-flash' -> 'openrouter/deepseek/deepseek-v4-flash'). Omit to use the backend's env-derived default (LLM_PROVIDER/LLM_MODEL)."
-    },
-    "model_base_url": {
-      "type": "string",
-      "pattern": "^https?://",
-      "description": "Overrides the provider base URL for this agent (an OpenAI-compatible endpoint). Auth still uses the backend's LLM_API_KEY secret."
-    },
-    "max_tokens": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100000000,
-      "description": "Output-token cap for this agent's model, winning over catalog metadata. For models no catalog knows (custom endpoints, models newer than the pinned pi-ai catalog): a catalog miss otherwise runs on a conservative placeholder whose 8192-token cap truncates long single-pass responses. Dated slugs of catalog models (e.g. '-0731') do NOT need this — their metadata resolves via the undated base entry."
-    },
-    "context_window": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 100000000,
-      "description": "Context-window size (tokens) for this agent's model, winning over catalog metadata. Governs the compaction threshold and the output-budget clamp; the catalog-miss placeholder is 128000. Only useful together with models no catalog knows — see max_tokens."
-    },
-    "openrouter_routing": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "OpenRouter provider-routing preferences for this agent's model calls, forwarded VERBATIM as the request-body `provider` object (https://openrouter.ai/docs/features/provider-routing) — every model turn AND the session-title side call. Any field OpenRouter accepts works; the well-known ones are listed for editor completion, unknown ones pass through unchecked (OpenRouter rejects what it doesn't understand, visible as the turn's error). Ignored for the `cloudflare` provider (AI binding, no HTTP request body). Serialized size ≤ 4096 bytes. NOTE: setting `sort` or `order` disables OpenRouter's default price-based load balancing.",
-      "properties": {
-        "sort": {
-          "description": "Ranking strategy: \"price\" (= the :floor shortcut), \"throughput\" (= the :nitro shortcut), \"latency\"; or an object { by, partition } where partition is \"model\" (default) or \"none\".",
-          "oneOf": [
-            { "type": "string", "enum": ["price", "throughput", "latency"] },
-            {
-              "type": "object",
-              "properties": {
-                "by": { "type": "string", "enum": ["price", "throughput", "latency"] },
-                "partition": { "type": ["string", "null"], "enum": ["model", "none", null] }
-              }
-            }
-          ]
-        },
-        "order": { "type": "array", "items": { "type": "string" }, "description": "Provider slugs to try in sequence (a suffixed slug like \"google-vertex/us-east5\" pins one endpoint)." },
-        "only": { "type": "array", "items": { "type": "string" }, "description": "Allow-list of provider slugs — nothing outside it is used." },
-        "ignore": { "type": "array", "items": { "type": "string" }, "description": "Deny-list of provider slugs." },
-        "allow_fallbacks": { "type": "boolean", "description": "Default true. With `order`: false = fail when the listed providers are unavailable instead of falling through to others." },
-        "require_parameters": { "type": "boolean", "description": "Default false. Only route to providers that support every parameter of the request (tools, reasoning, usage accounting…)." },
-        "data_collection": { "type": "string", "enum": ["allow", "deny"], "description": "Default \"allow\". \"deny\" skips providers that may store or train on prompts." },
-        "zdr": { "type": "boolean", "description": "Restrict routing to Zero-Data-Retention endpoints only." },
-        "enforce_distillable_text": { "type": "boolean", "description": "Only models/hosts whose terms allow distillation of the output." },
-        "quantizations": { "type": "array", "items": { "type": "string", "enum": ["fp32", "fp16", "bf16", "fp8", "fp6", "int8", "int4", "fp4", "unknown"] }, "description": "Filter hosts by weight precision (open-weight models)." },
-        "max_price": {
-          "type": "object",
-          "description": "Price ceilings in USD per MILLION tokens, per direction: `prompt` (input) and `completion` (output) are independent limits; `request`, `image`, `audio` are per-unit ceilings. Typically combined with sort: \"throughput\" — fastest provider under the ceiling.",
-          "properties": {
-            "prompt": { "type": ["number", "string"] },
-            "completion": { "type": ["number", "string"] },
-            "request": { "type": ["number", "string"] },
-            "image": { "type": ["number", "string"] },
-            "audio": { "type": ["number", "string"] }
-          }
-        },
-        "preferred_min_throughput": {
-          "description": "Soft floor in tokens/second — a number applies to p50, or an object with percentile cutoffs. Prefers, does not guarantee.",
-          "oneOf": [
-            { "type": "number" },
-            { "type": "object", "properties": { "p50": { "type": "number" }, "p75": { "type": "number" }, "p90": { "type": "number" }, "p99": { "type": "number" } } }
-          ]
-        },
-        "preferred_max_latency": {
-          "description": "Soft ceiling in seconds — a number applies to p50, or an object with percentile cutoffs. Prefers, does not guarantee.",
-          "oneOf": [
-            { "type": "number" },
-            { "type": "object", "properties": { "p50": { "type": "number" }, "p75": { "type": "number" }, "p90": { "type": "number" }, "p99": { "type": "number" } } }
-          ]
-        }
-      }
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Model ids this agent may run on — keys of the model registry backend-b/agents_config.jsonc (which holds each model's provider, upstream id, limits and routing). The FIRST is the default for a new session; with more than one, the chat UI shows a model dropdown until the first message, after which the pick is fixed for the session. Deploy fails (422) on an id the deployed registry does not know."
     },
     "proxy_whitelist": {
       "type": "array",

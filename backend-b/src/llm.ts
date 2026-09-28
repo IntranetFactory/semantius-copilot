@@ -1,7 +1,10 @@
 /**
- * LLM provider wiring (runs once at module init). LLM_PROVIDER / LLM_MODEL /
- * LLM_BASE_URL come from wrangler vars, LLM_API_KEY from the worker secret
- * (.dev.vars in local dev). See @semantius-copilot/core configureLlm.
+ * LLM provider wiring (runs once at module init). A session's model is an id
+ * from the model registry (../agents_config.jsonc): openrouter models use the
+ * LLM_API_KEY secret, openai models the OPENAI_API_KEY secret (.dev.vars in
+ * local dev). The env default (LLM_PROVIDER / LLM_MODEL / LLM_BASE_URL wrangler
+ * vars, see @semantius-copilot/core configureLlm) only serves sessions without
+ * a model id.
  *
  * Flue v2 removed the beta registerProvider(name, opts) API in favor of Pi
  * provider objects (setProvider + createProvider). This adapter keeps
@@ -12,8 +15,17 @@ import { env } from 'cloudflare:workers';
 import { setProvider } from '@flue/runtime';
 import { createProvider, type OpenRouterRouting } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
+import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
-import { applyModelLimits, configureLlm, resolveCatalogModel } from '@semantius-copilot/core';
+import {
+  applyModelLimits,
+  configureLlm,
+  parseModelsConfig,
+  resolveCatalogModel,
+  thinkingLevelMap,
+} from '@semantius-copilot/core';
+import modelsConfigText from '../agents_config.jsonc?raw';
 
 const vars = env as Record<string, string | undefined>;
 
@@ -60,183 +72,215 @@ function registerProvider(id: string, opts: { api?: string; baseUrl?: string; ap
   );
 }
 
+// openrouter: Pi's built-in catalog with the LLM_API_KEY secret, whatever the
+// env default is (registry models with provider "openrouter" resolve here).
+// configureLlm below re-registers it when the env overrides its transport.
+registerProvider('openrouter', { apiKey: vars.LLM_API_KEY });
+
 export const MODEL_SPECIFIER: string = configureLlm(registerProvider, vars);
 
-/** Default endpoints for providers an agent may select via its `model` prefix. */
-const PROVIDER_BASE_URLS: Record<string, string | undefined> = {
-  openrouter: 'https://openrouter.ai/api/v1',
-  custom: vars.LLM_BASE_URL,
-};
-
-export type AgentLlm = {
-  agentName: string;
-  model?: string;
-  modelBaseUrl?: string;
-  /** agent.jsonc max_tokens — explicit output cap, wins over catalog metadata. */
+type ModelEntry = {
+  name: string;
+  provider: 'openrouter' | 'openai';
+  model: string;
   maxTokens?: number;
-  /** agent.jsonc context_window — explicit window, wins over catalog metadata. */
   contextWindow?: number;
-  /** agent.jsonc openrouter_routing — OpenRouter provider-routing preferences,
-   * forwarded verbatim as the request-body `provider` object (pi-ai's
-   * `compat.openRouterRouting`) on every model turn and the title side call. */
   openRouterRouting?: Record<string, unknown>;
+  reasoningEfforts?: string[];
 };
 
-/** Attach the agent's routing preferences to a catalog/placeholder entry:
+/** The model registry: model id -> entry. Validated once here, at module init. */
+export const MODELS: Record<string, ModelEntry> = parseModelsConfig(modelsConfigText);
+
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+
+/** The key each registry provider authenticates with. */
+const PROVIDER_KEYS: Record<ModelEntry['provider'], string | undefined> = {
+  openrouter: vars.LLM_API_KEY,
+  openai: vars.OPENAI_API_KEY,
+};
+
+// openai: Pi's built-in catalog and Responses API, authenticated with the
+// OPENAI_API_KEY secret. Registry models with provider "openai" resolve here
+// as `openai/<model>` (always exact catalog ids, see parseModelsConfig).
+setProvider(
+  createProvider({
+    id: 'openai',
+    auth: {
+      apiKey: {
+        name: 'OPENAI_API_KEY',
+        resolve: async () => ({ auth: vars.OPENAI_API_KEY ? { apiKey: vars.OPENAI_API_KEY } : {} }),
+      },
+    },
+    models: openaiProvider().getModels(),
+    api: openAIResponsesApi(),
+  }),
+);
+
+/** The Pi catalog of a registry provider, for resolveCatalogModel. */
+function catalogFor(provider: ModelEntry['provider']) {
+  return provider === 'openai' ? openaiProvider().getModels() : openrouterProvider().getModels();
+}
+
+/** Attach a registry entry's routing preferences to a catalog/placeholder entry:
  * pi-ai's openai-completions API sends `model.compat.openRouterRouting` as the
  * request-body `provider` field verbatim, so this is the whole forwarding —
- * no key mapping, no pi-ai patch. Untouched when the agent set none. The cast
- * only satisfies pi-ai's advisory type: the object is whatever agent.jsonc
+ * no key mapping, no pi-ai patch. Untouched when the entry set none. The cast
+ * only satisfies pi-ai's advisory type: the object is whatever the registry
  * declared, and OpenRouter (not this code) validates its fields. */
-function withRouting<T extends { compat?: object }>(entry: T, agent: AgentLlm): T {
-  if (agent.openRouterRouting === undefined) return entry;
+function withRouting<T extends { compat?: object }>(entry: T, model: ModelEntry): T {
+  if (model.openRouterRouting === undefined) return entry;
   return {
     ...entry,
-    compat: { ...(entry.compat ?? {}), openRouterRouting: agent.openRouterRouting as OpenRouterRouting },
+    compat: { ...(entry.compat ?? {}), openRouterRouting: model.openRouterRouting as OpenRouterRouting },
   };
 }
 
+/** A registry entry's `reasoning_efforts` onto a catalog/placeholder entry:
+ * `reasoning: true` plus core's thinkingLevelMap (listed efforts only, never
+ * "none"). pi-ai clamps Flue's thinking level to the nearest listed effort
+ * and, on an openrouter.ai base URL, sends it as `reasoning: {effort}`.
+ * Untouched when the entry set none. */
+function withReasoning<T extends object>(entry: T, model: ModelEntry): T {
+  if (model.reasoningEfforts === undefined) return entry;
+  return { ...entry, reasoning: true, thinkingLevelMap: thinkingLevelMap(model.reasoningEfforts) };
+}
+
 /**
- * The one predicate for "this agent's model resolves through the degrading
- * placeholder path" (agentModelSpecifier case 3), phrased as the warning to
+ * The one predicate for "this model resolves through the degrading
+ * placeholder path" (modelSpecifierFor case 3), phrased as the warning to
  * show. Shared by the deploy route (PUT /agents/:name answers it to the
- * deploy script) and the runtime warn in agentModelSpecifier, so deploy-time
- * detection can never drift from what resolution actually does. Undefined =
- * full catalog metadata applies (or the env default / AI binding, which are
- * not the agent's doing).
+ * deploy script, per listed model) and the runtime warn in modelSpecifierFor,
+ * so deploy-time detection can never drift from what resolution actually
+ * does. Undefined = full catalog metadata applies.
  *
- * Why it exists: a catalog-miss override silently runs sessions with the
- * conservative placeholder (128k window, 8k output cap), and the cap
+ * Why it exists: a catalog miss silently runs sessions with the
+ * conservative placeholder (128k context window, 8k output cap), and the cap
  * truncates long single-pass writes mid-response (stop_reason "length") —
  * the UI shows the agent announcing work and then going silent. Root-caused
  * 2026-08-12 on `deepseek/deepseek-v4-flash-0731` (dated slug; only the
  * undated `deepseek/deepseek-v4-flash` is in the catalog). Since then a
  * dated slug resolves to the undated base entry's metadata
  * (resolveCatalogModel), so this warns only for misses the fallback also
- * cannot resolve — and not when agent.jsonc pins an explicit `max_tokens`,
+ * cannot resolve — and not when the registry pins an explicit `max_tokens`,
  * because then the placeholder's 8k bite (the harm warned about) is
  * overridden by a consciously chosen budget.
  */
-export function modelCatalogWarning(agent: AgentLlm): string | undefined {
-  if (!agent.model && !agent.modelBaseUrl) return undefined;
-  const spec = agent.model ?? MODEL_SPECIFIER;
-  const slash = spec.indexOf('/');
-  const upstreamProvider = spec.slice(0, slash);
-  const modelId = spec.slice(slash + 1);
-  if (upstreamProvider === 'cloudflare') return undefined;
-  const known =
-    upstreamProvider === 'openrouter' &&
-    resolveCatalogModel(openrouterProvider().getModels(), modelId).entry !== undefined;
-  if (known) return undefined;
-  if (agent.maxTokens !== undefined) return undefined;
+export function modelCatalogWarning(modelId: string): string | undefined {
+  const model = MODELS[modelId];
+  if (!model) return undefined;
+  const { entry, exact } = resolveCatalogModel(catalogFor(model.provider), model.model);
+  // openai models resolve against the stock catalog only (no placeholder
+  // path): anything but an exact id fails every turn.
+  if (model.provider === 'openai') {
+    return exact
+      ? undefined
+      : `model "${modelId}" (openai/${model.model}) is not an exact id in Pi's openai catalog — every turn will fail.`;
+  }
+  if (entry !== undefined) return undefined;
+  if (model.maxTokens !== undefined) return undefined;
   return (
-    `model "${spec}" is not in Pi's catalog — sessions will run with the conservative placeholder ` +
-    `(128k context window, 8k output cap), and the cap truncates long single-pass responses ` +
-    `(stop_reason "length": the agent announces work, then goes silent). ` +
+    `model "${modelId}" (${model.provider}/${model.model}) is not in Pi's catalog — sessions will run with the ` +
+    `conservative placeholder (128k context window, 8k output cap), and the cap truncates long single-pass ` +
+    `responses (stop_reason "length": the agent announces work, then goes silent). ` +
     `Use an exact catalog id or a dated variant of one (a trailing -MMDD resolves to the base ` +
-    `entry's metadata), or set explicit "max_tokens"/"context_window" in agent.jsonc.`
+    `entry's metadata), or set explicit "max_tokens"/"context_window" in agents_config.jsonc.`
   );
 }
 
-/** One warning per specifier per isolate — resolution runs on every render. */
-const warnedPlaceholderSpecs = new Set<string>();
+/** One warning per model id per isolate — resolution runs on every render. */
+const warnedPlaceholderModels = new Set<string>();
 
 /**
  * The raw OpenAI-compatible chat-completions endpoint for a session's model —
  * for one-shot side calls (session title generation) that must not run
- * through the Flue harness. Same resolution order as agentModelSpecifier:
- * agent model override -> env default; agent model_base_url -> LLM_BASE_URL
- * -> the provider's stock endpoint. `routing` is the agent's OpenRouter
- * routing object for the caller to send as the body's `provider` field, so a
- * side call honors the same provider preferences as the agent's turns. Null
- * when there is no HTTP endpoint (cloudflare AI binding) or no key — callers
- * skip the feature.
+ * through the Flue harness. Always the session's own model and provider, so a
+ * transcript never goes to a provider the user didn't pick; no model id ->
+ * the env default. `routing` is the entry's OpenRouter routing object for the
+ * caller to send as the body's `provider` field, so a side call honors the
+ * same provider preferences as the model turns. Null when there is no HTTP
+ * endpoint (cloudflare AI binding) or no key — callers skip the feature.
  */
-export function chatCompletionsTarget(
-  agent?: AgentLlm | null,
-): { baseUrl: string; model: string; apiKey: string; routing?: Record<string, unknown> } | null {
-  const spec = agent?.model ?? MODEL_SPECIFIER;
-  const slash = spec.indexOf('/');
-  const provider = spec.slice(0, slash);
-  const model = spec.slice(slash + 1);
+export function chatCompletionsTarget(modelId?: string | null): {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  routing?: Record<string, unknown>;
+  reasoningEfforts?: string[];
+} | null {
+  const entry = modelId ? MODELS[modelId] : undefined;
+  if (entry) {
+    const apiKey = PROVIDER_KEYS[entry.provider];
+    if (!apiKey) return null;
+    return {
+      provider: entry.provider,
+      baseUrl: entry.provider === 'openai' ? OPENAI_BASE_URL : OPENROUTER_BASE_URL,
+      model: entry.model,
+      apiKey,
+      ...(entry.openRouterRouting ? { routing: entry.openRouterRouting } : {}),
+      ...(entry.reasoningEfforts ? { reasoningEfforts: entry.reasoningEfforts } : {}),
+    };
+  }
+  const slash = MODEL_SPECIFIER.indexOf('/');
+  const provider = MODEL_SPECIFIER.slice(0, slash);
   if (provider === 'cloudflare') return null;
-  const baseUrl = agent?.modelBaseUrl ?? vars.LLM_BASE_URL ?? PROVIDER_BASE_URLS[provider];
+  const baseUrl = vars.LLM_BASE_URL ?? (provider === 'openrouter' ? OPENROUTER_BASE_URL : undefined);
   const apiKey = vars.LLM_API_KEY;
   if (!baseUrl || !apiKey) return null;
-  return { baseUrl, model, apiKey, ...(agent?.openRouterRouting ? { routing: agent.openRouterRouting } : {}) };
+  return { provider, baseUrl, model: MODEL_SPECIFIER.slice(slash + 1), apiKey };
 }
 
 /**
- * Per-agent model resolution. No overrides -> the env-derived default.
- * Overrides resolve metadata-preservingly — Flue trusts catalog metadata
- * blindly (`reasoning` gates thinking, `contextWindow` sets the compaction
- * threshold, `maxTokens` caps output, cost rates price usage), so a
- * synthesized entry silently degrades a capable model:
- *  1. openrouter model known to Pi's catalog VERBATIM, stock endpoint, no
- *     limit overrides -> return the specifier unchanged; it resolves against
- *     the `openrouter` provider (re-registered by configureLlm with the
- *     LLM_API_KEY secret) and keeps the full catalog entry.
- *  2. catalog-resolvable model + model_base_url, explicit limits and/or
- *     openrouter_routing -> dedicated one-model provider `agent-<name>`
- *     reusing the catalog entry, only the transport/limits/routing swapped.
- *     "Catalog-resolvable" includes the dated-slug fallback
- *     (resolveCatalogModel): a pinned `…-0731` slug reuses the undated base
- *     entry's metadata while the request keeps the dated model id, so
- *     snapshot pinning no longer degrades to the placeholder (the 2026-08-12
- *     truncation incident).
- *  3. catalog miss (custom endpoints, models newer than the catalog) ->
- *     dedicated provider with a conservative placeholder entry (no
- *     reasoning, 128k window, 8k output) — the only degrading path, and
- *     agent.jsonc max_tokens/context_window override even that.
- * openrouter_routing rides along on paths 2 and 3 as the entry's
- * `compat.openRouterRouting` (withRouting) — pi-ai sends it verbatim as the
- * request-body `provider` object; it is forwarded for any HTTP provider
- * (openrouter, custom — an OpenRouter-compatible proxy is the agent author's
- * call) and silently ignored for the cloudflare AI binding.
- * The `agent-<name>` id is unique per agent so concurrent agents in one
- * isolate never clobber each other; setProvider replaces same-id
- * registrations, so re-registering on every render is idempotent. Auth
- * stays the worker-wide LLM_API_KEY secret — model_base_url overrides
- * transport only.
+ * Per-session model resolution from a registry model id. No id / unknown id
+ * -> the env-derived default. Registry entries resolve metadata-preservingly —
+ * Flue trusts catalog metadata blindly (`reasoning` gates thinking,
+ * `contextWindow` sets the compaction threshold, `maxTokens` caps output,
+ * cost rates price usage), so a synthesized entry silently degrades a
+ * capable model:
+ *  1. model known to its provider's Pi catalog VERBATIM, no limits/routing/
+ *     efforts -> `<provider>/<model>`; it resolves against the `openrouter`
+ *     provider (re-registered by configureLlm with the LLM_API_KEY secret) or
+ *     the `openai` provider (registered above with OPENAI_API_KEY) and keeps
+ *     the full catalog entry. Every openai model takes this path.
+ *  2. catalog-resolvable openrouter model with explicit limits, routing and/or
+ *     efforts -> dedicated one-model provider `model-<id>` reusing the catalog
+ *     entry, only limits/routing/reasoning swapped. "Catalog-resolvable"
+ *     includes the dated-slug fallback (resolveCatalogModel): a pinned
+ *     `…-0731` slug reuses the undated base entry's metadata while the
+ *     request keeps the dated model id (the 2026-08-12 truncation incident).
+ *  3. catalog miss (models newer than the catalog) -> dedicated provider with
+ *     a conservative placeholder entry (no reasoning, 128k window, 8k output)
+ *     — the only degrading path, and the entry's max_tokens/context_window/
+ *     reasoning_efforts override even that.
+ * The `model-<id>` provider is shared by every agent using that model;
+ * setProvider replaces same-id registrations, so re-registering on every
+ * render is idempotent. Auth is the LLM_API_KEY secret (openrouter only).
  */
-export function agentModelSpecifier(agent?: AgentLlm | null): string {
-  if (
-    !agent ||
-    (!agent.model &&
-      !agent.modelBaseUrl &&
-      agent.maxTokens === undefined &&
-      agent.contextWindow === undefined &&
-      agent.openRouterRouting === undefined)
-  ) {
-    return MODEL_SPECIFIER;
-  }
-  // The bundler pre-normalizes `model` to a full provider/model specifier.
-  const spec = agent.model ?? MODEL_SPECIFIER;
-  const slash = spec.indexOf('/');
-  const upstreamProvider = spec.slice(0, slash);
-  const modelId = spec.slice(slash + 1);
-  if (upstreamProvider === 'cloudflare') return spec; // AI binding; no base-url/routing override
-
-  const { entry: catalogEntry, exact } =
-    upstreamProvider === 'openrouter'
-      ? resolveCatalogModel(openrouterProvider().getModels(), modelId)
-      : { entry: undefined, exact: false };
-  const hasLimitOverride = agent.maxTokens !== undefined || agent.contextWindow !== undefined;
-  const hasRouting = agent.openRouterRouting !== undefined;
-  if (exact && catalogEntry && !agent.modelBaseUrl && !hasLimitOverride && !hasRouting) return spec;
+export function modelSpecifierFor(modelId?: string | null): string {
+  const model = modelId ? MODELS[modelId] : undefined;
+  if (!modelId || !model) return MODEL_SPECIFIER;
+  const hasOverride =
+    model.maxTokens !== undefined ||
+    model.contextWindow !== undefined ||
+    model.openRouterRouting !== undefined ||
+    model.reasoningEfforts !== undefined;
+  const { entry: catalogEntry, exact } = resolveCatalogModel(catalogFor(model.provider), model.model);
+  if (model.provider === 'openai' || (exact && catalogEntry && !hasOverride)) return `${model.provider}/${model.model}`;
 
   // modelCatalogWarning is the single predicate for "this resolution
   // degrades" — it already accounts for the dated-slug fallback and an
   // explicit max_tokens override, so warn exactly when it says to.
-  if (!catalogEntry && !warnedPlaceholderSpecs.has(spec)) {
-    const warning = modelCatalogWarning(agent);
+  if (!catalogEntry && !warnedPlaceholderModels.has(modelId)) {
+    const warning = modelCatalogWarning(modelId);
     if (warning) {
-      warnedPlaceholderSpecs.add(spec);
-      console.warn(`[llm] agent "${agent.agentName}": ${warning}`);
+      warnedPlaceholderModels.add(modelId);
+      console.warn(`[llm] ${warning}`);
     }
   }
 
-  const id = `agent-${agent.agentName}`;
+  const id = `model-${modelId}`;
   const auth = {
     apiKey: {
       name: 'LLM_API_KEY',
@@ -248,29 +292,32 @@ export function agentModelSpecifier(agent?: AgentLlm | null): string {
       id,
       auth,
       models: [
-        withRouting(
-          applyModelLimits(
-            catalogEntry
-              ? { ...catalogEntry, provider: id, baseUrl: agent.modelBaseUrl ?? catalogEntry.baseUrl }
-              : {
-                  id: modelId,
-                  name: modelId,
-                  api: 'openai-completions' as const,
-                  provider: id,
-                  baseUrl: agent.modelBaseUrl ?? vars.LLM_BASE_URL ?? PROVIDER_BASE_URLS[upstreamProvider] ?? '',
-                  reasoning: false,
-                  input: ['text' as const],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-            agent,
+        withReasoning(
+          withRouting(
+            applyModelLimits(
+              catalogEntry
+                ? { ...catalogEntry, provider: id }
+                : {
+                    id: model.model,
+                    name: model.model,
+                    api: 'openai-completions' as const,
+                    provider: id,
+                    baseUrl: OPENROUTER_BASE_URL,
+                    reasoning: false,
+                    input: ['text' as const],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 8192,
+                  },
+              model,
+            ),
+            model,
           ),
-          agent,
+          model,
         ),
       ],
       api: openAICompletionsApi(),
     }),
   );
-  return `${id}/${modelId}`;
+  return `${id}/${model.model}`;
 }

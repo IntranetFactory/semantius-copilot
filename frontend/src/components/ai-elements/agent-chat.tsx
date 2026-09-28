@@ -42,6 +42,11 @@ import {
   PromptInputBody,
   PromptInputFooter,
   type PromptInputMessage,
+  PromptInputSelect,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
+  PromptInputSelectTrigger,
+  PromptInputSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -90,6 +95,8 @@ export function AgentChat({
   hint,
   onHint,
   onDismissHint,
+  modelId,
+  onModelChange,
   className,
   placeholder,
 }: {
@@ -131,6 +138,12 @@ export function AgentChat({
   onHint?: (hint: string, key: string) => void;
   /** The tip's ✕. */
   onDismissHint?: () => void;
+  /** The picked model (an id from the meta's `models`), sent in the seed.
+   * Held by the HOST for the same key-flip reason as `hint`. */
+  modelId?: string;
+  /** The model dropdown's change — offered until the first message is sent,
+   * which fixes the model for the session. */
+  onModelChange?: (modelId: string) => void;
   /** Merged into the conversation frame (e.g. to override the default height). */
   className?: string;
   /** Composer placeholder text. */
@@ -148,7 +161,12 @@ export function AgentChat({
   const { meta, metaError } = useAgentMeta(auth, agentName, baseUrl);
   const welcome = meta?.welcome;
   // Attach the seed to every send; only the instance-creating send reads it.
-  const seededClient = useMemo(() => (client && meta ? withAgentSeed(client, seedFromMeta(meta)) : client), [client, meta]);
+  const modelIdRef = useRef(modelId);
+  modelIdRef.current = modelId;
+  const seededClient = useMemo(
+    () => (client && meta ? withAgentSeed(client, () => seedFromMeta(meta, modelIdRef.current)) : client),
+    [client, meta],
+  );
   // One held SSE stream — needs the @durable-streams/client patch. The v2
   // client is conversation-scoped, so no name/id here: the conversation is
   // whatever URL the client was constructed with.
@@ -556,6 +574,25 @@ export function AgentChat({
                     onUploaded={(name) => setInput((prev) => `${prev} ${name} `)}
                     onError={setUploadError}
                   />
+                  {/* Model picker, only when the agent offers a choice. Editable
+                      until the first message is sent (that send creates the
+                      agent instance with the pick); then shown, disabled. */}
+                  {meta?.models && meta.models.length > 1 && modelId ? (
+                    <span title={messages.length > 0 ? 'Model is fixed for this conversation' : undefined}>
+                      <PromptInputSelect value={modelId} onValueChange={onModelChange} disabled={messages.length > 0}>
+                        <PromptInputSelectTrigger>
+                          <PromptInputSelectValue />
+                        </PromptInputSelectTrigger>
+                        <PromptInputSelectContent>
+                          {meta.models.map((m) => (
+                            <PromptInputSelectItem key={m.id} value={m.id}>
+                              {m.name}
+                            </PromptInputSelectItem>
+                          ))}
+                        </PromptInputSelectContent>
+                      </PromptInputSelect>
+                    </span>
+                  ) : null}
                 </PromptInputTools>
                 {/* No status text — the submit icon reflects agent.status via
                     toChatStatus: ready ↵ / submitted ⟳ / streaming ⏹ / error ✕.

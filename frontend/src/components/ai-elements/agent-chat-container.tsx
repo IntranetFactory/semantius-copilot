@@ -6,7 +6,8 @@
  * Semantius Copilot's pages.
  *
  * Backend contract (any backend-b-shaped Worker, addressed via `baseUrl`):
- *   GET  /agents/:name/meta      welcome card + turn-1 seed
+ *   GET  /agents/:name/meta      welcome card + turn-1 seed + model options
+ *   GET  /sessions               a reopened session's locked model
  *   POST /sessions/agent         create a session (server mints the id)
  *   /agents/main/:sessionId      the conversation (flue v2 + SSE)
  *
@@ -43,6 +44,7 @@ import {
   BACKEND,
   conversationUrl,
   createAgentSession,
+  fetchSessions,
   useAgentMeta,
   useConversationClient,
   type ChatAuth,
@@ -129,7 +131,7 @@ export function AgentChatContainer({
   // Meta is loaded (and cached) here as well as inside AgentChat — same
   // module cache, one request — because the 401-vs-404 split is the
   // container's call: 401 in ambient mode means "no browser session".
-  const { metaStatus } = useAgentMeta(auth, agentName, baseUrl);
+  const { meta, metaStatus } = useAgentMeta(auth, agentName, baseUrl);
   const urlFor = useMemo(() => (id: string) => conversationUrl(id, baseUrl), [baseUrl]);
   const client = useConversationClient(auth, liveId, urlFor);
 
@@ -185,6 +187,24 @@ export function AgentChatContainer({
     }
   }
 
+  // The model the session runs on. Held here, not in AgentChat, for the same
+  // reason as the hint below: the draft's first send remounts AgentChat, and
+  // that remounted instance must seed the pick. A reopened session shows the
+  // model it is locked to (its `modelId` in GET /sessions); until that answer
+  // arrives, or when the entry has none, the agent's default is shown.
+  const [pickedModelId, setPickedModelId] = useState<string>();
+  const [sessionModelId, setSessionModelId] = useState<string>();
+  useEffect(() => {
+    if (!sessionId) return;
+    fetchSessions(auth, baseUrl)
+      .then(({ sessions }) => {
+        const locked = sessions.find((s) => s.id === sessionId)?.modelId;
+        if (alive.current && locked) setSessionModelId(locked);
+      })
+      .catch(() => {});
+  }, [auth, baseUrl, sessionId]);
+  const modelId = sessionModelId ?? pickedModelId ?? meta?.models?.[0]?.id;
+
   // The welcome-prompt tip AgentChat renders above its composer. It lives HERE
   // because a draft's welcome click both raises the tip and sends — and that
   // send flips the key below, remounting AgentChat. State inside AgentChat
@@ -237,6 +257,8 @@ export function AgentChatContainer({
         hint={hint?.text}
         onHint={showHint}
         onDismissHint={dismissHint}
+        modelId={modelId}
+        onModelChange={setPickedModelId}
         className={className}
         placeholder={placeholder}
       />

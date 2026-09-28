@@ -38,19 +38,19 @@ export type AgentSeed = {
   version: string;
   baseImage: string;
   instructions: string;
-  model?: string;
-  modelBaseUrl?: string;
-  /** agent.jsonc max_tokens/context_window — explicit model limits the backend applies over catalog metadata. */
-  maxTokens?: number;
-  contextWindow?: number;
-  /** agent.jsonc openrouter_routing — OpenRouter provider-routing preferences the backend forwards verbatim. */
-  openRouterRouting?: Record<string, unknown>;
+  /** The picked model — a registry id from the meta's `models`; the backend
+   * falls back to the agent's default when absent or not allowed. */
+  modelId?: string;
   /** Explicit skill catalog (name + description) so turn 1 mounts skills via useSkill(). */
   skillCatalog?: Array<{ name: string; description: string }>;
 };
 
-/** What `GET /agents/:name/meta` answers: the seed fields plus the welcome card. */
-export type AgentMeta = AgentSeed & { welcome?: AgentWelcome };
+/** What `GET /agents/:name/meta` answers: the seed fields plus the welcome card
+ * and the agent's model options (the first is the default). */
+export type AgentMeta = Omit<AgentSeed, 'modelId'> & {
+  welcome?: AgentWelcome;
+  models?: Array<{ id: string; name: string }>;
+};
 
 /**
  * Semantius Copilot's own backend location — the DEFAULT `baseUrl` everywhere in this
@@ -133,6 +133,8 @@ export type SessionListEntry = {
   createdAt?: string;
   /** LLM-generated session title (present once the backend produced one). */
   title?: string;
+  /** The model the session is locked to (present once its first turn ran). */
+  modelId?: string;
 };
 
 /** What `GET /sessions` answers: the caller's sessions plus WHOSE they are —
@@ -285,22 +287,25 @@ export function useConversationClient(
 }
 
 /**
- * The same client with one agent seed attached to every send (`initialData` —
+ * The same client with the agent seed attached to every send (`initialData` —
  * Flue consults it only on the send that creates the instance, ignores it
  * afterwards, so this is idempotent by contract). The agent's very first model
- * turn already runs with the right instructions and model.
+ * turn already runs with the right instructions and model. The seed is read
+ * at send time, so a model picked after the client was built still counts —
+ * without rebuilding the client (a new client re-opens the SSE stream).
  */
-export function withAgentSeed(client: FlueClient, seed: AgentSeed): FlueClient {
+export function withAgentSeed(client: FlueClient, seed: () => AgentSeed): FlueClient {
   return {
     ...client,
-    send: (opts: Parameters<FlueClient['send']>[0]) => client.send({ ...opts, initialData: seed }),
+    send: (opts: Parameters<FlueClient['send']>[0]) => client.send({ ...opts, initialData: seed() }),
   };
 }
 
-/** The seed one meta carries, ready for `withAgentSeed` (drops the UI-only welcome). */
-export function seedFromMeta(meta: AgentMeta): AgentSeed {
-  const { welcome: _welcome, ...seed } = meta;
-  return seed;
+/** The seed one meta carries plus the picked model, ready for `withAgentSeed`
+ * (drops the UI-only welcome and model options). */
+export function seedFromMeta(meta: AgentMeta, modelId?: string): AgentSeed {
+  const { welcome: _welcome, models: _models, ...seed } = meta;
+  return modelId ? { ...seed, modelId } : seed;
 }
 
 /**

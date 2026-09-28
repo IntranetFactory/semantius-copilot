@@ -10,8 +10,8 @@
  * Covers the four fixes:
  *  1. dated-slug catalog fallback (core resolveCatalogModel) against the REAL
  *     pi-ai openrouter catalog the backend ships,
- *  2. agent.jsonc max_tokens/context_window overrides (validation, bundler
- *     plumbing, applyModelLimits precedence),
+ *  2. model registry max_tokens/context_window overrides (validation in
+ *     parseModelsConfig, applyModelLimits precedence),
  *  3. the patched pi-ai context clamp: context overflow throws instead of
  *     silently shipping max_tokens: 1,
  *  4. the patched truncation guard: a tool call whose argument buffer only
@@ -23,19 +23,11 @@
  * verify the pnpm patches survived a reinstall, not a copy of their logic.
  */
 import { realpathSync } from 'node:fs';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
-import {
-  AGENT_LIMITS,
-  applyModelLimits,
-  resolveCatalogModel,
-  validateAgentBundle,
-  validateAgentConfig,
-} from '../core/src/agent.js';
-import { createAgentBundleFromDir } from '../core/src/node.js';
+import { AGENT_LIMITS, applyModelLimits, resolveCatalogModel } from '../core/src/agent.js';
+import { parseModelsConfig } from '../core/src/models.js';
 
 let failures = 0;
 let total = 0;
@@ -89,7 +81,7 @@ console.log('== dated-slug catalog fallback ==');
 }
 
 // --- 2. explicit per-agent limit overrides -------------------------------
-console.log('\n== agent.jsonc max_tokens / context_window overrides ==');
+console.log('\n== registry max_tokens / context_window overrides ==');
 {
   const entry = { id: 'm', name: 'm', maxTokens: 8192, contextWindow: 128000 };
   const overridden = applyModelLimits(entry, { maxTokens: 393216, contextWindow: 1048576 });
@@ -98,18 +90,21 @@ console.log('\n== agent.jsonc max_tokens / context_window overrides ==');
   const partial = applyModelLimits(entry, { maxTokens: 4096 });
   check('a partial override leaves the other limit alone', partial.maxTokens === 4096 && partial.contextWindow === 128000);
 
-  const okConfig = { instructions: 'x', model: 'deepseek/deepseek-v4-flash-0731', max_tokens: 393216, context_window: 1048576 };
+  const registryEntry = (extra) =>
+    JSON.stringify({ models: { m: { name: 'M', provider: 'openrouter', model: 'deepseek/deepseek-v4-flash-0731', ...extra } } });
   let threw = null;
+  let parsed;
   try {
-    validateAgentConfig(okConfig);
+    parsed = parseModelsConfig(registryEntry({ max_tokens: 393216, context_window: 1048576 }));
   } catch (err) {
     threw = err;
   }
-  check('validateAgentConfig accepts the new keys', threw === null, String(threw ?? ''));
+  check('parseModelsConfig accepts max_tokens/context_window', threw === null, String(threw ?? ''));
+  check('…and carries them as maxTokens/contextWindow', parsed?.m.maxTokens === 393216 && parsed?.m.contextWindow === 1048576);
 
-  const rejects = (patch) => {
+  const rejects = (extra) => {
     try {
-      validateAgentConfig({ instructions: 'x', ...patch });
+      parseModelsConfig(registryEntry(extra));
       return false;
     } catch {
       return true;
@@ -121,38 +116,6 @@ console.log('\n== agent.jsonc max_tokens / context_window overrides ==');
   check(`max_tokens above the ${AGENT_LIMITS.maxModelLimitTokens} sanity cap is rejected`, rejects({ max_tokens: AGENT_LIMITS.maxModelLimitTokens + 1 }));
   check('context_window: -1 is rejected', rejects({ context_window: -1 }));
   check('unknown keys are still rejected (typo guard)', rejects({ max_output_tokens: 5 }));
-
-  // Bundler plumbing: agent.jsonc snake_case -> bundle camelCase, hashed into version.
-  const dir = mkdtempSync(join(tmpdir(), 'model-limits-'));
-  try {
-    const agentDir = join(dir, 'testagent');
-    const write = (maxTokens) => {
-      writeFileSync(
-        join(agentDir, 'agent.jsonc'),
-        JSON.stringify({ instructions: 'do things', model: 'deepseek/deepseek-v4-flash-0731', max_tokens: maxTokens, context_window: 1048576 }),
-      );
-    };
-    const { mkdirSync } = await import('node:fs');
-    mkdirSync(agentDir, { recursive: true });
-    write(393216);
-    const bundle = createAgentBundleFromDir(agentDir);
-    check('bundle carries maxTokens/contextWindow', bundle.maxTokens === 393216 && bundle.contextWindow === 1048576);
-    check('bundle model got the openrouter/ prefix', bundle.model === 'openrouter/deepseek/deepseek-v4-flash-0731');
-    check('the bundle re-validates (server ingest gate)', validateAgentBundle(JSON.stringify(bundle)).maxTokens === 393216);
-    write(200000);
-    check('changing max_tokens changes the version hash', createAgentBundleFromDir(agentDir).version !== bundle.version);
-
-    const badBundle = { ...bundle, maxTokens: 'lots' };
-    let rejected = false;
-    try {
-      validateAgentBundle(badBundle);
-    } catch {
-      rejected = true;
-    }
-    check('validateAgentBundle rejects a non-integer maxTokens', rejected);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 // --- 3. context overflow is loud (patched pi-ai clamp) -------------------

@@ -9,7 +9,7 @@ import { dirname, join, relative, sep } from 'node:path';
 
 import { parse as parseJsonc, printParseErrorCode } from 'jsonc-parser';
 
-import { mergeInstructions, normalizeModelSpecifier, validateAgentBundle, validateAgentConfig } from './agent.js';
+import { mergeInstructions, validateAgentBundle, validateAgentConfig } from './agent.js';
 
 export * from './index.js';
 
@@ -38,7 +38,7 @@ export function scanAgentsDir(agentsDir) {
  *   - agent.jsonc (REQUIRED, JSONC with comments/trailing commas) validated
  *     against the contract in agents/agent.schema.json,
  *   - optional INSTRUCTIONS.md appended to the config's instructions,
- *   - `model` normalized via the prefix rule (unqualified -> openrouter/),
+ *   - `models` (ids from backend-b/agents_config.jsonc) carried as-is,
  *   - every skills/<skill>/ subfolder walked into a files map.
  * `version` is a content hash over config + sorted skill files, so any change
  * is a visibly different bundle (and must be a new session id, §6).
@@ -64,7 +64,6 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
     config.instructions,
     existsSync(mdPath) ? readFileSync(mdPath, 'utf-8') : undefined,
   );
-  const model = config.model ? normalizeModelSpecifier(config.model) : undefined;
 
   const skills = {};
   const skillsRoot = join(agentDir, 'skills');
@@ -85,11 +84,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
   const hash = createHash('sha256');
   hash.update(agentName).update('\0');
   hash.update(instructions).update('\0');
-  hash.update(model ?? '').update('\0');
-  hash.update(config.model_base_url ?? '').update('\0');
-  hash.update(String(config.max_tokens ?? '')).update('\0');
-  hash.update(String(config.context_window ?? '')).update('\0');
-  hash.update(config.openrouter_routing ? JSON.stringify(config.openrouter_routing) : '').update('\0');
+  hash.update(config.models.join(',')).update('\0');
   hash.update((config.proxy_whitelist ?? []).join(',')).update('\0');
   hash.update(config.welcome ? JSON.stringify(config.welcome) : '').update('\0');
   hash.update(options.baseImage ?? 'node').update('\0');
@@ -105,11 +100,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
     version: hash.digest('hex').slice(0, 16),
     baseImage: options.baseImage ?? 'node',
     instructions,
-    ...(model ? { model } : {}),
-    ...(config.model_base_url ? { modelBaseUrl: config.model_base_url } : {}),
-    ...(config.max_tokens !== undefined ? { maxTokens: config.max_tokens } : {}),
-    ...(config.context_window !== undefined ? { contextWindow: config.context_window } : {}),
-    ...(config.openrouter_routing !== undefined ? { openRouterRouting: config.openrouter_routing } : {}),
+    models: config.models,
     ...(config.proxy_whitelist ? { proxyWhitelist: config.proxy_whitelist } : {}),
     ...(config.welcome ? { welcome: config.welcome } : {}),
     skills,

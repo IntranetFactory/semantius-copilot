@@ -1030,9 +1030,9 @@ await (async () => {
   check('ANOTHER Neon endpoint never gets the JWT (403, not forwarded)', otherNeon.status === 403 && dataSent === null);
 
   // Bundle validation: the one placeholder passes, a typo fails the deploy.
-  const placeholderOk = (() => { try { validateAgentConfig({ instructions: 'x', proxy_whitelist: [SEMANTIUS_DATA_HOST_TOKEN] }); return true; } catch { return false; } })();
+  const placeholderOk = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], proxy_whitelist: [SEMANTIUS_DATA_HOST_TOKEN] }); return true; } catch { return false; } })();
   check('proxy_whitelist accepts $SEMANTIUS_DATA_HOST', placeholderOk);
-  const typoRejected = (() => { try { validateAgentConfig({ instructions: 'x', proxy_whitelist: ['$SEMANTIUS_DATAHOST'] }); return false; } catch (err) { return /unknown placeholder/.test(String(err)); } })();
+  const typoRejected = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], proxy_whitelist: ['$SEMANTIUS_DATAHOST'] }); return false; } catch (err) { return /unknown placeholder/.test(String(err)); } })();
   check('an unknown $-placeholder is rejected at validation', typoRejected);
 })();
 

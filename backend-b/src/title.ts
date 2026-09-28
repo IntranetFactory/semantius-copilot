@@ -18,7 +18,7 @@
  */
 import { observe, type LlmMessage } from '@flue/runtime';
 import { mergeExistingSessionRecord, readSession } from '@semantius-copilot/core';
-import { chatCompletionsTarget, type AgentLlm } from './llm';
+import { chatCompletionsTarget } from './llm';
 
 const TITLE_REFINE_AT = 4;
 const MESSAGE_MAX_CHARS = 500;
@@ -88,8 +88,8 @@ function sanitizeTitle(raw: unknown): string | null {
   return title.length > 0 ? title : null;
 }
 
-async function generateTitle(transcript: string, agent: AgentLlm | null | undefined): Promise<string | null> {
-  const target = chatCompletionsTarget(agent);
+async function generateTitle(transcript: string, modelId: string | undefined): Promise<string | null> {
+  const target = chatCompletionsTarget(modelId);
   if (!target) return null;
   const res = await fetch(`${target.baseUrl}/chat/completions`, {
     method: 'POST',
@@ -104,19 +104,28 @@ async function generateTitle(transcript: string, agent: AgentLlm | null | undefi
         { role: 'user', content: transcript },
       ],
       // Reasoning models spend the token budget on chain-of-thought and
-      // return `content: null` once max_tokens is hit (observed with
+      // return `content: null` once the cap is hit (observed with
       // tencent/hy3: finish_reason "length", 30/30 tokens in `reasoning`).
-      // So: turn reasoning off via OpenRouter's unified param (only sent to
-      // OpenRouter — a plain OpenAI-compatible endpoint may reject unknown
-      // fields) and keep headroom in case it still reasons.
-      max_tokens: 100,
-      temperature: 0.3,
-      ...(target.baseUrl.includes('openrouter.ai') ? { reasoning: { enabled: false } } : {}),
-      // The agent's openrouter_routing, verbatim — same provider preferences
-      // as its model turns (an agent pinned to ZDR/no-data-collection hosts
-      // must not leak its transcript to another host for a title). Sent
-      // whenever the agent set it: unlike `reasoning` above this is the
-      // agent author's explicit opt-in, so a custom endpoint gets it too.
+      // So per provider:
+      //  - openai (reasoning models): `max_completion_tokens` + the lowest
+      //    `reasoning_effort` — they reject `max_tokens` and `temperature`;
+      //  - openrouter, mandatory reasoning (entry has reasoning_efforts, e.g.
+      //    GLM 5.3): its first listed effort, with room for the reasoning;
+      //  - openrouter otherwise: reasoning off via OpenRouter's unified param;
+      //  - env default on another endpoint: plain body (a generic
+      //    OpenAI-compatible endpoint may reject unknown fields).
+      ...(target.provider === 'openai'
+        ? { max_completion_tokens: 1000, reasoning_effort: 'low' }
+        : target.reasoningEfforts
+          ? { max_tokens: 1000, reasoning: { effort: target.reasoningEfforts[0] } }
+          : {
+              max_tokens: 100,
+              temperature: 0.3,
+              ...(target.baseUrl.includes('openrouter.ai') ? { reasoning: { enabled: false } } : {}),
+            }),
+      // The model's openrouter_routing, verbatim — same provider preferences
+      // as its model turns (a model pinned to ZDR/no-data-collection hosts
+      // must not leak the transcript to another host for a title).
       ...(target.routing ? { provider: target.routing } : {}),
     }),
   });
@@ -136,7 +145,7 @@ export function maybeGenerateTitle(
   store: { get(k: string): Promise<string | null>; put(k: string, v: string, o?: object): Promise<void> },
   id: string,
   transcript: string,
-  agent: AgentLlm | null | undefined,
+  modelId: string | undefined,
   responsesCount: number,
 ): void {
   if (!transcript || responsesCount < 1) return;
@@ -150,7 +159,7 @@ export function maybeGenerateTitle(
     // Needed when: no title yet (first pass, retried until it lands), or the
     // conversation reached the refine threshold and the stored title predates it.
     if (hasTitle && (refined || responsesCount < TITLE_REFINE_AT)) return;
-    const title = await generateTitle(transcript, agent);
+    const title = await generateTitle(transcript, modelId);
     if (!title) return;
     await mergeExistingSessionRecord(store, id, { title, title_responses: responsesCount });
   })().catch(() => {});

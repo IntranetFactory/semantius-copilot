@@ -94,11 +94,7 @@ const seed = {
   version: bundle.version,
   baseImage: bundle.baseImage,
   instructions: bundle.instructions,
-  ...(bundle.model ? { model: bundle.model } : {}),
-  ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
-  ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
-  ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
-  ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
+  modelId: bundle.models[0],
   ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
   ...(payload !== undefined ? { payload } : {}),
 };

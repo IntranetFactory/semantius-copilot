@@ -75,16 +75,11 @@ are added to schema + `validateAgentConfig` together):
 
 - `instructions` — optional string; an optional `INSTRUCTIONS.md` next to the config is
   **appended**; at least one of the two must yield non-empty text.
-- `model` — optional; prefix rule: first path segment ∈ {openrouter, custom, cloudflare} →
-  as-is, else `openrouter/` is prepended. Missing → the backend's env default (§ LLM).
-- `model_base_url` — optional http(s) URL; per-agent transport override (auth stays the
-  worker-wide `LLM_API_KEY`).
-- `max_tokens` / `context_window` — optional integers; explicit model limits winning over
-  catalog metadata (README "LLM configuration").
-- `openrouter_routing` — optional object; OpenRouter provider-routing preferences
-  (`sort`, `order`, `only`, `max_price`, …) forwarded VERBATIM as the request-body
-  `provider` object on every model turn and the title side call — no key whitelist, only
-  "plain object, ≤4 KiB" (README "OpenRouter provider routing").
+- `models` — required non-empty array of unique model ids from the model registry
+  `backend-b/agents_config.jsonc` (which holds each model's provider, upstream id, limits,
+  OpenRouter routing and reasoning efforts — README "LLM configuration"). The first is the
+  default; with more than one the chat UI offers a dropdown until the first message, after
+  which the model is fixed for the session. Unknown ids fail the deploy (422).
 - `proxy_whitelist` — optional array of egress globs: a hostname or a URL, `*` allowed
   anywhere (`abc.com`, `*.suffix`, `api.*.acme.io`, `https://x/abc/*`), ≤32 entries.
   **DENY-ALL WHEN ABSENT**: an agent without it can make no outbound request from its
@@ -127,14 +122,12 @@ agents/hoth-trip-planner/skills/planner/
 ## 5. Agent-bundle format & bundler (backend B)
 
 The dynamic **agent bundle** is **one JSON string** carrying the whole agent — merged
-instructions, optional model overrides, and every file of every skill:
+instructions, the allowed model ids, and every file of every skill:
 
 ```jsonc
 { "agentName":"hoth-trip-planner", "version":"<content-hash>", "baseImage":"node",
   "instructions":"…agent.jsonc instructions + INSTRUCTIONS.md…",
-  "model":"openrouter/…",            // optional, pre-normalized (prefix rule, §3)
-  "modelBaseUrl":"https://…",        // optional
-  "openRouterRouting":{"sort":"throughput"},  // optional — OpenRouter `provider` object, verbatim (§3)
+  "models":["deepseek-v4.1-flash","glm-5.3-flash"],  // model registry ids, first = default (§3)
   "proxyWhitelist":["postman-echo.com"],  // optional — DENY-ALL egress when absent (§7)
   "skills": { "planner": { "SKILL.md":"…", "references/echo-basin.md":"…",
                            "references/north-ridge.md":"…", "scripts/opening-times.js":"…" } } }
@@ -198,7 +191,7 @@ container **before** injection finds no skill). Ingest `POST …/sessions/agent`
 session id**, see §6 Identity) (a) **validates** the
 agent bundle (§8), (b) stores it as `agent:<id>` (KV, read back by the initializer via an `env`
 binding), (c) writes `KV[containerId] = bearer`. The `useAgentStart` callback reads the stored bundle,
-persists the agent meta (instructions, model, modelBaseUrl, sandbox binding — `usePersistentState`),
+persists the agent meta (instructions, model id, sandbox binding — `usePersistentState`),
 reconstructs every skill into `/workspace/.agents/skills/<skill>` **when absent** (cold container, one
 tar for all skills, still 2 RPCs) → discovery.
 
@@ -212,9 +205,10 @@ render via `useInitialData()`, present from the first render on) — the fronten
 on every `send` (Flue records it only at creation, ignores it afterwards), and the GitHub channel
 passes it on `dispatch` from the stored `agent:github-default` bundle. Resolution order in the render:
 persisted meta (KV-authoritative — also picks up a re-seeded github-default) → creation seed → generic
-default. Per-agent model:
-`agentModelSpecifier()` registers a dedicated one-model Pi provider `agent-<name>` when the bundle
-overrides model/base URL; otherwise the env default applies. Immutable-per-id ⇒ "absent" is the only
+default. Per-session model: the seed's `modelId` (the UI's pick), narrowed by `useAgentStart` to the
+bundle's `models` (persisted pick first, then the seed's, then `models[0]`) and persisted in the meta;
+`modelSpecifierFor()` resolves it against the model registry (a dedicated `model-<id>` Pi provider
+when the entry overrides limits/routing/reasoning); no model id → the env default. Immutable-per-id ⇒ "absent" is the only
 case; no overwrite. The agent was renamed `hoth` → `main` (wrangler migration v4 — pre-rename
 conversations were abandoned, accepted for the POC).
 

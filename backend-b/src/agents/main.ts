@@ -74,7 +74,7 @@ import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '..
 import { lazySessionEnv } from '../lazy-env';
 import { askUserQuestion } from '../tools/ask-user-question';
 import { taskTools, TASKS_FILE } from '../tools/tasks';
-import { agentModelSpecifier } from '../llm';
+import { MODELS, modelSpecifierFor } from '../llm';
 import { drainTitleTranscript, maybeGenerateTitle } from '../title';
 import { drainLlmCalls } from '../usage';
 
@@ -130,7 +130,7 @@ function sandboxToolsWithBashFloor(sandbox: Sandbox) {
 
 /**
  * The per-session agent identity the render needs but cannot await from KV:
- * instructions, model overrides, and the Sandbox binding derived from
+ * instructions, the model id, and the Sandbox binding derived from
  * baseImage. It reaches the render on two paths:
  *  - `useInitialData` — the meta the creating send carried (frontend chat /
  *    GitHub dispatch), present from the FIRST render on. Load-bearing:
@@ -147,15 +147,10 @@ type AgentMeta = {
   agentName: string;
   version: string;
   instructions: string;
-  model?: string;
-  modelBaseUrl?: string;
-  /** agent.jsonc max_tokens/context_window — explicit model limits, winning
-   * over catalog metadata (see AgentLlm in ../llm.ts). */
-  maxTokens?: number;
-  contextWindow?: number;
-  /** agent.jsonc openrouter_routing — forwarded verbatim as the OpenRouter
-   * request-body `provider` object (see AgentLlm in ../llm.ts). */
-  openRouterRouting?: Record<string, unknown>;
+  /** The session's model: a registry id (../../agents_config.jsonc) from the
+   * agent's `models`, picked in the chat UI before the first message and fixed
+   * for the session. Absent = the env default (sessions without meta). */
+  modelId?: string;
   binding: string;
   /**
    * Explicit skill catalog (name + SKILL.md description) mounted via
@@ -245,15 +240,9 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
     agentName: String(seed.agentName ?? 'unknown'),
     version: String(seed.version ?? ''),
     instructions: seed.instructions,
-    ...(typeof seed.model === 'string' ? { model: seed.model } : {}),
-    ...(typeof seed.modelBaseUrl === 'string' ? { modelBaseUrl: seed.modelBaseUrl } : {}),
-    ...(typeof seed.maxTokens === 'number' ? { maxTokens: seed.maxTokens } : {}),
-    ...(typeof seed.contextWindow === 'number' ? { contextWindow: seed.contextWindow } : {}),
-    // Same shape gate as the bundle validator (a plain object); the contents
-    // are OpenRouter's to validate, exactly as for a deployed definition.
-    ...(seed.openRouterRouting !== null && typeof seed.openRouterRouting === 'object' && !Array.isArray(seed.openRouterRouting)
-      ? { openRouterRouting: seed.openRouterRouting }
-      : {}),
+    // Registry ids only: a hand-crafted seed can still only pick a whitelisted
+    // model (useAgentStart then narrows it to the agent's own `models`).
+    ...(typeof seed.modelId === 'string' && Object.hasOwn(MODELS, seed.modelId) ? { modelId: seed.modelId } : {}),
     ...(skillCatalog && skillCatalog.length > 0 ? { skillCatalog } : {}),
     binding,
   };
@@ -322,7 +311,7 @@ export function Main({ id }: AgentProps) {
   const seed = useInitialData<AgentSeed | undefined>();
   const [meta, setMeta] = usePersistentState<AgentMeta | null>('agentMeta', null);
   const active = meta ?? metaFromSeed(seed);
-  const specifier = agentModelSpecifier(active);
+  const specifier = modelSpecifierFor(active?.modelId);
   useModel(specifier);
 
   // session_state aggregation + response metadata. Flue v2 dropped
@@ -333,14 +322,12 @@ export function Main({ id }: AgentProps) {
   // mirror is fire-and-forget (best-effort like the observability sinks —
   // healed at the next response finish if lost).
   //
-  // session_state attaches on EVERY response; the per-response `usage`/`model`
-  // fields keep the openrouter/ gate: catalog-known model overrides resolve to
-  // openrouter/ specifiers with real per-token rates, while the agent-<name>
-  // placeholder/custom providers register zero rates — $0 would read as
-  // "free". cost.total is OpenRouter's BILLED amount (the pi-ai patch
-  // requests usage accounting and prefers the inline usage.cost over the
-  // catalog estimate); the per-component costs remain pi-ai's catalog-rate
-  // computation, so components may not sum exactly to the total.
+  // session_state and the per-response `usage`/`model` attach on EVERY
+  // response. cost.total is OpenRouter's BILLED amount whenever it reports one
+  // (the pi-ai patch requests usage accounting and prefers the inline
+  // usage.cost), else pi-ai's catalog estimate (OpenAI). Per-component costs
+  // are always catalog-rate computations — zero for a catalog-miss placeholder
+  // model — so components may not sum to the total.
   // Agent-writable session memory, hoisted above the finish hook so the KV
   // mirror below ships what THIS response's tool calls stored (persistent
   // state writes only become readable next render — agentDataNow tracks them
@@ -383,7 +370,7 @@ export function Main({ id }: AgentProps) {
     mergeSessionRecord(STORE, id, patch).catch(() => {});
     // Sidebar title (session record `title`): void, fire-and-forget — the
     // callback stays synchronous and the response is never delayed.
-    maybeGenerateTitle(STORE, id, drainTitleTranscript(id), active, next.responses_count);
+    maybeGenerateTitle(STORE, id, drainTitleTranscript(id), active?.modelId, next.responses_count);
     // Workspace backup (fire-and-forget, same posture): the turn-end sweep,
     // only when THIS submission actually touched the container — chat-only
     // turns never boot one just to archive it. Per-mutation persists already
@@ -395,7 +382,8 @@ export function Main({ id }: AgentProps) {
     }
     return {
       session_state: next,
-      ...(specifier.startsWith('openrouter/') ? { usage, model: specifier } : {}),
+      usage,
+      model: specifier,
     };
   });
   // Lazy boot (see lazy-env.ts): the wrapper serves discovery + skills-tree
@@ -488,18 +476,23 @@ export function Main({ id }: AgentProps) {
     // re-trigger it every message, hence the length gate.
     const catalogMissing = meta?.skillCatalog === undefined && skillCatalog.length > 0;
     if (meta?.version !== bundle.version || meta?.binding !== binding || catalogMissing) {
+      // The session's model: the persisted pick wins (a migration here must
+      // never switch models mid-session), then the creating seed's pick,
+      // then the agent's default — each only if the agent allows it.
+      const modelId =
+        [meta?.modelId, seed?.modelId].find((m): m is string => !!m && bundle.models.includes(m)) ??
+        bundle.models[0];
       setMeta({
         agentName: bundle.agentName,
         version: bundle.version,
         instructions: bundle.instructions,
-        ...(bundle.model ? { model: bundle.model } : {}),
-        ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
-        ...(bundle.maxTokens !== undefined ? { maxTokens: bundle.maxTokens } : {}),
-        ...(bundle.contextWindow !== undefined ? { contextWindow: bundle.contextWindow } : {}),
-        ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
+        modelId,
         ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
         binding,
       });
+      // Mirrored onto the session record so the UI shows the locked model
+      // on a reopened session (GET /sessions -> modelId).
+      if (meta?.modelId !== modelId) mergeSessionRecord(STORE, id, { model_id: modelId }).catch(() => {});
     }
     const ns = (env as unknown as Record<string, DurableObjectNamespace>)[binding];
     const containerId = ns.idFromName(sandboxNameForSession(id)).toString();

@@ -110,11 +110,7 @@ async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown
         version: bundle.version,
         baseImage: bundle.baseImage,
         instructions: bundle.instructions,
-        ...(bundle.model ? { model: bundle.model } : {}),
-        ...(bundle.modelBaseUrl ? { modelBaseUrl: bundle.modelBaseUrl } : {}),
-        ...(typeof bundle.maxTokens === 'number' ? { maxTokens: bundle.maxTokens } : {}),
-        ...(typeof bundle.contextWindow === 'number' ? { contextWindow: bundle.contextWindow } : {}),
-        ...(bundle.openRouterRouting !== undefined ? { openRouterRouting: bundle.openRouterRouting } : {}),
+        ...(Array.isArray(bundle.models) ? { modelId: bundle.models[0] } : {}),
       },
     };
   } catch {

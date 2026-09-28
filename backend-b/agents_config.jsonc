@@ -1,0 +1,155 @@
+{
+  // Model whitelist shared by all agents. The KEY is the stable model_id that
+  // agent.jsonc `models` references and sessions persist; never rename one in use.
+  // provider: "openrouter" (key: LLM_API_KEY secret) | "openai" (key: OPENAI_API_KEY secret).
+  // An openai model must be an exact pi-ai catalog id (no limits/routing/efforts).
+  // Model ids resolve against Pi's catalog of that provider; dated snapshot slugs
+  // (e.g. -0731) reuse the undated base entry's metadata while the request keeps
+  // the dated id (resolveCatalogModel; incident 2026-08-12). A model NO catalog
+  // entry resolves for runs on a conservative placeholder (no reasoning flag,
+  // 128k window, 8k output cap — long single-pass writes truncate), so set
+  // max_tokens/context_window for it; drop them once pi-ai catalogs it.
+  // Parsed and validated at worker start (parseModelsConfig, core/src/models.js).
+  "models": {
+    "deepseek-v4.1-flash": {
+      "name": "DeepSeek V4.1 Flash",
+      "provider": "openrouter",
+      // deepseek-v4.1-flash (released 2026-09-10) is a catalog miss: neither the
+      // pinned pi-ai 0.83.0 nor the latest 0.85.1 catalog lists it, hence the
+      // explicit limits below. semantius-admin needs well over 300k output for
+      // single-shot blueprint spec writes. Placeholder side effects, checked 2026-09-19:
+      //  - reasoning: the entry says `reasoning: false`, so pi-ai sends no
+      //    `reasoning` param and uses the `system` role (right for DeepSeek). The
+      //    model still thinks: OpenRouter lists it default_enabled, effort
+      //    "high" — the same effort the old catalog entry requested. Thinking
+      //    blocks replay under the field they arrived in, regardless of the flag.
+      //  - cost: the placeholder's per-token rates are 0, but the billed total
+      //    still comes from OpenRouter's inline usage.cost (pi-ai patch); only
+      //    the per-direction split in traces reads 0.
+      "model": "deepseek/deepseek-v4.1-flash", // alternatives: "deepseek/deepseek-v4-flash-0731" (in catalog, 0.14/0.28 list rate), "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
+      // 384000 = DeepSeek first-party's output cap: OpenRouter routes only to
+      // hosts whose cap covers the request's max_tokens (docs: "if you set a
+      // max_tokens, OpenRouter will only route to providers that support a
+      // response of that length"), so 393216 would shut DeepSeek out. pi-ai
+      // shrinks the request as the context fills.
+      "max_tokens": 384000,
+      "context_window": 1048576,
+      // OpenRouter provider routing, forwarded verbatim as the request's `provider`
+      // object (every model turn + the title side call). Filters apply BEFORE the
+      // ranking; host facts measured 2026-09-19 against the 22 endpoints serving
+      // deepseek/deepseek-v4.1-flash (GET openrouter.ai/api/v1/models/<slug>/endpoints,
+      // public).
+      //  - sort "throughput" = the :nitro shortcut: rank hosts by tokens/s instead
+      //    of price. Turns OFF OpenRouter's price-based load balancing.
+      //  - max_price: USD per MILLION tokens, per direction. Only output is capped
+      //    (0.7); every host under it charges ≤0.22 input anyway. List rate is
+      //    0.15/0.60; the FP8 hosts other than DeepInfra run 0.28–0.38/1.13–1.50
+      //    and fall outside the cap. The model listing also carries weekday time-of-day overrides
+      //    (UTC 01–04 & 06–10) at 0.30/1.20 — a host billing that rate drops out
+      //    of the cap during those windows.
+      //  - quantizations: fp4 stays excluded (Relace, Sail Research). "unknown" is
+      //    REQUIRED here: under the cap the only disclosed-quant host is DeepInfra
+      //    (fp8, 131k output — skipped for our max_tokens), so without "unknown"
+      //    OpenRouter answers "No endpoints found". The undisclosed hosts include
+      //    DeepSeek first-party (V4 is FP8-native).
+      //  Eligible on a fresh session: DeepSeek (384k out), Alibaba (393k, 1M
+      //  context), Morph, Wafer, Fireworks (943k) — all 0.135–0.22 / 0.54–0.66.
+      //  Other fields (only/ignore, require_parameters, zdr, …) pass straight
+      //  through (https://openrouter.ai/docs/features/provider-routing).
+      "openrouter_routing": {
+        "sort": "throughput",
+        "max_price": { "completion": 0.6 },
+        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+      }
+    },
+    "glm-5.3-flash": {
+      "name": "GLM 5.3 Flash",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3-flash",
+      // Not in pi-ai 0.83.0's catalog. OpenRouter, checked 2026-09-28: list rate
+      // $0.15 / $0.50 per M tokens, max output 943717, context 1310720 on
+      // Cloudflare only ($1.00 output, outside the cap) and 1048576 on the rest,
+      // so context_window is the latter. max_tokens 131072 keeps every host with
+      // a 131k+ output cap routable, Z.AI first-party included; only 8 hosts
+      // (GMICloud, Inceptron, Fireworks, Friendli, DigitalOcean, Together,
+      // Parasail, Wafer) offer the full 943k.
+      // reasoning: mandatory, default effort "max", supported ["low","high","max"].
+      "max_tokens": 131072,
+      "context_window": 1048576,
+      // The OpenRouter efforts this model accepts. Without this field the entry is
+      // non-reasoning, pi-ai sends no `reasoning` param, and GLM thinks at its
+      // default "max" on every turn. With it, Flue's thinking level (default
+      // "medium") clamps to the nearest listed effort, here "high".
+      "reasoning_efforts": ["low", "high", "max"],
+      //  - max_price: USD per MILLION tokens, per direction. Output 0.5 = the list
+      //    rate, so it drops only the above-list hosts (Morph, NextBit, Sail
+      //    Research, Cloudflare). Input 0.5 drops Wafer (0.75); every other
+      //    eligible host charges 0.07–0.15 input.
+      //  - quantizations: same floor as DeepSeek; excludes the fp4/nvfp4 hosts
+      //    (InferenceNet, DeepInfra, Decart, OpenInference, Modal, Crusoe, CoreWeave).
+      "openrouter_routing": {
+        "max_price": { "prompt": 0.5, "completion": 0.5 },
+        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+      }
+    },
+    "gpt-6-luna": {
+      "name": "GPT-6 Luna",
+      "provider": "openrouter",
+      // Via OpenRouter, not OpenAI direct. Not in pi-ai 0.83.0's catalog; the
+      // placeholder's openrouter.ai compat detection still gives it what the
+      // catalog's openai/gpt-5.6-luna entry has: openrouter reasoning format,
+      // developer role for openai/* ids, encrypted reasoning_details replay.
+      // OpenRouter, checked 2026-09-28: context 1050000, max output 128000 on
+      // every host (OpenAI incl. flex/fast tiers, Azure, Bedrock), $0.10 / $0.50
+      // per M tokens. reasoning: optional (default on), default effort "medium",
+      // supported ["none","low","medium","high","xhigh","max"].
+      //  - BYOK: while the OpenRouter workspace holds an OpenAI provider key
+      //    (openrouter.ai/settings/integrations/openai), OpenRouter sends the
+      //    OpenAI-hosted requests through that key before its own capacity, and no
+      //    request field overrides it (OpenRouter BYOK docs). Such a turn reports
+      //    usage.is_byok: true and usage.cost 0, so traces show $0 and OpenAI
+      //    bills the key's account. Seen 2026-09-28.
+      "model": "openai/gpt-6-luna",
+      "max_tokens": 128000,
+      "context_window": 1050000,
+      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+      //  - max_price: USD per MILLION output tokens; 0.5 = the list rate. Keeps
+      //    OpenAI (0.5, flex tier 0.25) and Azure (0.5); drops Azure US/EU and
+      //    Bedrock (0.55) and the OpenAI fast tier (1.0). BYOK requests still
+      //    land on the standard tier (upstream cost = list rate, 2026-09-28).
+      "openrouter_routing": {
+        "max_price": { "completion": 0.5 }
+      }
+    },
+    "hy4": {
+      "name": "Tencent Hy4 Preview",
+      "provider": "openrouter",
+      // OpenRouter lists only the preview slug (no tencent/hy4 yet). Not in pi-ai
+      // 0.83.0's catalog. OpenRouter, checked 2026-09-28: context 1048576,
+      // $0.834 / $2.501 per M tokens, 4 hosts, all fp8. Output caps: Tencent and
+      // Novita 64000, DeepInfra 131072, SiliconFlow 262144 — max_tokens 64000
+      // keeps every host routable, Tencent first-party included.
+      // reasoning: optional (default on), default effort "high", supported
+      // ["high","low","none"].
+      "model": "tencent/hy4-preview",
+      "max_tokens": 64000,
+      "context_window": 1048576,
+      // Flue's default "medium" clamps to "high", Hy4's own default.
+      "reasoning_efforts": ["low", "high"]
+    },
+    "muse-spark-1.3-contributor": {
+      "name": "Muse Spark 1.3 Contributor",
+      "provider": "openrouter",
+      // Meta's cost-efficient "contributor" tier of Muse Spark 1.3 ($1.25 / $4.25
+      // for the standard tier). Not in pi-ai 0.83.0's catalog. OpenRouter,
+      // checked 2026-09-28: one host (Meta, quantization undisclosed), context
+      // 1048576, max output 943718, $0.10 / $0.20 per M tokens.
+      // reasoning: mandatory, default effort "medium", supported
+      // ["minimal","low","medium","high","xhigh","max"] (minimal has no Flue level).
+      "model": "meta/muse-spark-1.3-contributor",
+      "max_tokens": 943718,
+      "context_window": 1048576,
+      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
+    }
+  }
+}

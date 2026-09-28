@@ -17,14 +17,15 @@ import { promisify } from 'node:util';
 // Child processes that call back into the in-process echo server must run
 // async — a sync exec blocks the event loop and deadlocks the server.
 const execFile = promisify(execFileCb);
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createAgentBundleFromDir, scanAgentsDir } from '../core/src/node.js';
 import { provisionAgentSkills } from '../core/src/provision.js';
-import { normalizeModelSpecifier, validateAgentBundle } from '../core/src/agent.js';
+import { validateAgentBundle } from '../core/src/agent.js';
+import { parseModelsConfig, thinkingLevelMap } from '../core/src/models.js';
 import { BundleValidationError } from '../core/src/bundle.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -94,10 +95,54 @@ try {
     Array.isArray(bundle.proxyWhitelist) && bundle.proxyWhitelist.includes('postman-echo.com'),
   );
 
-  // 2. model prefix rule (decided): known provider as-is, else openrouter/
-  check('normalize: unqualified gets openrouter/ prefix', normalizeModelSpecifier('deepseek/deepseek-v4-flash') === 'openrouter/deepseek/deepseek-v4-flash');
-  check('normalize: openrouter/ kept as-is', normalizeModelSpecifier('openrouter/x/y') === 'openrouter/x/y');
-  check('normalize: custom/ kept as-is', normalizeModelSpecifier('custom/my-model') === 'custom/my-model');
+  // 2. model registry (backend-b/agents_config.jsonc) + agent `models`
+  const registryText = readFileSync(join(here, '..', 'backend-b', 'agents_config.jsonc'), 'utf-8');
+  const registry = parseModelsConfig(registryText);
+  check('registry: the shipped agents_config.jsonc parses', Object.keys(registry).length > 0);
+  check(
+    'registry: every shipped agent lists only registry ids',
+    ['hoth-trip-planner', 'semantius-admin'].every((a) =>
+      createAgentBundleFromDir(join(here, '..', 'agents', a)).models.every((m) => Object.hasOwn(registry, m)),
+    ),
+  );
+  const registryRejects = (entry) => {
+    try {
+      parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider: 'openrouter', model: 'a/b', ...entry } } }));
+      return false;
+    } catch (err) {
+      return err instanceof BundleValidationError;
+    }
+  };
+  check('registry: unknown provider rejected', registryRejects({ provider: 'anthropic' }));
+  check('registry: routing on an openai model rejected', registryRejects({ provider: 'openai', openrouter_routing: {} }));
+  check('registry: reasoning_efforts on an openai model rejected', registryRejects({ provider: 'openai', reasoning_efforts: ['low'] }));
+  check('registry: max_tokens on an openai model rejected', registryRejects({ provider: 'openai', max_tokens: 1000 }));
+  check('registry: unknown reasoning effort rejected', registryRejects({ reasoning_efforts: ['none'] }));
+  check('registry: a plain openrouter entry accepted', !registryRejects({}));
+  const agentRejects = (bundlePatch) => {
+    try {
+      validateAgentBundle({ ...createAgentBundleFromDir(agentDir), ...bundlePatch });
+      return false;
+    } catch (err) {
+      return err instanceof BundleValidationError;
+    }
+  };
+  check('agent: missing models rejected', agentRejects({ models: undefined }));
+  check('agent: empty models rejected', agentRejects({ models: [] }));
+  check('agent: duplicate model ids rejected', agentRejects({ models: ['hy4', 'hy4'] }));
+  // An unknown id is a DEPLOY-time 422 (PUT /agents/:name checks it against
+  // the registry the worker runs) — covered by the deploy step, not here.
+
+  // GLM 5.3 Flash (mandatory reasoning): its thinkingLevelMap must clamp Flue's
+  // default "medium" to "high" and never offer "off" — checked with the
+  // pi-ai backend-b actually runs.
+  {
+    const piAiDir = realpathSync(join(here, '..', 'backend-b', 'node_modules', '@earendil-works', 'pi-ai'));
+    const { clampThinkingLevel, getSupportedThinkingLevels } = await import(pathToFileURL(join(piAiDir, 'dist', 'models.js')));
+    const glm = { id: registry['glm-5.3-flash'].model, reasoning: true, thinkingLevelMap: thinkingLevelMap(registry['glm-5.3-flash'].reasoningEfforts) };
+    check('GLM 5.3 Flash: medium clamps to high', clampThinkingLevel(glm, 'medium') === 'high', clampThinkingLevel(glm, 'medium'));
+    check('GLM 5.3 Flash: off is never offered', !getSupportedThinkingLevels(glm).includes('off'), getSupportedThinkingLevels(glm).join());
+  }
 
   // 3. agents/ scanner + JSONC config: comments/trailing commas parse; a
   //    folder without agent.jsonc is skipped, not an error.
@@ -105,14 +150,14 @@ try {
   mkdirSync(jsoncAgent, { recursive: true });
   writeFileSync(
     join(jsoncAgent, 'agent.jsonc'),
-    '{\n  // line comment\n  "instructions": "Scratch agent.", /* block */\n  "model": "deepseek/deepseek-v4-flash",\n}\n',
+    '{\n  // line comment\n  "instructions": "Scratch agent.", /* block */\n  "models": ["hy4"],\n}\n',
     'utf-8',
   );
   mkdirSync(join(scratchAgents, 'no-config'), { recursive: true });
   const scan = scanAgentsDir(scratchAgents);
   check('scanAgentsDir: agent.jsonc folders found, others skipped', scan.agents.join() === 'commented-agent' && scan.skipped.join() === 'no-config');
   const jsoncBundle = createAgentBundleFromDir(jsoncAgent);
-  check('JSONC config parsed (comments + trailing comma) & model normalized', jsoncBundle.model === 'openrouter/deepseek/deepseek-v4-flash');
+  check('JSONC config parsed (comments + trailing comma) & models carried', jsoncBundle.models?.join() === 'hy4');
 
   // 4. hostile bundles rejected before reconstruction (design §8/§13)
   for (const [label, mutate] of [
@@ -124,7 +169,7 @@ try {
     ['bad skill name', (b) => ({ ...b, skills: { ...b.skills, 'Bad Name': { 'SKILL.md': 'x' } } })],
     ['too many skills', (b) => ({ ...b, skills: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`s${i}`, { 'SKILL.md': 'x' }])) })],
     ['missing instructions', (b) => ({ ...b, instructions: '' })],
-    ['bad modelBaseUrl', (b) => ({ ...b, modelBaseUrl: 'ftp://nope' })],
+    ['models not an array', (b) => ({ ...b, models: 'hy4' })],
     ['proxyWhitelist not an array', (b) => ({ ...b, proxyWhitelist: '*.semantius.ai' })],
     // `evil/*` is a LEGAL entry now (a URL pattern) — what stays illegal is an
     // entry that could never be one glob: whitespace, control characters, an
