@@ -580,7 +580,8 @@ export function AgentChat({
                   {meta?.models && meta.models.length > 1 && modelId ? (
                     <span title={messages.length > 0 ? 'Model is fixed for this conversation' : undefined}>
                       <PromptInputSelect value={modelId} onValueChange={onModelChange} disabled={messages.length > 0}>
-                        <PromptInputSelectTrigger>
+                        {/* Once fixed, drop the chevron — nothing to open. */}
+                        <PromptInputSelectTrigger className="disabled:[&>svg]:hidden">
                           <PromptInputSelectValue />
                         </PromptInputSelectTrigger>
                         <PromptInputSelectContent>
