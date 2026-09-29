@@ -312,7 +312,10 @@ export function Main({ id }: AgentProps) {
   const [meta, setMeta] = usePersistentState<AgentMeta | null>('agentMeta', null);
   const active = meta ?? metaFromSeed(seed);
   const specifier = modelSpecifierFor(active?.modelId);
-  useModel(specifier);
+  // A registry `thinking_level` pins the effort; unset, Flue's default
+  // "medium" applies (clamped to the entry's reasoning_efforts by pi-ai).
+  const thinkingLevel = active?.modelId ? MODELS[active.modelId]?.thinkingLevel : undefined;
+  useModel(specifier, thinkingLevel ? { thinkingLevel } : undefined);
 
   // session_state aggregation + response metadata. Flue v2 dropped
   // per-message usage/model from the conversation read projection; response

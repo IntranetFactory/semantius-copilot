@@ -12,7 +12,7 @@
  * overrides a provider's transport/auth.
  */
 import { env } from 'cloudflare:workers';
-import { setProvider } from '@flue/runtime';
+import { setProvider, type ThinkingLevel } from '@flue/runtime';
 import { createProvider, type OpenRouterRouting } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
@@ -87,6 +87,8 @@ type ModelEntry = {
   contextWindow?: number;
   openRouterRouting?: Record<string, unknown>;
   reasoningEfforts?: string[];
+  /** Fixed effort for every turn, one of reasoningEfforts (parseModelsConfig). */
+  thinkingLevel?: ThinkingLevel;
 };
 
 /** The model registry: model id -> entry. Validated once here, at module init. */

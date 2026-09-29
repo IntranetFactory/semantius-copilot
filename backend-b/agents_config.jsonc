@@ -9,6 +9,9 @@
   // entry resolves for runs on a conservative placeholder (no reasoning flag,
   // 128k window, 8k output cap — long single-pass writes truncate), so set
   // max_tokens/context_window for it; drop them once pi-ai catalogs it.
+  // "base": "<model id>" makes an entry a variant: it starts as a copy of that
+  // entry and its own keys replace the base's (top-level only, one level deep,
+  // own "name" required) — e.g. gpt-6-luna-xhigh changes only name + thinking_level.
   // Parsed and validated at worker start (parseModelsConfig, core/src/models.js).
   "models": {
     "deepseek-v4.1-flash": {
@@ -113,6 +116,9 @@
       "max_tokens": 128000,
       "context_window": 1050000,
       "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+      // The effort every turn runs at (must be one of reasoning_efforts). "medium"
+      // = Luna's own default; gpt-6-luna-xhigh below is the same model at xhigh.
+      "thinking_level": "medium",
       //  - max_price: USD per MILLION output tokens; 0.5 = the list rate. Keeps
       //    OpenAI (0.5, flex tier 0.25) and Azure (0.5); drops Azure US/EU and
       //    Bedrock (0.55) and the OpenAI fast tier (1.0). BYOK requests still
@@ -120,6 +126,14 @@
       "openrouter_routing": {
         "max_price": { "completion": 0.5 }
       }
+    },
+    "gpt-6-luna-xhigh": {
+      // gpt-6-luna at thinking effort "xhigh" (one below "max"); everything else
+      // comes from the base entry. Reasoning tokens bill as output, so turns
+      // cost more and take longer than at "medium".
+      "base": "gpt-6-luna",
+      "name": "GPT-6 Luna (Extra High)",
+      "thinking_level": "xhigh"
     },
     "hy4": {
       "name": "Tencent Hy4 Preview",

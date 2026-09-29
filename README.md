@@ -687,7 +687,15 @@ Three pieces:
   `openrouter_routing` (next subsection) and `reasoning_efforts` (the OpenRouter efforts a
   mandatory-reasoning model accepts, e.g. GLM 5.3's `["low","high","max"]`: the entry
   becomes reasoning-capable and Flue's default `medium` clamps to the nearest listed
-  effort, `high`, sent as `reasoning: {effort}`; "none" is never sent). An openai entry
+  effort, `high`, sent as `reasoning: {effort}`; "none" is never sent) and `thinking_level`
+  (one of its `reasoning_efforts`, rejected otherwise: the effort every turn runs at,
+  passed as `useModel(…, { thinkingLevel })` in `src/agents/main.ts`; e.g. `gpt-6-luna` at
+  `medium` and `gpt-6-luna-xhigh`, "GPT-6 Luna (High)", the same upstream model at
+  `xhigh`). The session-title side call ignores it and uses the lowest listed effort. Any
+  entry may set `base` (another model id) to be a variant: it starts as a copy of that
+  entry and its own keys replace the base's — top-level only (an own `openrouter_routing`
+  replaces the whole object), one level deep, and it must set its own `name`, so
+  `gpt-6-luna-xhigh` is just `base` + `name` + `thinking_level`. An openai entry
   takes no overrides (rejected at parse) and must be an exact Pi catalog id (anything else
   gets a deploy-time `modelWarning`, and its turns fail). Registry edits take effect on the
   next backend-b deploy, for live sessions too — they are not part of the agent bundle.
