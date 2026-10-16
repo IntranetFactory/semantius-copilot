@@ -275,8 +275,8 @@ function parseMermaid(block: string[]): { nodes: MNode[]; edges: MEdge[]; dotted
 
 /**
  * The §3 optional `**Key types:**` sub-block, parsed BY HEADER NAME:
- * | data_object | key type | key prefix | based on |  (blueprint_version 3.1; the legacy
- * 3-column form without `based on` parses too). `-` cells read as empty.
+ * | data_object | key type | key prefix | based on |  (the 3-column form without
+ * `based on` parses too). `-` cells read as empty.
  */
 function parseBlueprintKeyTypes(s3: string[]): { id: string; type: string; prefix: string; basedOn: string }[] | null {
   const start = s3.findIndex((l) => /^\*\*Key types:\*\*/.test(l.trim()));
@@ -308,9 +308,7 @@ function checkBlueprint(text: string, lines: string[]): Issue[] {
 
   // Registry from §3: identifier -> { display, role }
   const s3 = topSection(lines, 3);
-  // §3 catalog columns are parsed BY HEADER NAME, not by fixed offset. blueprint_version 3.0
-  // inserted `catalog code` (after data_object) and `entity_type` (before write tier), so the
-  // old row[1]/row[2]/row[3]/row[4] offsets no longer locate data_object/singular/plural/role.
+  // §3 catalog columns are parsed BY HEADER NAME, not by fixed offset.
   // Header row shape: | # | data_object | catalog code | singular | plural | role | mastered in | mastered label | necessity | entity_type | write tier | notes |
   // The fallbacks (1/2/3/4) keep an older 2.x header (no canonical/entity_type) parsing identically.
   const s3rows = tableRows(s3);
@@ -356,7 +354,7 @@ function checkBlueprint(text: string, lines: string[]): Issue[] {
   // intentionally NOT parsed here. `topSection(lines, 2)` already stops at its `## ` heading,
   // so §2 stays correctly bounded, and `topSection(lines, 3)` finds §3 by its own number. Do
   // not "fix" the parser to treat this section as unexpected — it is allowed by design.
-  // §2 entity summary (v2 format): | Name (plural) | data_object | Description |
+  // §2 entity summary: | Name (plural) | data_object | Description |
   // Verify §2.data_object ⟺ §3.data_object (identifier) AND §2.Name ⟺ §3 plural label.
   const s2 = topSection(lines, 2);
   const s2ids = new Set<string>();
@@ -495,6 +493,135 @@ function checkBlueprint(text: string, lines: string[]): Issue[] {
     }
   }
 
+  issues.push(...checkAccessScope(text, lines));
+
+  return issues;
+}
+
+const ACCESS_SCOPES = new Set(["custom", "basic", "advanced", "gated", "raci"]);
+
+/** Table rows of a block, each paired with its table's header (lower-cased, backticks stripped). */
+function rowsWithHeaders(block: string[]): { header: string[]; row: string[] }[] {
+  const out: { header: string[]; row: string[] }[] = [];
+  let header: string[] | null = null;
+  for (const line of block) {
+    if (!isTableRow(line)) { header = null; continue; }
+    if (isSeparatorRow(line)) continue;
+    const row = cells(line);
+    if (header === null) { header = row.map((c) => c.replace(/[`*]/g, "").trim().toLowerCase()); continue; }
+    out.push({ header, row });
+  }
+  return out;
+}
+
+/**
+ * Frontmatter `access_scope` (the access level the architect's permission step decides)
+ * against the body: the value is in the closed set; `gated` / `raci` need a process gate;
+ * `raci` needs the RACI realization table; `workflow-gate (lifecycle)` rows only under `raci`.
+ * A missing key is a warning (catalog sources never carry it).
+ */
+function checkAccessScope(text: string, lines: string[]): Issue[] {
+  const issues: Issue[] = [];
+  const scope = frontmatter(text).get("access_scope");
+  if (scope === null) {
+    issues.push({ check: "access_scope", detail: "frontmatter has no `access_scope`; run the architect's permission step", warn: true });
+    return issues;
+  }
+  if (!ACCESS_SCOPES.has(scope)) {
+    issues.push({ check: "access_scope", detail: `frontmatter \`access_scope: ${scope}\` must be one of custom | basic | advanced | gated | raci` });
+    return issues;
+  }
+  const at = (header: string[], row: string[], name: string) => {
+    const i = header.indexOf(name);
+    return i >= 0 ? (row[i] ?? "").replace(/`/g, "").trim() : "";
+  };
+  let stateGates = 0;
+  for (const { header, row } of rowsWithHeaders(topSection(lines, 7))) {
+    if (header.includes("requires_permission?") && at(header, row, "requires_permission?").includes("✓")) stateGates++;
+  }
+  const s8 = topSection(lines, 8);
+  let createRules = 0;
+  for (const { header, row } of rowsWithHeaders(subSection(s8, /^###\s+8\.2\b/))) {
+    if (header.includes("source flag") && at(header, row, "source flag") === "create") createRules++;
+  }
+  const lifecycleRows: string[] = [];
+  for (const { header, row } of rowsWithHeaders(subSection(s8, /^###\s+8\.1\b/))) {
+    if (header.includes("tier") && at(header, row, "tier").startsWith("workflow-gate (lifecycle)")) {
+      lifecycleRows.push(at(header, row, "permission"));
+    }
+  }
+  if ((scope === "gated" || scope === "raci") && stateGates + createRules + lifecycleRows.length === 0) {
+    // A warning only: a live module that lost its last gate keeps its level (it is never lowered).
+    issues.push({ check: "access_scope", detail: `\`access_scope: ${scope}\` has no process gate (a §7 row with requires_permission? ✓ or a §8.2 \`create\` rule); allowed only when the live module already has this access level`, warn: true });
+  }
+  if (scope === "raci") {
+    const start = lines.findIndex((l) => /^\*\*RACI realization:\*\*/.test(l.trim()));
+    const raciTable: string[] = [];
+    if (start >= 0) {
+      for (const l of lines.slice(start + 1)) {
+        if (isTableRow(l)) raciTable.push(l);
+        else if (raciTable.length || l.trim() !== "") break; // the table ended, or something else came first
+      }
+    }
+    const raciRows = rowsWithHeaders(raciTable);
+    if (raciRows.length === 0) {
+      issues.push({ check: "access_scope", detail: "`access_scope: raci` needs the §9.1 **RACI realization:** table (a confirmed RACI matrix), but it is missing or empty" });
+    } else {
+      // The RACI rule: every process has exactly one accountable row, and every process gate
+      // is in the `grant gates [...]` list of exactly one accountable row.
+      const accountable = new Map<string, number>();
+      const held = new Map<string, number>();
+      for (const { header, row } of raciRows) {
+        const proc = at(header, row, "process_key");
+        if (!accountable.has(proc)) accountable.set(proc, 0);
+        if (at(header, row, "raci") !== "accountable") continue;
+        accountable.set(proc, accountable.get(proc)! + 1);
+        const grants = at(header, row, "realization").match(/grant gates \[([^\]]*)\]/);
+        for (const code of grants ? grants[1].split(",").map((c) => c.trim()).filter(Boolean) : []) {
+          held.set(code, (held.get(code) ?? 0) + 1);
+        }
+      }
+      for (const [proc, n] of accountable) {
+        if (n !== 1) issues.push({ check: "access_scope", detail: `RACI rule: process \`${proc}\` has ${n} accountable rows; under raci every process has exactly one` });
+      }
+      for (const code of lifecycleRows) {
+        const n = held.get(code) ?? 0;
+        if (n !== 1) issues.push({ check: "access_scope", detail: `RACI rule: process gate \`${code}\` is in the \`grant gates [...]\` list of ${n} accountable rows; under raci exactly one accountable row holds it` });
+      }
+    }
+  } else if (lifecycleRows.length > 0) {
+    issues.push({ check: "access_scope", detail: `§8.1 carries \`workflow-gate (lifecycle)\` rows (${lifecycleRows.join(", ")}) but \`access_scope: ${scope}\` allows them only under raci` });
+  }
+  // §7 derived gate follows the access level: the gate's own §8.1 code under raci, `<slug>:admin` otherwise.
+  const slug = frontmatter(text).get("system_slug") ?? "";
+  for (const { header, row } of rowsWithHeaders(topSection(lines, 7))) {
+    if (!header.includes("requires_permission?") || !at(header, row, "requires_permission?").includes("✓")) continue;
+    const gate = at(header, row, "derived gate");
+    if (gate.startsWith("⚠")) continue;
+    const ok = scope === "raci" ? lifecycleRows.includes(gate) : gate === `${slug}:admin`;
+    if (!ok) issues.push({ check: "access_scope", detail: `§7 derived gate \`${gate}\` does not follow \`access_scope: ${scope}\` (expected ${scope === "raci" ? "a §8.1 workflow-gate (lifecycle) code" : `${slug}:admin`})` });
+  }
+  if (scope === "raci") {
+    // Under raci a process gate is never rolled up under admin: `-` in §8.1 and no §9.1 admin → gate row.
+    for (const { header, row } of rowsWithHeaders(subSection(s8, /^###\s+8\.1\b/))) {
+      if (at(header, row, "tier").startsWith("workflow-gate (lifecycle)") && at(header, row, "included in :admin?") !== "-") {
+        issues.push({ check: "access_scope", detail: `§8.1 \`${at(header, row, "permission")}\` is a process gate: under raci its \`included in :admin?\` is -` });
+      }
+    }
+    const h = lines.findIndex((l) => /^\*\*Permission hierarchy:\*\*/.test(l.trim()));
+    const hTable: string[] = [];
+    if (h >= 0) {
+      for (const l of lines.slice(h + 1)) {
+        if (isTableRow(l)) hTable.push(l);
+        else if (hTable.length || (l.trim() !== "" && !l.trim().startsWith("_"))) break;
+      }
+    }
+    for (const { header, row } of rowsWithHeaders(hTable)) {
+      if (at(header, row, "permission") === `${slug}:admin` && lifecycleRows.includes(at(header, row, "includes"))) {
+        issues.push({ check: "access_scope", detail: `§9.1 rolls \`${at(header, row, "includes")}\` up under \`${slug}:admin\`; under raci a process gate has no hierarchy row` });
+      }
+    }
+  }
   return issues;
 }
 
@@ -555,26 +682,106 @@ function parseEnumNotes(notes: string): { values: string[] | null; def: string |
   return { values, def: dm ? dm[1] : null };
 }
 
+/** The property keys of a §5 entry, in the order they must appear. */
+const ENUM_PROP_KEYS = ["label", "color", "icon", "description"] as const;
+type EnumHintKey = Exclude<(typeof ENUM_PROP_KEYS)[number], "label">;
+type SpecEnumEntry = { value: string; label: string | null; hints: Partial<Record<EnumHintKey, string>> };
+const ENUM_PROP_FORM = 'property sub-bullets go directly under their entry, indented exactly two spaces, in this order and each at most once: "  - label: text", "  - color: `#rrggbb`", "  - icon: `lucide-name`", "  - description: text"';
+
 /**
- * §5 blocks: ``### `table.field` `` then one bullet per entry, `` - `value` `` or
- * `` - `value` - Label `` (a label only when the value is a code). Returns value lists and
- * any line that breaks the bullet grammar.
+ * §5 blocks: ``### `table.field` `` then one bullet per entry, `` - `value` ``, followed by
+ * property sub-bullets (`  - label: …`, `  - color: `…``, `  - icon: `…``, `  - description: …`,
+ * in that order). Returns value lists, the parsed entries, and every line that breaks the grammar.
  */
-function parseSpecEnums(lines: string[]): { blocks: Map<string, string[]>; bad: string[] } {
+function parseSpecEnums(lines: string[]): { blocks: Map<string, string[]>; entries: Map<string, SpecEnumEntry[]>; bad: string[] } {
   const blocks = new Map<string, string[]>();
+  const entries = new Map<string, SpecEnumEntry[]>();
   const bad: string[] = [];
   let cur: string[] | null = null;
+  let curEntries: SpecEnumEntry[] = [];
+  let last: SpecEnumEntry | null = null;
+  let lastHint = -1;
   let key = "";
+  const flagUnlabeled = () => {
+    if (last && last.label === null && Object.keys(last.hints).length) {
+      bad.push(`\`${key}\`: entry \`${last.value}\` has hints but no label; add "  - label: <Label>" as its first sub-bullet`);
+    }
+  };
   for (const l of topSection(lines, 5)) {
     const h = l.match(/^###\s+(?:5\.\d+\s+)?`([^`]+)`/);
-    if (h) { key = h[1].trim(); cur = []; blocks.set(key, cur); continue; }
-    if (/^#/.test(l)) { cur = null; continue; }
+    if (h) { flagUnlabeled(); key = h[1].trim(); cur = []; curEntries = []; blocks.set(key, cur); entries.set(key, curEntries); last = null; continue; }
+    if (/^#/.test(l)) { flagUnlabeled(); cur = null; last = null; continue; }
     if (!cur || !l.trim()) continue;
+    // A value bullet; the old inline-label form `- `value` - Label` is an error but keeps its value,
+    // so the Notes ⟺ §5 comparison does not report it a second time.
     const b = l.match(/^- `([^`]+)`(?: - (\S.*))?$/);
-    if (b) cur.push(b[1]);
-    else bad.push(`\`${key}\`: "${l.trim()}"`);
+    if (b) {
+      flagUnlabeled();
+      if (b[2]) bad.push(`\`${key}\`: "${l.trim()}" puts the label on the value bullet; write "- \`${b[1]}\`" with "  - label: ${b[2].trim()}" under it`);
+      last = { value: b[1], label: b[2] ? b[2].trim() : null, hints: {} };
+      lastHint = b[2] ? 0 : -1;
+      cur.push(b[1]);
+      curEntries.push(last);
+      continue;
+    }
+    const s = l.match(/^ {2}- ([a-z_]+): (\S.*)$/);
+    if (!s || !last) {
+      bad.push(`\`${key}\`: "${l.trim()}" must be "- \`value\`" or a property sub-bullet (${ENUM_PROP_FORM})`);
+      continue;
+    }
+    const hk = s[1], idx = (ENUM_PROP_KEYS as readonly string[]).indexOf(hk);
+    if (idx < 0) { bad.push(`\`${key}\`: entry \`${last.value}\` has unknown property \`${hk}\` (${ENUM_PROP_FORM})`); continue; }
+    if (hk === "label" ? last.label !== null : hk in last.hints) { bad.push(`\`${key}\`: entry \`${last.value}\` repeats \`${hk}\` (${ENUM_PROP_FORM})`); continue; }
+    if (idx < lastHint) { bad.push(`\`${key}\`: entry \`${last.value}\` has \`${hk}\` out of order (${ENUM_PROP_FORM})`); continue; }
+    lastHint = idx;
+    let v = s[2].trim();
+    if (hk === "color" || hk === "icon") {
+      const bt = v.match(/^`([^`]+)`$/);
+      if (!bt) { bad.push(`\`${key}\`: entry \`${last.value}\` ${hk} must be backticked: "  - ${hk}: \`${v.replace(/`/g, "")}\`"`); continue; }
+      v = bt[1];
+    }
+    if (hk === "label") last.label = v;
+    else last.hints[hk as EnumHintKey] = v;
   }
-  return { blocks, bad };
+  flagUnlabeled();
+  return { blocks, entries, bad };
+}
+
+/** Warnings on §5 labels and hints: the drafting rules of the analyst's stage-4-fields.md. */
+function enumHintWarnings(entries: Map<string, SpecEnumEntry[]>): Issue[] {
+  const out: Issue[] = [];
+  for (const [key, list] of entries) {
+    const unlabeled = list.filter((e) => e.label === null).map((e) => `\`${e.value}\``);
+    if (unlabeled.length) {
+      out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: ${unlabeled.join(", ")} carry no label; every entry gets one ("  - label: <Label>")` });
+    }
+    const uncolored = list.filter((e) => !e.hints.color).map((e) => `\`${e.value}\``);
+    if (uncolored.length) {
+      out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: ${uncolored.join(", ")} carry no color; every entry gets one (data-modeling.md "Enum colors")` });
+    }
+    const byColor = new Map<string, string[]>();
+    for (const e of list) if (e.hints.color) byColor.set(e.hints.color, [...(byColor.get(e.hints.color) || []), `\`${e.value}\``]);
+    for (const [c, vals] of byColor) {
+      if (vals.length > 1) out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: ${vals.join(", ")} share color \`${c}\`; no two entries of an enum share a color (data-modeling.md "Enum colors")` });
+    }
+    for (const e of list) {
+      if (e.hints.icon && !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(e.hints.icon) && !/^https?:\/\/\S+$/.test(e.hints.icon)) {
+        out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: entry \`${e.value}\` icon \`${e.hints.icon}\` is not a Lucide icon name in kebab-case (e.g. \`circle-check\`) or an icon URL` });
+      }
+      if (e.hints.color && !/^#[0-9a-f]{6}$/.test(e.hints.color)) {
+        out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: entry \`${e.value}\` color \`${e.hints.color}\` is not lowercase hex \`#rrggbb\`` });
+      }
+      const d = e.hints.description, lab = e.label;
+      if (d && lab && d.toLowerCase().startsWith(lab.toLowerCase())) {
+        out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: entry \`${e.value}\` description starts with its label; a description says what the label doesn't, or is left off` });
+      }
+    }
+    const described = list.filter((e) => e.hints.description).length;
+    if (described * 2 > list.length) {
+      out.push({ check: "§5 enum hints", warn: true, detail: `\`${key}\`: ${described} of ${list.length} entries carry a description; a description is the exception, only where the label is not self-describing` });
+    }
+  }
+  return out;
 }
 
 /** The `_process_gates_` table under §9 (living-mode RACI plan): the entity of each gate. */
@@ -614,7 +821,7 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
   }
 
   // §3 sub-section headings: ### 3.N `table` - Singular (canonical separator is the
-  // plain hyphen; the en/em-dash alternatives are accepted for pre-5.4 files only).
+  // plain hyphen; en/em-dash are tolerated).
   const s3singular = new Map<string, string>();
   for (const l of lines) {
     const m = l.match(/^###\s+3\.\d+\s+`([^`]+)`\s*[—–-]\s*(.+?)\s*$/);
@@ -673,8 +880,8 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
     }
   }
 
-  // §5 enum headings: unnumbered ``### `table.field` `` (template v5.4+) or the legacy
-  // numbered ``### 5.N `table.field` ``. Scoped to the §5 body so a backticked
+  // §5 enum headings: unnumbered ``### `table.field` `` (a numbered
+  // ``### 5.N `table.field` `` is tolerated). Scoped to the §5 body so a backticked
   // `x.y` heading elsewhere is never mistaken for an enum block.
   for (const l of topSection(lines, 5)) {
     const m = l.match(/^###\s+(?:5\.\d+\s+)?`([^.`]+)\.[^`]+`/);
@@ -769,10 +976,11 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
     }
   }
 
-  // Enumerations: §5 bullet grammar; the Notes `enum_values:` equal the §5 values; `default:` is a value.
+  // Enumerations: §5 bullet and hint grammar; the Notes `enum_values:` equal the §5 values; `default:` is a value.
   {
-    const { blocks, bad } = parseSpecEnums(lines);
-    for (const b of bad) issues.push({ check: "§5 enum entries", detail: `${b} must be "- \`value\`" or "- \`value\` - Label"` });
+    const { blocks, entries, bad } = parseSpecEnums(lines);
+    for (const b of bad) issues.push({ check: "§5 enum entries", detail: b });
+    issues.push(...enumHintWarnings(entries));
     for (const [id, e] of ents) {
       for (const f of e.fields) {
         if (f.format !== "enum") continue;
@@ -1030,14 +1238,21 @@ function checkSpecMermaidAgainstSource(lines: string[], text: string, fm: Return
 
 // ---------- driver ----------
 
+// The frontmatter `version` is the file format version; a file outside the current format (3.x) is refused.
+function checkVersion(fm: ReturnType<typeof frontmatter>): Issue[] {
+  const v = fm.get("version");
+  if (v !== null && /^3\.\d+$/.test(v)) return [];
+  return [{ check: "version", detail: `not in the current file format (\`version\` must be \`3.x\`, found \`${v ?? "(none)"}\`)` }];
+}
+
 function checkFile(path: string): { issues: Issue[]; artifact: string } {
   // Normalize BOM + CRLF/CR so the checker is line-ending agnostic (Windows files are often CRLF).
   const text = readFileSync(path, "utf8").replace(/^﻿/, "").replace(/\r\n?/g, "\n");
   const lines = text.split("\n");
   const fm = frontmatter(text);
   const artifact = fm.get("artifact") ?? "(unknown)";
-  if (artifact === "semantic-blueprint") return { issues: checkBlueprint(text, lines), artifact };
-  if (artifact === "semantic-spec") return { issues: checkSpec(text, lines, fm), artifact };
+  if (artifact === "semantic-blueprint") return { issues: [...checkVersion(fm), ...checkBlueprint(text, lines)], artifact };
+  if (artifact === "semantic-spec") return { issues: [...checkVersion(fm), ...checkSpec(text, lines, fm)], artifact };
   return { issues: [{ check: "artifact", detail: `unrecognized or missing \`artifact:\` (got "${artifact}"); expected semantic-blueprint or semantic-spec` }], artifact };
 }
 

@@ -2,7 +2,7 @@
 
 ### Stage 1: Capture the system
 
-> **🛑 The deliverable is always a semantic-blueprint markdown file.** Once this skill is invoked, your job is to produce a `*-semantic-blueprint.md` file, full stop. Do **not** propose alternatives to modeling: no off-the-shelf SaaS products, no "just use a spreadsheet / Markdown checklist", no "keep it simple and skip the model". The user has already decided they want a data model; treat that as settled and move on to Stage 1. Product names appear in this flow only as **reference points**: in the Stage 1 guidance aside and interview below (how well-known products model this domain), and in Stage 2's naming options (whose names to mirror). They are never a recommendation to buy that product instead of building. If the user explicitly asks whether they should use a SaaS product instead, answer briefly and then return to the modeling track, evaluating external products is a different skill.
+> **🛑 The deliverable is always a semantic-blueprint markdown file.** Once this skill is invoked, your job is to produce a `*-semantic-blueprint.md` file, full stop. Do **not** propose alternatives to modeling: no off-the-shelf SaaS products, no "just use a spreadsheet / Markdown checklist", no "keep it simple and skip the model". The user has already decided they want a data model; treat that as settled and move on to Stage 1. Product names appear in this flow only as **reference points**: in the Stage 1 guidance aside and interview below (how well-known products model this domain), and in Stage 2's design options (whose records and names to follow). They are never a recommendation to buy that product instead of building. If the user explicitly asks whether they should use a SaaS product instead, answer briefly and then return to the modeling track, evaluating external products is a different skill.
 
 Ask the user what system they want to model. Two shapes are common:
 
@@ -11,31 +11,39 @@ Ask the user what system they want to model. Two shapes are common:
 
 **Bring what you know about similar products.**
 
-> **Interaction level** (the `.interaction_level` switch, read at Step 0; `../../semantius-admin/references/interaction-level.md`). **Advanced mode:** if the category is unclear (e.g., the user says "a system for my coaches"), ask one clarifying question to narrow it down; otherwise proceed. No guidance aside and no interview. **Standard mode (the default):** run the known-product check, then give the guidance aside (a product is known) or run the discovery interview (none is known); the interview's "Closest to" question replaces the one clarifying question. **Yolo mode:** find a baseline and run the yolo interview (the last part of this stage).
+> **Interaction flow** (the `.interaction_flow` switch, read at Step 0; `../../semantius-admin/references/interaction-flow.md`). **Guided flow (the default):** think of the products that fit, then give the guidance aside (a product fits) or run the discovery interview first (none fits). **Expert flow:** as in guided flow, plus one step: apply the four-object test before deciding whether a product fits. **Fast flow:** find a baseline and run the fast-flow interview (the last part of this stage). In every flow, an unclear category (e.g., the user says "a system for my coaches") is settled by the interview's "Closest to" question.
 
-**Known-product check (the four-object test).** Think of the 1 to 3 well-known products (point solutions or cloud platforms) whose data model best fits the request. A product counts as **known** only when you can name at least four of its headline objects, spelled the way the product spells them. Keep the list of products that passed: Stage 2 uses it for its vendor options. Why an objective test: a product whose objects you can't name is a product whose model you would be guessing, and a guessed model presented as "how X does it" misleads the user and ends up in the design.
+**Products that fit.** Think of the 3 to 4 well-known products (point solutions or cloud platforms) whose data model best fits the request. Keep the list: Stage 2 uses it for its vendor options.
 
-**Known: the guidance aside (standard mode).** No question. Three to five lines, before Stage 2:
+**The four-object test (expert flow; also Stage 2's typed-answer step).** A product stays on the list only when you can name at least four of its headline objects, spelled the way the product spells them. Run it before deciding whether a product fits: in expert flow, a product fits only when it passed. Why an objective test: a product whose objects you can't name is a product whose model you would be guessing, and a guessed model presented as "how X does it" misleads the user and ends up in the design. Guided and fast flow keep every product on the list. Stage 2's typed-answer step runs the same test, in guided and expert flow, on a product the user types in (`stage-2-naming.md`).
 
-- One line per product that passed the test: the modeling pattern it is known for, for example *"Salesforce keeps Leads apart from Contacts until they qualify"*. Describe how each models the domain; never rank them or suggest buying one.
-- Two to four best-practice points for this domain's data model.
+**None fits: the discovery interview (guided and expert flow).** Only when no product fits the request. One `AskUserQuestion` call, fired alone in its response, with the questions from the templates below that the request leaves open:
 
-These points are the assumptions Stage 3 applies ("Make assumptions explicit", SKILL.md → Tone and collaboration style). The user can push back on any of them at the Stage 3 entity list.
+- "Closest to": the nearest products. In expert flow, only products that passed the four-object test; when none passed, it is left out.
+- "Users": left out when the request says who uses the system.
+- "Replaces": left out when the request says what the system replaces.
 
-**Not known: the discovery interview (standard mode).** One `AskUserQuestion` call, fired alone in its response, with 1 to 4 questions from the templates below, asking only what the request leaves open. It is a standalone question (no `Q:` task), and nothing is written to `$CUSTOMIZATIONS_FILE`: the answers describe this system, not a standing rule for the org. At most one follow-up, in prose. Then give the guidance aside built from the answers (the nearest products that pass the test, if any, plus the best-practice points). If the answers point to a known category, continue as if a product were known (Stage 2 may offer vendor naming); otherwise Stage 2's no-incumbents skip applies.
+When nothing is open, ask nothing. It is a standalone question (no `Q:` task), and nothing is written to `$CUSTOMIZATIONS_FILE`: the answers describe this system, not a standing rule for the org. At most one follow-up, in prose; it also settles an unclear category when "Closest to" was left out. Then give the guidance aside built from the answers. If the answers point to a known category, continue as if a product fit (Stage 2 may offer a vendor's design); otherwise Stage 2's no-incumbents skip applies.
+
+**The guidance aside (guided and expert flow).** Before Stage 2: right away when a product fits, after the interview when none fits. Three to eight lines total:
+
+- One line per product on the list (the user's "Closest to" pick first): the modeling pattern it is known for, for example *"Salesforce keeps Leads apart from Contacts until they qualify"*. Describe how each models the domain; never rank them or suggest buying one. With no product on the list, leave these lines out.
+- Two to four best-practice points for this domain's data model: the modern design that Stage 2 offers. Introduce them with one line, e.g. *"The modern design follows these:"*, then one point per bullet line. Never compress multiple points into a single line or sentence; each point gets its own line so the user can push back on them individually.
+
+These points are the assumptions Stage 3 applies when the user picks the modern design ("Make assumptions explicit", SKILL.md → Tone and collaboration style); a vendor's design follows that vendor's structure, and a structure the user typed and confirmed in Stage 2 follows theirs. The aside asks no question; the user can push back on any point at the Stage 3 entity list.
 
 **Interview templates.** Every question holds 2 to 4 options (SKILL.md → AskUserQuestion mechanics); the tool adds its own free-text slot, so never list "Other".
 
 | Question | Header | Options |
 |---|---|---|
-| `"Which of these is closest to what you need?"` | `"Closest to"` | 1 to 3 products or kinds of system that fit, each described with 2 or 3 of its headline objects, plus always `"None of these, design from scratch"` (description `"I'll design it from what you tell me, with clear, modern names."`) |
-| `"Who will use it?"` | `"Users"` | `"One small team"`, `"Several teams or departments"`, `"Also people outside the company"` (description `"Customers or partners use it too."`) |
-| `"What does this replace? If it's a product, type its name."` | `"Replaces"` | `"Spreadsheets or email"`, `"Nothing yet, it's new"`, `"A tool we built ourselves"` |
-| `"Which of these do you need from the start?"` (yolo only, `multiSelect: true`) | `"Must-haves"` | 2 to 4 concepts that products in this space commonly track, drawn from the baseline's other objects, each described in one line plus `" Skip if you don't need this."`. Filter through `.optionals_decided` first and shape it by count, exactly like Stage 3's "Also track" (a saved verdict is applied silently and not offered; one concept left is asked as a 2-option single-select with "None, skip it"). |
+| `"Which of these is closest to what you need?"` | `"Closest to"` | Up to 3 well-known products that best match the requirements provided, each described with 2 or 3 of its headline objects, plus always `"None of these, design from scratch"` (description `"I'll design it from what you tell me, with clear, modern names."`) |
+| `"Who will use it?"` (guided and expert flow) | `"Users"` | `"One small team"`, `"Several teams or departments"`, `"Also people outside the company"` (description `"Customers or partners use it too."`) |
+| `"What does this replace? If it's a product, type its name."` (guided and expert flow) | `"Replaces"` | `"Spreadsheets or email"`, `"Nothing yet, it's new"`, `"A tool we built ourselves"` |
+| `"Which of these do you need from the start?"` (fast flow only, `multiSelect: true`) | `"Must-haves"` | 2 to 4 concepts that products in this space commonly track, drawn from the baseline's other objects, each described in one line plus `" Skip if you don't need this."`. Filter through `.optionals_decided` first and shape it by count, exactly like Stage 3's "Also track" (a saved verdict is applied silently and not offered; one concept left is asked as a 2-option single-select with "None, skip it"). |
 
 **Where the answers go.**
 
-- The scope line below, and the Stage 3 "Picked for you" line.
+- The scope line below.
 - Stage 2's vendor ranking: a product the user typed into "Replaces" is ranked first.
 - Stage 11 personas: the "Users" answer names who acts.
 - The §1 Overview: what is in and out of scope.
@@ -46,15 +54,15 @@ Identify the **domain category** (CRM, ITSM/helpdesk, HRIS, LMS, ERP, PIM, CMS, 
 
 **Capture `system_name` and a rough scope line.**
 
-> **Interaction level** (the `.interaction_level` switch, read at Step 0). **Advanced mode off:** take `system_name` and the scope line from the request (name the system after its category when the request gives no name, e.g. "Service Desk" for a helpdesk), ask nothing, and state what you picked in the Stage 3 "Picked for you" line. **Advanced mode on:** elicit them as below. **Yolo mode:** as with advanced mode off, and the name and scope are shown in the go-ahead summary instead of a "Picked for you" line.
+> **Interaction flow** (the `.interaction_flow` switch, read at Step 0). **Guided flow:** take `system_name` and the scope line from the request (name the system after its category when the request gives no name, e.g. "Service Desk" for a helpdesk) and ask nothing. **Expert flow:** elicit them as below, after the Stage 1 guidance. **Fast flow:** as in guided flow; the go-ahead summary does not show them either.
 
-`system_name` is the display name (and the module name); with advanced mode on, elicit it here. Then capture a **one-line scope statement** in the user's own words (e.g. *"everything a small team needs to hire, in one lightweight package"*). This line is working input, not marketing copy: it constrains the Stage 3 entity proposal (lean scope → lean entity list) and seeds the `tagline` draft in Stage 13. Do NOT elicit the polished catalog-surface strings here — `tagline`, `description`, `module_kind`, and `license` are settled in Stage 13 ("Finalize the catalog surface"), once the entity list they describe actually exists. Asking the user to write buyer-facing copy about a system whose contents haven't been decided yet produces copy that has to be rewritten.
+`system_name` is the display name (and the module name); in expert flow, elicit it here. Then capture a **one-line scope statement** in the user's own words (e.g. *"everything a small team needs to hire, in one lightweight package"*). This line is working input, not marketing copy: it constrains the Stage 3 entity proposal (lean scope → lean entity list) and seeds the `tagline` draft in Stage 13. Do NOT elicit the polished catalog-surface strings here — `tagline`, `description`, `module_kind`, and `license` are settled in Stage 13 ("Finalize the catalog surface"), once the entity list they describe actually exists. Asking the user to write buyer-facing copy about a system whose contents haven't been decided yet produces copy that has to be rewritten.
 
 The §1 Overview remains a **single analyst-voice block**: terse, scope-explicit (what's IN, what's OUT, upgrade path). Do NOT split §1 into sub-sections; do NOT mix marketing-voice into §1. The marketing surfaces live in frontmatter (`tagline`, `description`).
 
-**Yolo mode: the baseline and the interview** (a yolo run only, before the go-ahead; `../../semantius-admin/references/yolo-mode.md`, section 3).
+**Fast flow: the baseline and the interview** (a fast run only, before the go-ahead; `../../semantius-admin/references/fast-flow.md`, section 3).
 
-1. **Baseline.** Pick 1 to 3 products that fit the request and pass the four-object test. With none, there is no baseline: run the interview, then design from first principles with modern names.
-2. **Interview.** Zero to four questions from the templates above, only what the request leaves open. Leave out "Closest to" when the user named a product (that product is the baseline). Add "Must-haves": it replaces Stage 3's "Also track", and its answers are saved to `.optionals_decided` exactly as "Also track" saves them (the user made these choices). When nothing is open, ask nothing. At most one follow-up, in prose.
+1. **Baseline.** Pick 3 to 4 products that fit the request. With none, there is no baseline: design from first principles with modern names.
+2. **Interview.** Zero to two questions from the templates above: "Closest to", left out when the user named a product (that product is the baseline), and "Must-haves". "Users" and "Replaces" are not asked: take what the request says, otherwise assume one small team and nothing replaced. "Must-haves" replaces Stage 3's "Also track", and its answers are saved to `.optionals_decided` exactly as "Also track" saves them (the user made these choices). When nothing is open, ask nothing. At most one follow-up, in prose.
 3. **The baseline is settled** by the user's "Closest to" pick, or the product they named, or your single best fit. "None of these" means no baseline.
 4. **No aside now.** The best-practice points go into the go-ahead summary, so the user reads them once, next to the design.

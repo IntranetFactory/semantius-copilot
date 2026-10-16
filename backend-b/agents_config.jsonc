@@ -65,6 +65,20 @@
         "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
       }
     },
+    "deepseek-v4.1-flash-max": {
+      // deepseek-v4.1-flash at thinking effort "max" (its default is "high").
+      // OpenRouter, checked 2026-09-30: reasoning optional, supported
+      // ["low","high","max"]. reasoning_efforts lives on this variant only, so
+      // the base keeps sending no `reasoning` param. Through openrouter.ai the
+      // only change is `reasoning: {effort: "max"}` on every turn: the system
+      // role and replay stay as on the base (pi-ai's DeepSeek-specific compat
+      // keys off deepseek.com, not the model id); the title side call sends
+      // effort "low" instead of reasoning off.
+      "base": "deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash (Max)",
+      "reasoning_efforts": ["low", "high", "max"],
+      "thinking_level": "max"
+    },
     "glm-5.3-flash": {
       "name": "GLM 5.3 Flash",
       "provider": "openrouter",
@@ -164,6 +178,14 @@
       "max_tokens": 943718,
       "context_window": 1048576,
       "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "muse-spark-1.3-contributor-xhigh": {
+      // muse-spark-1.3-contributor at thinking effort "xhigh" (its default is
+      // "medium"). Reasoning tokens bill as output, so turns cost more and take
+      // longer.
+      "base": "muse-spark-1.3-contributor",
+      "name": "Muse Spark 1.3 Contributor (Extra High)",
+      "thinking_level": "xhigh"
     }
   }
 }

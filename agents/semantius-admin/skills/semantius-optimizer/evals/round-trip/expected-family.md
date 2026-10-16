@@ -1,6 +1,6 @@
 ---
 artifact: semantic-spec
-version: "5.8"
+version: "3.1"
 system_name: Partners
 tagline: "Partners and their timeline"
 icon_name: handshake
@@ -73,6 +73,7 @@ flowchart LR
 |---|---|---|---|---|---|
 | `subject` | `string` | yes | Subject | | `label_column` |
 | `business_partner_id` | `reference` | yes | Business Partner | | → `business_partners` (N:1), relationship_label: "logs" |
+| `priority` | `enum` | no | Priority | | enum_values: `low`, `medium`, `high`, `critical` |
 
 **Relationships**
 
@@ -182,9 +183,29 @@ flowchart LR
 
 ## 5. Enumerations
 
+### `activities.priority`
+- `low`
+  - label: Low
+  - color: `#64748b`
+  - icon: `arrow-down`
+- `medium`
+  - label: Medium
+  - color: `#3b82f6`
+  - icon: `minus`
+- `high`
+  - label: High
+  - color: `#f59e0b`
+  - icon: `arrow-up`
+- `critical`
+  - label: Critical
+  - color: `#ef4444`
+  - icon: `triangle-alert`
+  - description: Blocks a customer go-live; handle the same day
+
 ### `customers.customer_tier`
 - `standard`
-- `kam` - Key account
+- `kam`
+  - label: Key account
 
 ## 6. Cross-model link suggestions
 

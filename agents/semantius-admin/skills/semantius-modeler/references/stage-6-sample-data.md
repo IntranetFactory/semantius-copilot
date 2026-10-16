@@ -21,7 +21,7 @@ _Read this when the workflow reaches Stage 6. The stage map is in SKILL.md._
 
 After verification, ask the sample-data question on its own (this is a gate, not a footer; see the consent gate above):
 
-> **Yolo mode, after the go-ahead:** asked in every mode, yolo included ([yolo-mode.md](../../semantius-admin/references/yolo-mode.md), section 4.4): it is the one question a yolo run asks, at the end, and it waits for the answer; the consent rules above are unchanged, and the go-ahead is never consent to sample data.
+> **Fast flow, after the go-ahead:** asked in every flow, fast flow included ([fast-flow.md](../../semantius-admin/references/fast-flow.md), section 4.4): it is the one question a fast run asks, at the end, and it waits for the answer; the consent rules above are unchanged, and the go-ahead is never consent to sample data.
 
 > The `<System Name>` model is live in Semantius ✅
 >
@@ -281,9 +281,11 @@ bun run <cwd>/.tmp_deploy/seed_<short>.ts
 - **Never upsert** (`seedEnsureMany` never does; `on_conflict` / `merge-duplicates` fail with `42P10`). A changed row is a `patchById(table, id, body)` after the insert.
 - **Tally each level from its own inserts** (`counts.emails = emails.length`), and list every level in `eligibleTables`.
 
-**Enum safety, read the model, not your intuition:** Before writing any enum value into a seed record, look it up in the model's §5 enum tables for *that specific field*. Seeds always write the **value** (the backticked token), never the label after ` - ` on a labeled bullet. Different fields on different entities may look similar but have different allowed values (e.g., `campaigns.type` includes `"Direct Mail"` but `leads.lead_source` does not, using the wrong one will fail with a check constraint error). Never guess or copy enum values across fields.
+**Enum safety, read the model, not your intuition:** Before writing any enum value into a seed record, look it up in the model's §5 enum tables for *that specific field*. Seeds always write the **value** (the backticked token), never a property sub-bullet under it (`label:`, `color:`, `icon:`, `description:`). Different fields on different entities may look similar but have different allowed values (e.g., `campaigns.type` includes `"Direct Mail"` but `leads.lead_source` does not, using the wrong one will fail with a check constraint error). Never guess or copy enum values across fields.
 
-**Nullability safety, `""` not `null` for required text:** Most formats are `NOT NULL` — only `reference`, `date`, and `date-time` accept `null` (data-modeling.md → *`default_value`*). For a non-nullable TEXT column (`string`, `text`, `multiline`, `html`, `code`) that a row should leave empty, send an **empty string `""`**, never `null`: a `null` fails with a NOT NULL violation and aborts the run before `assertSeedCounts`. Only omit a field or pass `null` when its format is `reference` / `date` / `date-time` *and* it is not `input_type: "required"`.
+**Nullability safety, `""` not `null` for required text:** Most formats are `NOT NULL` — only `reference`, `date`, and `date-time` accept `null` (data-modeling.md → *`default_value`*). For a non-nullable TEXT column (`string`, `text`, `multiline`, `html`, `code`, `color`, `icon`) that a row should leave empty, send an **empty string `""`**, never `null`: a `null` fails with a NOT NULL violation and aborts the run before `assertSeedCounts`. Only omit a field or pass `null` when its format is `reference` / `date` / `date-time` *and* it is not `input_type: "required"`.
+
+**Display formats:** a `rating` value is an integer from 0 to 5 (from 1 to 5 when the field is required; `0` means not rated); a `color` value is a lowercase hex color (`#3b82f6`); an `icon` value is a Lucide icon name in kebab-case (`circle-check`) that passes `bun "<skill-folder>/../use-semantius/references/lucide-icons.ts" check <name…>`, never a made-up name.
 
 **String safety:** Inside the Bun script, `JSON.stringify` handles every character correctly — Unicode punctuation, apostrophes, backticks, multi-line strings, all pass through to `semantius` unchanged. This is exactly why the seed script is a `.ts` file and not a `.sh` file: a pure-shell seeder using `echo '{...}'` or `$PG '...'` would still break on apostrophes and embedded shell metacharacters, and "fixing" that by stripping characters from seed data is the same correctness bug as truncating descriptions. Generate realistic seed strings (including Unicode where the domain has it); do not pre-strip.
 

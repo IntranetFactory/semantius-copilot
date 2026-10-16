@@ -17,10 +17,10 @@ semantius call crud read_module --single '{"filters": "module_slug=eq.<system_sl
 ```
 
 - **Exit 0 (exists)**: capture the `id` **and the `version` / `version_date`** (used by the 2a.1 drift gate below), treat as re-reconcile. The spec will write `update_module` to refresh name / description if they drifted; entities below diff against live.
-- **Exit 1 (missing)**: plan a `create_module` with `module_name = <system_name>`, `module_slug = <system_slug>`, `description = <tagline>`, `icon_name = <icon_name>`, `domain_code = <domain_code>`, `module_type = "domain"`.
+- **Exit 1 (missing)**: plan a `create_module` with `module_name = <system_name>`, `module_slug = <system_slug>`, `description = <tagline>`, `icon_name = <icon_name>` (a Lucide icon name or an icon URL; `use-semantius/references/data-modeling.md` → "Icons are Lucide icons"), `domain_code = <domain_code>`, `module_type = "domain"`.
 - **Exit 2 (duplicate)**: hard catalog bug — surface and stop.
 
-> **Module schema note.** Modules carry `module_name` (display, e.g. `CRM`), `module_slug` (URL handle, e.g. `crm`), `description` (≤40-char selector chip, sourced from frontmatter `tagline`), `icon_name`, the top-level columns `domain_code` and `access_scope`, `module_type` (`"domain"` default), and the platform-maintained `version` (monotonic integer, bumped on any schema change to the module's owned entities / fields / enum values / permissions) + `version_date`. The §1 Overview prose does NOT go on the module record.
+> **Module schema note.** Modules carry `module_name` (display, e.g. `CRM`), `module_slug` (URL handle, e.g. `crm`), `description` (≤40-char selector chip, sourced from frontmatter `tagline`), `icon_name` (a Lucide icon name or an icon URL; `use-semantius/references/data-modeling.md` → "Icons are Lucide icons"), the top-level columns `domain_code` and `access_scope` (`custom` / `basic` / `advanced` / `gated` / `raci`), `module_type` (`"domain"` default), and the platform-maintained `version` (monotonic integer, bumped on any schema change to the module's owned entities / fields / enum values / permissions) + `version_date`. The §1 Overview prose does NOT go on the module record.
 
 ### 2a.1. Version-match gate: has prod drifted since the last deploy?
 
@@ -169,9 +169,36 @@ Note for each: owning module, singular/plural labels, description, label_column,
 
 For every row in blueprint §5.3a (outbound from this scope's masters / contributors) and every implied FK from §6.2 / §6.3 handoffs:
 
-- **Exact match** (one entity has `table_name == <target>`): mark ✨ **Proposed**. Auto-generate FK column name as `<target_singular>_id`. If that name already exists on `from_table`, mark 🛑 **Field-name collision**.
-- **No match**: mark 💤 **Dormant**. Skip in the plan; record in the verification summary.
-- **Multiple plausible matches** (exact + near-name candidates): mark 🟡 **Ambiguous**. Stage 3 asks the user.
+Find the candidates for each target in two passes:
+
+1. **Name pass** (over the 2c index): live entities whose `table_name == <target>` (exact), or whose name the 2e heuristic flags as near `<target>`.
+2. **Concept pass** (always runs, so a differently named table holding the same thing is found). The search matches exact word forms only (`wfts(simple)` does not stem and knows no language), so the script finds nothing you don't spell out. For each target, do all three steps:
+
+   a. **Collect the words.** All of:
+      - the target's own words (`service_vendors` → `vendor`);
+      - its synonyms: the blueprint's §4 aliases for it, plus common business synonyms (`vendor` ↔ `supplier`, `provider`; `customer` ↔ `client`, `account`; `employee` ↔ `staff`, `worker`, `personnel`; `product` ↔ `item`, `article`, `material`);
+      - the concrete nouns of the §6 row's own description (what the link is for).
+
+      Leave out generic words (`record`, `data`, `type`, `entry`, `details`): they match almost every entity.
+
+   b. **Expand every word from a.** Add its singular and plural. Then read the languages of the labels in the 2c index; for each language other than English that appears there, add the word's translation in that language, singular and plural (German labels → `lieferant`, `lieferanten`).
+
+   c. **Run the script once with the full list** from a and b:
+
+   ```bash
+   bun "<skill-folder>/references/find-entities.ts" --keywords vendor,vendors,supplier,suppliers,provider,providers --exclude <blueprint §3 table names, comma-separated>
+   ```
+
+   The script searches exactly those words in `entities.search_vector` with `wfts(simple)`, leaves out built-ins and the excluded tables, and returns the hits with each keyword's match location (`label`, `table_name`, `description`), label matches first. Exit 1 (a live read failed) stops the stage like any other failed catalog read.
+
+   `search_vector` covers the table name (split on `_`), labels and description, not field names, so hits include entities that only mention the term (a `work_orders` described as "the technician or vendor doing the work" matches `vendor`). Judge each hit: keep it as a candidate when it holds the same kind of record as the target (`suppliers`, or a `business_partners` described as "companies we buy from or sell to", is a candidate for `vendors`; `work_orders` and `vendor_scorecards` are not). Record the script's match location as the candidate's match reason; 3e marks a label or table-name match "(Recommended)". When unsure, keep it: a false positive costs the user one click, a miss leaves the link silently dormant.
+
+Then resolve:
+
+- **Exact match, nothing else** (one entity has `table_name == <target>` and no other candidate): mark ✨ **Proposed**. Auto-generate FK column name as `<target_singular>_id`. If that name already exists on `from_table`, mark 🛑 **Field-name collision**.
+- **Concept-only match** (no exact match, one or more name-pass or concept-pass candidates): mark 🟡 **Ambiguous**, with each candidate's match reason (`label: supplier`, `description: vendor`). Stage 3e asks the user; a candidate found under a different name is never wired silently.
+- **Multiple plausible matches** (exact + any other candidate): mark 🟡 **Ambiguous**. Stage 3 asks the user.
+- **No match** (both passes empty): mark 💤 **Dormant**. Skip in the plan; record in the verification summary.
 - **Unresolved source**: if `from_table` is neither in this blueprint's §3 nor in the catalog, mark 🛑 (route back to architect to fix the blueprint).
 
 **Presence-conditional resolution for §5.3b context edges:**
@@ -184,7 +211,7 @@ For every row in blueprint §5.3a (outbound from this scope's masters / contribu
 
 For blueprint §6.2 (outbound) handoff rows with `event_category = lifecycle` (and §6.3 inbound rows whose `payload` names an entity this blueprint owns), validate that `to_state` exists in the `payload` entity's §7 lifecycle table (which becomes that entity's `workflow_state` enum values in the spec). Mismatch → 🛑 (the architect should have caught it via pre-save verification; if it reached the analyst the blueprint is corrupt). Inbound payloads normally belong to the source module and are not checked.
 
-Every blueprint §6.2 / §6.3 handoff row is carried verbatim into the spec's §6 `### Outbound handoffs` / `### Inbound handoffs` sub-sections (nine blueprint columns; under both access scopes; an empty sub-section keeps its heading with `_(none: …)_`). For rows whose source entity is `embedded_master` and whose catalog owner module is absent in the live catalog: this is a **boundary-crossing handoff** (per Writing Convention 10 on the architect); the source module is set to the entity's current owning module, and the deployer's Stage 4m wires the handoff from that module when the platform exposes a trigger registry.
+Every blueprint §6.2 / §6.3 handoff row is carried verbatim into the spec's §6 `### Outbound handoffs` / `### Inbound handoffs` sub-sections (nine blueprint columns; at every access level; an empty sub-section keeps its heading with `_(none: …)_`). For rows whose source entity is `embedded_master` and whose catalog owner module is absent in the live catalog: this is a **boundary-crossing handoff** (per Writing Convention 10 on the architect); the source module is set to the entity's current owning module, and the deployer's Stage 4m wires the handoff from that module when the platform exposes a trigger registry.
 
 Build a `link_proposals` list for Stage 3.
 
@@ -249,11 +276,11 @@ adopted_entity_index[<entity_slug>] = {
 The index is the truth-source for Stage 3f drift detection. **Compare EVERY captured property (entity-level and field-level) live-vs-intended by name — the categories below are exhaustive, not illustrative. No property is exempt from the scan.** The first five categories have specialized handling (rename migration, live-record data risk, JsonLogic cascade); **every remaining scalar property falls to the generic resolver 3f.6, and every JsonLogic block to the rule-block resolver 3f.7** — so `description`, `default_value`, `precision`/`scale`, `title`, `unique_value`, `reference_delete_mode`, `view_permission`, the UI columns, and every `select_rule` / `computed_fields` / `validation_rules` / `input_type_rule` are validated, never silently kept. Compare:
 
 - **Field-name drift candidate**: the spec declares `<spec_field>` that doesn't exist live, AND there exists a live field with similar semantic role (same format family, same general purpose). Common case: the lifecycle state field — the spec always names it `workflow_state` (fixed; see Stage 4), but a live entity may hold the same state under `status` / `state` / `lifecycle_state`. Both are conceptually "where in the lifecycle this record is." Flag as a 🛑 for Stage 3f resolution; because the deployer requires the canonical `workflow_state` name, that resolution is a rename/migration to `workflow_state`, not "keep the live name" (see 3f.1).
-- **Enum-value drift**: a live field's `enum_values` and the blueprint's `enum_values` differ in either direction (live has values the blueprint doesn't, or blueprint introduces values that re-classify live values). **Compare by value**: a live entry may be a `{"value", "label"}` pair, so take its `value`; entries that differ only in their label are a cosmetic 3f.6 difference, not enum-value drift. When `live_distinct_enum_values_in_use` includes any value the blueprint *drops*, this is high-risk drift. Flag for Stage 3f.
-- **Format drift**: blueprint declares a different `format` than live (e.g., live `text`, blueprint `string`). Cross-primitive changes (text → integer, text → date) are 🔴 blockers; same-primitive variations (text ↔ string ↔ multiline, integer ↔ int32 ↔ int64) are 🟡 warnings the modeler can auto-resolve.
+- **Enum-value drift**: a live field's `enum_values` and the blueprint's `enum_values` differ in either direction (live has values the blueprint doesn't, or blueprint introduces values that re-classify live values). **Compare by value**: a live entry may be a `{"value", "label"}` object (with an optional `description`, `color` and `icon`), so take its `value`; entries that differ only in their label or hints are a cosmetic 3f.6 difference, not enum-value drift; a hint the spec does not state is kept from live on deploy (modeler `mergeEnumEntries`). When `live_distinct_enum_values_in_use` includes any value the blueprint *drops*, this is high-risk drift. Flag for Stage 3f.
+- **Format drift**: blueprint declares a different `format` than live (e.g., live `text`, blueprint `string`). Cross-primitive changes (text → integer, text → date) are 🔴 blockers; same-primitive variations (formats with the same PostgreSQL type in the format → type table of `use-semantius/references/data-modeling.md` (`default_value` section)) are 🟡 warnings the modeler can auto-resolve.
 - **Required-ness drift**: blueprint requires a field the live entity has as optional, or vice versa. Often safe; flag for Stage 3f when the change would leave live records violating the new constraint.
 - **Permission-tier drift**: blueprint's intended `edit_permission` differs from live `edit_permission`. Tier downgrades (admin → manage) need explicit confirmation; tier upgrades (manage → admin) are usually safe but still surfaced. The blueprint's intended tier is consumed from the §3 `write tier` column verbatim; the analyst does not re-derive it via its own Stage 9 classification (Stage 9 is validation-only).
-- **Any-other-scalar-property drift (the catch-all — this is what makes the scan exhaustive)**: the live value differs from the intended value on ANY remaining property not covered above — `description`, `title`, `default_value`, `precision`, `scale`, `unique_value`, `reference_delete_mode`, `view_permission`, `label_column`, `label_parent`, `order_column`, `id_column`, `id_type`, `id_prefix`, `edit_mode`, `cube_mode`, `icon_url`, `width`, `searchable` (entity- or field-level as applicable). Route every one to **Stage 3f.6** (`id_type` lands in its locked tier: it cannot be applied to an existing entity). None is auto-kept.
+- **Any-other-scalar-property drift (the catch-all — this is what makes the scan exhaustive)**: the live value differs from the intended value on ANY remaining property not covered above — `description`, `title`, `default_value`, `precision`, `scale`, `unique_value`, `reference_delete_mode`, `view_permission`, `label_column`, `label_parent`, `order_column`, `id_column`, `id_type`, `id_prefix`, `edit_mode`, `cube_mode`, `icon_url`, `width`, `searchable`, enum entry labels and hints (`description`, `color`, `icon`) (entity- or field-level as applicable). Route every one to **Stage 3f.6** (`id_type` lands in its locked tier: it cannot be applied to an existing entity). None is auto-kept.
 - **Rule-block drift**: a JsonLogic block differs, matched by natural key — `select_rule` (per entity), `computed_fields[]` (by `.name`), `validation_rules[]` (by `.name`), `input_type_rule` (per field). A body / message / `title` / `description` difference, OR a rule present on only one side, is drift. Compare the blocks structurally (object keys sorted recursively, array order kept): the platform stores them as `jsonb`, which reorders object keys, so a key-order difference alone is never drift. Route to **Stage 3f.7**.
 
 Any drift found here drives Stage 3f. No drift = Stage 3f is silent. **Completeness is mandatory:** every property in the index is compared, and every divergence gets a 3f decision or a §7.1 blocker — the Stage 11 pre-save gate ("adopted-entity drift resolution complete") fails the save if any detected drift is left unresolved.

@@ -690,7 +690,7 @@ Three pieces:
   effort, `high`, sent as `reasoning: {effort}`; "none" is never sent) and `thinking_level`
   (one of its `reasoning_efforts`, rejected otherwise: the effort every turn runs at,
   passed as `useModel(…, { thinkingLevel })` in `src/agents/main.ts`; e.g. `gpt-6-luna` at
-  `medium` and `gpt-6-luna-xhigh`, "GPT-6 Luna (High)", the same upstream model at
+  `medium` and `gpt-6-luna-xhigh`, "GPT-6 Luna (Extra High)", the same upstream model at
   `xhigh`). The session-title side call ignores it and uses the lowest listed effort. Any
   entry may set `base` (another model id) to be a variant: it starts as a copy of that
   entry and its own keys replace the base's — top-level only (an own `openrouter_routing`

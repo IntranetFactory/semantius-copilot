@@ -59,6 +59,34 @@ bun run .tmp_deploy/deploy_<slug>.ts
 import { read1, readMany, readIn, write, ensure, ensureMany, ensureEntitiesByLevel, ensurePairs, updateEntity, runDeploy } from "./deploy-lib";
 import { scaffoldModule, verifyScaffold, preflightSchemas } from "./scaffold-lib";
 
+// enum_values: merge the spec's §5 entries with the live entries BY VALUE before diffing or sending (diffField
+// uses it for every existing enum field). The spec's order, values, labels and stated hints win; a hint the spec
+// does not state (a description / color / icon set in the UI) is kept from live, and the live label is kept when
+// a kept hint needs the object form. Live values the spec omits are not here: removals are Stage 2 / 3's job.
+type EnumEntry = string | { value: string; label: string; description?: string; color?: string; icon?: string };
+const HINTS = ["color", "icon", "description"] as const;
+function mergeEnumEntries(spec: EnumEntry[], live: EnumEntry[] = []): EnumEntry[] {
+  const liveBy = new Map(live.map((e) => [typeof e === "string" ? e : e.value, e]));
+  return spec.map((s) => {
+    const sv: any = typeof s === "string" ? { value: s } : s;
+    const l = liveBy.get(sv.value);
+    const lo: any = l && typeof l === "object" ? l : undefined;
+    const out: any = { value: sv.value };
+    if (sv.label) out.label = sv.label;
+    for (const k of HINTS) { const v = sv[k] ?? lo?.[k]; if (v) out[k] = v; }
+    if (!out.label && HINTS.some((k) => out[k])) out.label = lo?.label;   // the object form needs a label
+    return out.label ? out : sv.value;
+  });
+}
+// Compare entries key by key, never as JSON strings: jsonb reorders object keys on read-back.
+function sameEnumEntries(a: EnumEntry[], b: EnumEntry[] = []): boolean {
+  const norm = (e: EnumEntry): any => (typeof e === "string" ? { value: e } : e);
+  return a.length === b.length && a.every((x, i) => {
+    const p = norm(x), q = norm(b[i]);
+    return ["value", "label", ...HINTS].every((k) => (p[k] ?? "") === (q[k] ?? ""));
+  });
+}
+
 runDeploy(async () => {
   // 0. Preflight the tools THIS script hand-authors (scaffoldModule preflights its own). Fails loud on a
   //    stale field name (e.g. `name` vs `role_name`) BEFORE any write. List EVERY key your payloads send so
@@ -80,20 +108,21 @@ runDeploy(async () => {
   // 1. Baseline module scaffold — module (+ provenance) + permissions + hierarchy + roles + the six
   //    module-record references, all idempotent. Replaces hand-rolling §2a-scaffold steps 1-5 (where orphan roles, null
   //    module FKs, and missing provenance kept creeping in). Pass parsed §8.1 baseline descriptions,
-  //    §9.1 role slugs, and the Stage-2.5 scope; "basic" auto-skips the admin tier:
+  //    §9.1 role slugs, and the spec's access_scope; "basic" auto-skips the admin tier, "custom" writes only the module's provenance:
   const cfg = {
     module: { module_slug: "<slug>", module_name: "<System Name>", description: "<tagline>",
               catalog_module_code: "<code>", domain_code: "<DOMAIN>", icon_name: "<icon>",
               // home_page / logo_color: pass ONLY when the frontmatter carries them (both optional).
-              // A provided logo_color is written verbatim; omit it to let the cosmetic fallback (step 2) fill an empty live value.
+              // A provided logo_color (lowercase hex, quotes stripped by Stage 1) is written verbatim; omit it to let the
+              // cosmetic fallback (step 2) fill an empty live value. icon_name is a Lucide icon name or an icon URL.
               // home_page: "<frontmatter home_page>", logo_color: "<frontmatter logo_color>",
               settings: { module_kind: "<kind>", naming_mode: "<mode>", catalog_snapshot: "<iso>" } },
-    scope: "full" as const,   // "basic" | "full"
-    permissions: { read: "<§8.1 read desc>", manage: "<§8.1 manage desc>" /*, admin: "<desc>" when full */ },
+    scope: "raci" as const,   // the spec's access_scope: "custom" | "basic" | "advanced" | "gated" | "raci"
+    permissions: { read: "<§8.1 read desc>", manage: "<§8.1 manage desc>" /*, admin: "<desc>" when §8.1 declares <slug>:admin */ },
     roles: {
       viewer:  { slug: "<§9.1 viewer slug>",  role_name: "<…>", description: "<…>" },
       manager: { slug: "<§9.1 manager slug>", role_name: "<…>", description: "<…>" },
-      // admin: { … } only when the module has an admin tier AND scope is "full"
+      // admin: { … } only when the module has an admin tier AND scope is not "basic" or "custom"
     },
   };
   const { moduleId, permissionNames, roleIds } = await scaffoldModule(cfg);
@@ -131,7 +160,9 @@ runDeploy(async () => {
     await ensureMany("read_field", "field_name", (f) => f.field_name, "create_field", missing, `table_name=eq.${t}`);
     for (const f of fieldRows[t]) {
       const l = liveBy.get(f.field_name); if (!l) continue;
-      const patch = diffField(f, l);                                   // the 4d property list
+      const patch = diffField(f, l);                                   // the 4d property list; for enum_values:
+      //   const merged = mergeEnumEntries(f.enum_values, l.enum_values);
+      //   if (!sameEnumEntries(merged, l.enum_values)) patch.enum_values = merged;
       if (Object.keys(patch).length) await write("update_field", { id: `${t}.${f.field_name}`, data: patch });
     }
   }
@@ -199,7 +230,7 @@ Reserve `catch` for one deliberate, narrow case: a single retry of a known-trans
 4. **Never print success over a partial deploy** — the success line is reachable only on a clean resolve, and even then the "model is live" line waits for Stage 5.
 5. **Provenance on every create** — module per the 4a checklist, entity per the 4c checklist, and `catalog_field_code` (the spec `field_name`) on every `create_field` item per 4d.
 6. **Fields and entities are diffed, not skipped** when they already exist (4d).
-7. **Use `scaffoldModule()` for the baseline scaffold** — it builds the module, permissions, hierarchy, roles, and (the step most often hand-dropped) the six module-record references + `access_scope` in one idempotent call, and self-preflights its field names. Hand-rolling §2a-scaffold steps 1-5 is what produced orphan roles (`origin: "user"`, null `module_id`) and a `user:read` module header across past deploys. Stage 5 still verifies the result.
+7. **Use `scaffoldModule()` for the baseline scaffold** — it builds the module, permissions, hierarchy, roles, and (the step most often hand-dropped) the six module-record references + `access_scope` (under `custom`: only the module's provenance, no references or `access_scope`) in one idempotent call, and self-preflights its field names. Hand-rolling §2a-scaffold steps 1-5 is what produced orphan roles (`origin: "user"`, null `module_id`) and a `user:read` module header across past deploys. Stage 5 still verifies the result.
 8. **End with `verifyScaffold(cfg)`** — the mechanized self-audit re-reads live and asserts the scaffold, and **throws on drift so a failed audit halts the deploy exactly like a failed write**. This is what makes "finished" contingent on the scaffold actually being correct, instead of a Stage 5 spot-check that gets skipped. (It is a mechanical check; it does not catch "built the wrong thing" — that needs an independent reviewer.)
 9. **Batch every set of records of one kind, and create every entity before any field.** All entities of the spec go out in ONE `create_entity` call (`ensureEntitiesByLevel`; one call per level, bases first, when the spec has `is_a` / `has_a` entities), all of an entity's fields in ONE `create_field` call, the baseline scaffold as one call per row kind (`scaffoldModule` does this), same-data updates as one key-array call. No field is created until every entity of the deploy (every level) exists — that is what lets a field reference an entity declared later in the spec, a self-reference, or a promote-create row resolve immediately (there is no second pass). A loop of single-record creates is a defect, not a style choice.
 

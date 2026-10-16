@@ -2,8 +2,8 @@
 name: semantius-modeler
 description: >-
   Deploys a `*-semantic-spec.md` (from `semantius-analyst`) to a live
-  Semantius instance via the `semantius` CLI. Already reconciled: every entity
-  carries a `Reconciliation:` annotation (create-new, reuse-from,
+  Semantius instance via the `semantius` CLI. Every decision is already in the
+  spec: each entity carries its annotation (create-new, reuse-from,
   rename-incoming-from, promote-to-master, dropped), every cross-model link
   resolved, every collision decision baked in. A thin executor: parse spec,
   verify annotations hold against live, render plan, execute writes, verify,
@@ -18,6 +18,17 @@ description: >-
 ---
 
 # semantius-modeler Skill
+
+## Execution context (mandatory, read before anything else)
+
+**This skill is interactive and MUST run in the conversation the user is in.**
+
+- Do NOT start this skill, or any of its stages, in an agent that another agent started to run on its own (a background worker, subagent, executor, or Task). Those agents cannot ask the user questions, so they cannot run this skill correctly. Running in the cloud is fine when the user is talking to that agent directly.
+- Do NOT write a delegation prompt that tells another agent to run this skill, "build and deploy end to end", or "make the decisions yourself".
+- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the **Muse chat** paragraph of this skill.
+- An agent's general habit of delegating long or multi-step work does not apply here. This rule overrides it.
+
+**What may be delegated:** only steps that ask nothing and change nothing the user has not confirmed.
 
 This skill is the **executor** of the three-skill workflow:
 
@@ -73,6 +84,14 @@ The internal annotation values (`reuse-from`, `promote-to-master`, etc.) still g
 
 **Pre-emit check** (mandatory): before sending any chat message, before firing any `AskUserQuestion`, before printing any plan or verification summary, scan the assembled text for any banned token. Rewrite before sending.
 
+**Muse chat: no `AskUserQuestion` tool.** If `AskUserQuestion` is not in
+this session's tool list, load
+[`../semantius-admin/references/muse-questions.md`](../semantius-admin/references/muse-questions.md)
+before the first question of the run, and follow it in place of every
+`AskUserQuestion` rule in this skill, for single-select and
+`multiSelect: true` alike. Skip the load when the tool is present. One
+load per run covers every skill active in the same conversation.
+
 **AskUserQuestion mechanics** (not a numbered convention; the tool description is authoritative). Fire `AskUserQuestion` **alone in its own response**: apply edits, re-renders, policy-file reads, and task updates first, in earlier steps, then call it with no other tool call beside it. A sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` **input block** keyed by question text; there is no `user_answers` tool, never call one. Dismiss (`cancelled: true`) and typed replies are handled per the tool description.
 
 **Option count is 2 to 4 per question object, never 1 and never 5.** The tool rejects the whole call otherwise, every other question in it included. When the options come from data (one per entity, field, property, concept, file, column), count the items (K) and shape the list before firing:
@@ -87,14 +106,14 @@ The internal annotation values (`reuse-from`, `promote-to-master`, etc.) still g
 **Task tracking** (resident summary; the rules are the canonical text in [`../semantius-admin/references/task-tracking.md`](../semantius-admin/references/task-tracking.md)). The modeler uses the harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`) so the user can see where the deploy is without chat narration; the task list is rendered UI, not prose, so it does not count against narration restraint.
 
 - **Stage tasks.** At Step 0 (after the run context is read, standalone or under the admin): `TaskList`, then `TaskCreate` the four `Apply ›` tasks from the High-Level Workflow table below, subjects verbatim, `activeForm` = subject, all `pending`; in the same response, one `TaskUpdate` per task: `addBlockedBy: [<previous task id>]` for every task after the first, and, under the admin, `addBlocks: [<the in-progress unprefixed pipeline task id from TaskList>]` in the same call so that task cannot complete before the deploy's stages do; the first task's call also carries `status: in_progress`. One `in_progress` at a time; `completed` when the stage's procedure ran; a halt (Stage 4's loud halt, a refused spec) leaves the task `in_progress` with `halted: <verbatim message>` in its description. Stage 4 is one task however many sub-stages run inside the deploy script; a second script pass (living-mode RACI batches) may add one more `Apply › Update your live model (second pass)` task at that point. The sample-data task is created only when the user says yes to the Stage 6 question (see the Closing Contract sequencing there); nothing is created on a decline. Never a task for Step 0 reads, preflight, or script scaffolding.
-- **Ledger stages: 2.5 and 3.** The access-control question (Stage 2.5) and every Stage 3 ambiguity question (a cross-model row with several plausible targets, a field-name collision on an auto-generated link field, the four-or-more-proposals question and its "Review each one" fallback) are `Q:` tasks: enumerated before the first widget and gated with one `TaskUpdate` on the stage task, `addBlockedBy: [<the Q: ids>]` (2.5 → the check task, Stage 3 → the plan task), asked in batches of up to four per `AskUserQuestion` call, and completed only after the answer is applied to the in-memory plan. Templates (fill placeholders, never reword): `Q: Basic or advanced access control?`; `Q: Which table should <From Label> link to for "<To>"?`; `Q: <From Label> already has a field named <fk>. Use another name for the link, or skip it?`; `Q: Add all <N> connections to other modules, or review each one?`; `Q: Add the link from <From Label> to <To Label>? (<i> of <N>)`. Gate A and the plan render require `TaskList` clean of open `Q:` tasks. In a yolo run (see "Yolo mode (experimental)" below) no `Q:` tasks are created: each of these questions takes its gate's yolo pick, logged with `log_pick` (yolo-mode.md section 5) instead of asked, and a stage task completes when its work is done.
-- **Standalone (no ledger task, unchanged):** the one-to-three-proposals inline confirmation, the pre-execute yes/no (in standard and advanced mode; in a yolo run the go-ahead is that confirmation), the 4e-merge conflict prompt, the 4f live-present prompt, the tier-flip confirmations, and the sample-data question. The modeler still never asks catalog-decision questions; the ledger does not widen its scope. In a yolo run every one of these except the sample-data question takes its gate's yolo pick.
+- **Ledger stage: 3.** Every Stage 3 ambiguity question (a cross-model row with several plausible targets, a field-name collision on an auto-generated link field, the four-or-more-proposals question and its "Review each one" fallback) are `Q:` tasks: enumerated before the first widget and gated with one `TaskUpdate` on the plan task, `addBlockedBy: [<the Q: ids>]`, asked in batches of up to four per `AskUserQuestion` call, and completed only after the answer is applied to the in-memory plan. Templates (fill placeholders, never reword): `Q: Which table should <From Label> link to for "<To>"?`; `Q: <From Label> already has a field named <fk>. Use another name for the link, or skip it?`; `Q: Add all <N> connections to other modules, or review each one?`; `Q: Add the link from <From Label> to <To Label>? (<i> of <N>)`. Gate A and the plan render require `TaskList` clean of open `Q:` tasks. In a fast run (see "Fast flow (experimental)" below) no `Q:` tasks are created: each of these questions takes its gate's fast-flow pick, logged with `log_pick` (fast-flow.md section 5) instead of asked, and a stage task completes when its work is done.
+- **Standalone (no ledger task, unchanged):** the one-to-three-proposals inline confirmation, the pre-execute yes/no (in guided and expert flow; in a fast run the go-ahead is that confirmation), the 4e-merge conflict prompt, the 4f live-present prompt, the tier-flip confirmations, and the sample-data question. The modeler still never asks catalog-decision questions; the ledger does not widen its scope. In a fast run every one of these except the sample-data question takes its gate's fast-flow pick.
 
 **Narration restraint.** Plain language is necessary but not sufficient. Volume matters too. The user did not ask for a narrated walkthrough of the deploy; they asked for a deployed module. Hard rules:
 
 - **Do not announce what you're about to do** before doing it. No *"Let me verify the reconciliation annotations..."*, no *"Let me check the live catalog..."*. Just do it.
 - **Do not narrate self-corrections** mid-flight; fix them silently.
-- **Plan summary is one block, not a running commentary.** Render the plan once before execution (per Stage 3; a yolo run logs one line instead), then execute silently. Do not narrate every entity / field / permission creation in chat — the tool-call lines in the transcript are the receipt.
+- **Plan summary is one block, not a running commentary.** Render the plan once before execution (per Stage 3; a fast run logs one line instead), then execute silently. Do not narrate every entity / field / permission creation in chat — the tool-call lines in the transcript are the receipt.
 - **Verification (Stage 5)** runs and prints its structured report at the end; nothing else along the way. No intermediate "verifying X..." updates.
 - **Close-out is the Closing Contract, nothing more.** The final message is the three-part call-to-action defined in "Closing Contract: clean and sticky" below (a status line, a clickable `[Open <System Name> in Semantius →](<ui_baseurl>/<module_slug>)` link, and the sample-data question). It is not a paragraph, not a recap, not a list of every operation, and never a `/semantius:*` slash command in place of the link. Detailed counts, reused built-ins, and caveats live in the Stage 5 verification summary ABOVE the closing block, separated by a `---`.
 
@@ -104,7 +123,7 @@ A useful test: *"if I deleted this chat message before sending, would the user n
 
 ## Data fidelity: model text is user data
 
-Every string the deployer extracts from the model and sends to Semantius (`description`, `singular_label`, `plural_label`, `title`, JsonLogic `message` / `description` cells, enum value labels, `permission` descriptions, `select_rule` and `input_type_rule` JsonLogic, `computed_fields` / `validation_rules` arrays) is **user data**, not deployer prose. It travels into the catalog **byte-for-byte unchanged**. The rules below are not stylistic preferences; they are correctness invariants. A deploy that violates any of them produces silent catalog drift the user cannot see until they read the record in the UI.
+Every string the deployer extracts from the model and sends to Semantius (`description`, `singular_label`, `plural_label`, `title`, JsonLogic `message` / `description` cells, enum value labels and `description` hints, `permission` descriptions, `select_rule` and `input_type_rule` JsonLogic, `computed_fields` / `validation_rules` arrays) is **user data**, not deployer prose. It travels into the catalog **byte-for-byte unchanged**. The rules below are not stylistic preferences; they are correctness invariants. A deploy that violates any of them produces silent catalog drift the user cannot see until they read the record in the UI.
 
 **1. No truncation. Ever.** Entity and field descriptions in the model are often multi-sentence (3–6 sentences is normal for entities like `service_requests`, `incidents`, `change_requests`). Every sentence is part of the meaning — typically sentence 2+ encodes invariants, lifecycle rules, terminal states, and gating constraints. Sending only the first sentence loses that information. **Read the full description through to the next blank line / next `**...**` heading / next markdown structural element, and pass the entire span.** If the description spans markdown paragraphs, include the blank line and the second paragraph. Do not summarize for "brevity," do not paraphrase, do not synthesize a shorter version.
 
@@ -210,27 +229,21 @@ This applies to every script this skill writes, not just the seed script at Stag
 
 ---
 
-## Schema compatibility: `EXPECTED_MAJOR = 5`
+## File format version
 
-This skill expects spec files written by `semantius-analyst` major `5`. The spec file's front-matter `version: "MAJOR.MINOR"` is checked at the start of Stage 1. **Major must equal `EXPECTED_MAJOR`**, minor is informational and not compared. Files with a different major are rejected with the message:
+Every spec this skill reads must carry `version: "3.x"` in the front-matter; it is checked at the start of Stage 1. A spec whose `version` is not `3.x` (or that has no `version`) is rejected: stop and tell the user the spec is not in the current format.
 
-> *"This spec is for analyst v\<N\>; you have modeler at EXPECTED_MAJOR=5. Re-run `semantius-analyst` on the source blueprint to regenerate the spec."*
+`version` is the file format version. It changes only when the file format changes, and only with the user's approval.
 
-A file lacking reconciliation annotations on any entity (the v3.x format) is rejected with the same routing message. The modeler trusts the spec; it does NOT classify entities itself.
+A spec lacking a reconciliation annotation on any entity is rejected the same way. The modeler trusts the spec; it does NOT classify entities itself.
 
-The spec also carries `blueprint_version` (the blueprint artifact version the analyst worked against; default `"3.0"`). The modeler does not re-validate it against the architect; the analyst did.
-
-**Minor-version tolerance (5.4 ↔ 5.5 ↔ 5.6 ↔ 5.7 ↔ 5.8).** Analyst 5.8 specs add optional lines older specs lack: `**Key type:** is_a|has_a` with `**Based on:**` (families, created one level per call, `references/stage-1-parse.md`), and §5 bullets `` - `value` - Label `` (enum labels, sent as `{"value", "label"}` pairs). A 5.7 spec has neither and deploys unchanged. Analyst 5.7 specs differ from 5.6 only in the validation-rule entry: `code` is a class-99 error code (`^99[0-9]{3}$`, required by the platform) and the snake_case identifier is `name`. An older spec whose rules carry a snake_case `code` and no `name` parses, but the platform refuses those codes, so Stage 1 blocks it and routes it back to the analyst (which renumbers the codes and moves the identifier to `name`); the deployer never rewrites rule codes. Analyst 5.6 specs differ from 5.5 only by the optional `**Key type:**` / `**Key prefix:**` entity lines (absent on older specs = `auto_increment`, nothing to stamp; see Stage 1 and Stage 2k: the key type is create-only). Analyst 5.5 specs differ from 5.4 only additively, and Stage 1 reads all three: the H1 is `# <name>: Semantic Model` (5.5) or `# <name> — Semantic Model` (older); §6 may carry `### Outbound handoffs` / `### Inbound handoffs` sub-sections after the link table (absent on older specs → Stage 4m is a no-op); the §6 link table may carry a `Reconciliation` column; `**Label column:**` may be absent on an `entity_type: junction`; `persona` and `module_kind` are optional keys (never `null`); §8.1 / §9.1 empty cells are `(none)` (older specs wrote `—`); §9.1 reconciliation cells are `✨ to create` / `♻ exists` / `🟡 drift on module_id` (older specs also wrote `✨ to add`; the cell is not consumed).
+**Optional lines.** A spec may omit optional lines; Stage 1 treats each absence as its default (`references/stage-1-parse.md`): no `**Key type:**` = `auto_increment` (the key type is create-only, Stage 2k); no `**Based on:**` = not based on another entity; a §5 bullet without a label or hints = a plain value; no `### Outbound handoffs` / `### Inbound handoffs` = no handoffs (Stage 4m is a no-op); no `Reconciliation` column in the §6 link table; no `**Label column:**` on an `entity_type: junction`; `persona` and `module_kind` absent (never `null`). Every validation rule carries a class-99 `code` (`^99[0-9]{3}$`) and a snake_case `name`; a rule without them is blocked at Stage 1 and routed back to the analyst (the deployer never rewrites rule codes).
 
 Cross-entity JsonLogic primitives (`set_record`, `let`, `throw_error`) are passed through byte-for-byte inside `validation_rules` / `computed_fields` and (with care) `select_rule`. The "column must exist on this entity" parse check skips column references qualified by a `set_record` / `let` binding (the bound variable's columns resolve against the bound entity). See `references/conflict-resolution.md`.
 
 **Permission-prefix resolution rule (the "entity-owning-module rule").** Workflow gates and row-scope overrides for entity E are prefixed by E's CURRENT owning module slug, not by the installing unit. The rule fires on every install regardless of `module_kind`. Stage 4a-scaffold honors it when minting gates / overrides for entities with re-prefixed-from annotations; Stage 4n handles the master-install reconciliation when a Branch-B promotion moves an entity to a new owning module (sweep every non-catalog-prefixed permission for the entity's verbs, mint sibling catalog-prefixed permissions and `role_permissions` rows, re-emit hierarchy edges; no deletes, per the no-auto-deletion rule).
 
-The history of the deployer's contract changes lives in [`CHANGELOG.md`](./CHANGELOG.md) — what each analyst-lockstep bump changed in the deployer's parser, stage numbering, and audit checks. That file is not loaded at runtime; the body of this SKILL.md is the **current contract**, the CHANGELOG is the **history**.
-
-- **Older major** (e.g. file is `"0.x"`, this skill expects `"1.x"`), the file was written by an older analyst version using a structure this deployer does not understand. Tell the user to run the analyst skill; its archived-knowledge mode reads the older file and re-authors a current-major file from the same semantic content.
-- **Newer major** (e.g. file is `"2.x"`, this skill expects `"1.x"`), the file was written by a newer analyst than this deployer knows about. Tell the user to update this deployer skill before retrying.
-- **Missing `version` key**: treat as major `0`; same response as older-major above.
+The history of the deployer's contract changes lives in [`CHANGELOG.md`](./CHANGELOG.md). That file is not loaded at runtime; the body of this SKILL.md is the **current contract**, the CHANGELOG is the **history**.
 
 ## Your role: thin executor of a reconciled spec
 
@@ -276,7 +289,7 @@ The platform ships core provenance columns the modeler is the only writer of. **
 - **`entities.entity_type`** = the class from the spec's `**Entity type:**` line; **`'unclassified'` (never `''`) when absent.** Must be one of the six CHECK values.
 - **`entities.catalog_entity_aliases`** = **APPENDED** to on a reuse/merge that renames an incoming entity onto an existing host (read the host's current array, push each new `{alias_code, source_domain, source_module, decided}` element, write back). **Never rewrite or drop prior elements**; a plain `create_entity` leaves it at `[]`.
 - **`fields.catalog_field_code`** = the field's design-time identity (the blueprint field name), the field-rename join key. The spec carries no separate catalog field code, so stamp the spec's `field_name` on every `create_field` item (the same way `catalog_entity_code` rides on `create_entity`).
-- **`modules.catalog_module_code`** = the catalog blueprint / `system_slug` the module was provisioned from; the top-level columns `domain_code`, `access_scope`, and `icon_name`; plus the `modules.settings` keys (`naming_mode`, `module_kind`, `catalog_snapshot`, `promotion_decisions`), on `create_module` / `update_module`.
+- **`modules.catalog_module_code`** = the catalog blueprint / `system_slug` the module was provisioned from; the top-level columns `domain_code`, `access_scope` (the spec's access level; not written under `custom`), and `icon_name`; plus the `modules.settings` keys (`naming_mode`, `module_kind`, `catalog_snapshot`, `promotion_decisions`), on `create_module` / `update_module`.
 - **`roles.catalog_role_code`** = the catalog persona/role slug a role was provisioned from, on every `create_role`.
 - **Codes are write-once at create.** The three scalar codes (`catalog_entity_code` / `catalog_field_code` / `catalog_module_code`) are set on the create call and **never re-sent on a later rename** — a rename touches `table_name` / `field_name` / `module_slug` only. Core enforces immutability-once-non-empty, so a re-send of a *changed* value is rejected; a re-run that re-sends the *same* value is a harmless idempotent no-op.
 
@@ -299,13 +312,13 @@ The deployer does not maintain an orphan registry, does not detect orphans in re
 
 The environment checks are shared across all four Semantius skills and live in one place: **[`../semantius-admin/references/preflight.md`](../semantius-admin/references/preflight.md)**. Do not duplicate them here.
 
-- **Orchestrated by `semantius-admin` (a `Run context:` block is present in your input):** the admin already ran the preflight (toolchain installed, CLI authenticated, `adenin` guard passed). Skip the checks and proceed. The block's header lines are `Run context:`, `Interaction level:` (`standard` / `advanced` / `yolo`; see "Yolo mode (experimental)" below), `Input artifact:` (the spec path), and `Deploy flag:`.
+- **Orchestrated by `semantius-admin` (a `Run context:` block is present in your input):** the admin already ran the preflight (toolchain installed, CLI authenticated, `adenin` guard passed). Skip the checks and proceed. The block's header lines are `Run context:`, `Interaction flow:` (`guided` / `expert` / `fast`; see "Fast flow (experimental)" below), `Input artifact:` (the spec path), and `Deploy flag:`.
 - **Standalone (no `Run context:` block):** run the shared preflight yourself. In brief: stay in the repo root; install the toolchain if missing; probe `getCurrentUser` to install/authenticate the CLI and halt if the org is `adenin`. The modeler critically needs **Bun** (its deploy and sample-data scripts run with `bun run`); `jq` parses CLI JSON. It does **not** need `yq` and does **not** consult the customizations file, so check 4 (the `CUSTOMIZATIONS_FILE` computation) does not apply and a missing `yq` must **not** block a standalone modeler run — specs already carry every decision. The full per-check procedure and install matrix are in the reference file.
 
-## Yolo mode (experimental)
+## Fast flow (experimental)
 
-- **When:** the run context says `Interaction level: yolo`, or the admin pipeline task's marker (`TaskGet`) says `yolo: go-ahead given` (`yolo: standard for this build` means standard). Otherwise run as today; a direct call from the user is never yolo. In a yolo run, read [`../semantius-admin/references/yolo-mode.md`](../semantius-admin/references/yolo-mode.md) at the start and again after a context reset.
-- **Turn rule:** no `AskUserQuestion` and no message ending in a question until the Closing Contract, and no plan summary rendered; each question point's "Yolo mode, after the go-ahead" line names the pick to take and log instead.
+- **When:** the run context says `Interaction flow: fast`, or the admin pipeline task's marker (`TaskGet`) says `fast: go-ahead given` (`fast: guided flow for this build` means guided flow). Otherwise run as today; a direct call from the user is never a fast run. In a fast run, read [`../semantius-admin/references/fast-flow.md`](../semantius-admin/references/fast-flow.md) at the start and again after a context reset.
+- **Turn rule:** no `AskUserQuestion` and no message ending in a question until the Closing Contract, and no plan summary rendered; each question point's "Fast flow, after the go-ahead" line names the pick to take and log instead.
 - **Why:** the user's go-ahead was the write confirmation for the whole build, so every further stop breaks that promise; the "Decided for you" list at the end is their review.
 
 ---
@@ -332,7 +345,7 @@ These are the traps that have actually broken deploys. This table is a backstop 
 | **Read response shape** | Treating a `crud` read as a bare object; trusting exit `0` to mean "found" | `crud` reads return a JSON **array** by default (even for one row); exit `0` + `[]` means "found nothing." Pass **`--single`** for any read that must resolve to exactly one row: it returns a bare object and exits `1` (none) / `2` (ambiguous). | use-semantius SKILL.md → *Response handling: exit code is not enough* |
 | **Make a field mandatory / unique** | A `required` field column (`"required": true`) | There is **no `required` column**. Mandatory = **`input_type: "required"`**. Unique = **`unique_value: true`**. Two different columns, two different concepts. | data-modeling.md → *All Field Properties*, *`unique_value`* |
 | **Nullability** | Sending `is_nullable` on `create_field` / `update_field` | **Never send `is_nullable`** — the platform computes nullability from `format`. Only `reference`, `date`, and `date-time` allow NULL; every other format is `NOT NULL` with an auto-default. | data-modeling.md → *`default_value`*, *Relationships* |
-| **Non-nullable integers** | `null` for `module_id` or any `integer` / `int32` / `int64` field | Integers are `NOT NULL`. `module_id` must be a real (non-null) integer id; required integer fields auto-default to `0`. Never pass `null` to an integer column. | data-modeling.md → *Key Entity Fields*, *`default_value`* |
+| **Non-nullable integers** | `null` for `module_id` or any `integer` / `int32` / `int64` / `rating` field | Integers are `NOT NULL`. `module_id` must be a real (non-null) integer id; required integer fields auto-default to `0` (for `rating`, `0` means not rated). Never pass `null` to an integer column. | data-modeling.md → *Key Entity Fields*, *`default_value`* |
 | **`update_field` / `delete_field` id** | A PostgREST-style `{"filters": "..."}` | Identify the field by its **composite `id` `"<table_name>.<field_name>"`**, e.g. `update_field {"id": "tickets.approved_at", "data": {...}}`. `filters` is a *read*-tool concept; `update_field` / `delete_field` take `id`. | data-modeling.md → *Updating and Deleting Entities* |
 | **`update_entity` identifier** | `{"id": <int>, "data": {...}}` (copying `update_field` / `update_module`); or burying `table_name` inside `data` | `update_entity` is keyed by **`table_name` at the top level**: `update_entity {"table_name": "tickets", "data": {...}}`. **In a deploy/seed script, do not hand-roll this — call `updateEntity(tableName, data)` from `deploy-lib.ts`, which owns the envelope** (the helper exists precisely so this shape can't be got wrong). Four shapes to keep straight when calling the CLI directly: `update_entity` → `table_name`; `update_field` → composite `id` string; `update_permission` → `permission_name` (string or array; permissions have no numeric id); `update_module` / `update_role` → numeric `id`. | data-modeling.md → *Updating and Deleting Entities*; `deploy-lib.ts` → `updateEntity` |
 | **Layer-2 `postgrestRequest` payload** | `{method, path, data: record}` | The record field is **`body`**, not `data`: `{method, path, body: record}`. Use the `post(path, body)` / `pgRequest(...)` helpers in `deploy-lib.ts` so the call site never hand-rolls it. | use-semantius `references/crud-tools.md` → *postgrestRequest*; `deploy-lib.ts` |
@@ -381,7 +394,7 @@ This is not a stylistic preference. A natural-key read can succeed while a surro
 ## High-Level Workflow
 
 ```
-1. Parse spec  →  2. Inspect Semantius  →  2.5 Access-control scope  →  3. Plan & Present  →  4. Execute  →  5. Verify  →  6. Sample Data?
+1. Parse spec  →  2. Inspect Semantius  →  2.5 Access level  →  3. Plan & Present  →  4. Execute  →  5. Verify  →  6. Sample Data?
 ```
 
 Work through the stages in order. **Before executing each stage, read its reference file** (column below); each holds the full procedure this spine only names. Narrate tersely per the Writing conventions. The Task column is the exact subject of the stage task (Task tracking, above); stages sharing a task row are one task.
@@ -390,8 +403,8 @@ Work through the stages in order. **Before executing each stage, read its refere
 |---|---|---|---|
 | 1. Parse | Version + consistency gate, then extract every section of the spec (entities, fields, permissions, RACI, ...). All parse-time rejections live here. | `Apply › Check the design against your live model` | `references/stage-1-parse.md` |
 | 2. Reconcile | Verify each reconciliation annotation still holds against the live catalog; resolve cross-model links; scaffold the module. | (same task) | `references/stage-2-reconcile.md` |
-| 2.5 Access scope | Resolve basic vs full RBAC (frontmatter, then live setting, then ask via the ledger). The two-permission projection table lives here. | (same task) | `references/stage-2-reconcile.md` |
-| 3. Plan | Render the plan + ambiguity decisions (ledger); the cross-model-link flow. **Gate A** (pre-write integrity) fires here, then the pre-execute yes/no (standard and advanced mode; in a yolo run the go-ahead is that confirmation). | `Apply › Show the plan and get your go-ahead` | `references/stage-3-plan.md` |
+| 2.5 Access level | Read the spec's `access_scope` (the architect decided it) and deploy it as written per the access-level table there; never asks. | (same task) | `references/stage-2-reconcile.md` |
+| 3. Plan | Render the plan + ambiguity decisions (ledger); the cross-model-link flow. **Gate A** (pre-write integrity) fires here, then the pre-execute yes/no (guided and expert flow; in a fast run the go-ahead is that confirmation). | `Apply › Show the plan and get your go-ahead` | `references/stage-3-plan.md` |
 | 4. Execute | All writes, sub-stages 4a-4n (module, permissions, entities, fields, rules, master-data, personas/RACI, reconciliation). **Gate B** fires here. Provenance, fail-loud, and no-deletion (above) govern every write. | `Apply › Update your live model` | `references/stage-4-execute.md` |
 | 5. Verify | Structured verification report + per-area FK and text-fidelity round-trips. On a clean deploy, Stage 5b stamps the deployed `modules.version` / `version_date` (and each reused/promoted module's version) back into the spec front-matter — the analyst's drift gate reads it next run. | `Apply › Verify what is live` | `references/stage-5-verify.md` |
 | 6. Sample data | Consent-gated seeding (see the consent gate above). | `Apply › Add sample data` (created only on the user's yes) | `references/stage-6-sample-data.md` |
@@ -412,7 +425,7 @@ For a clean, fully-completed deploy, the final assistant message is a **call-to-
 
 Everything else, what was created, what was skipped, why built-ins were reused, counts, per-entity links, caveats, justifications, belongs in the Stage 5 verification summary **before** this closing block, separated by a horizontal rule (`---`). Do not mix the two. The closing must not contain reasoning, parentheticals, or "by the way" notes; those dilute the call to action.
 
-In a yolo run, the Stage 5 report ends with the "Decided for you after your go-ahead" section ([`yolo-mode.md`](../semantius-admin/references/yolo-mode.md) section 6; shape in `references/stage-5-verify.md`), placed before the `---`; the three closing lines are unchanged.
+In a fast run, the Stage 5 report ends with the "Decided for you after your go-ahead" section ([`fast-flow.md`](../semantius-admin/references/fast-flow.md) section 6; shape in `references/stage-5-verify.md`), placed before the `---`; the three closing lines are unchanged.
 
 **Task sequencing around the closing block.** Set the `Apply › Verify what is live` task `completed` (`TaskList`, then `TaskUpdate`) in the response *before* the one that emits the closing block; the closing response contains the report and the three lines and no tool call after the text (a trailing tool call would keep the turn going past the question). After the user answers: on yes, the next response's first calls create `Apply › Add sample data` (`in_progress`, `addBlockedBy: [<the Verify task id>]`, and under the admin `addBlocks: [<pipeline task id>]`) and Stage 6 runs; on no, nothing is created and no task changes.
 

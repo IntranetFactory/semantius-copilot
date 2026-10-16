@@ -121,16 +121,27 @@ try {
   check('registry: thinking_level without reasoning_efforts rejected', registryRejects({ thinking_level: 'high' }));
   check('registry: thinking_level outside reasoning_efforts rejected', registryRejects({ reasoning_efforts: ['low', 'high'], thinking_level: 'medium' }));
   check('registry: thinking_level inside reasoning_efforts accepted', !registryRejects({ reasoning_efforts: ['low', 'high'], thinking_level: 'high' }));
+  const pinned = {
+    'gpt-6-luna': 'medium',
+    'gpt-6-luna-xhigh': 'xhigh',
+    'deepseek-v4.1-flash-max': 'max',
+    'muse-spark-1.3-contributor-xhigh': 'xhigh',
+  };
   check(
-    'registry: GPT-6 Luna pinned at medium, Luna (High) at xhigh',
-    registry['gpt-6-luna']?.thinkingLevel === 'medium' && registry['gpt-6-luna-xhigh']?.thinkingLevel === 'xhigh',
+    'registry: shipped thinking_level pins (Luna medium/xhigh, DeepSeek max, Muse xhigh)',
+    Object.entries(pinned).every(([id, level]) => registry[id]?.thinkingLevel === level),
+    Object.keys(pinned).map((id) => `${id}=${registry[id]?.thinkingLevel}`).join(' '),
+  );
+  check(
+    'registry: DeepSeek base stays without reasoning_efforts/thinking_level',
+    registry['deepseek-v4.1-flash'].reasoningEfforts === undefined && registry['deepseek-v4.1-flash'].thinkingLevel === undefined,
   );
   // `base` variants: copy the base, own keys win (shallow), one level, own name.
-  const { thinkingLevel: _l, name: _n, ...lunaRest } = registry['gpt-6-luna'];
+  const { thinkingLevel: _l, name: lunaName, ...lunaRest } = registry['gpt-6-luna'];
   const { thinkingLevel: _h, name: highName, ...lunaHighRest } = registry['gpt-6-luna-xhigh'];
   check(
-    'registry: Luna (High) inherits everything but name + thinking_level from its base',
-    highName === 'GPT-6 Luna (High)' && JSON.stringify(lunaHighRest) === JSON.stringify(lunaRest),
+    'registry: Luna xhigh variant inherits everything but name + thinking_level from its base',
+    highName !== lunaName && JSON.stringify(lunaHighRest) === JSON.stringify(lunaRest),
     JSON.stringify(lunaHighRest),
   );
   const variantParse = (models) => {
@@ -179,9 +190,12 @@ try {
     check('GLM 5.3 Flash: off is never offered', !getSupportedThinkingLevels(glm).includes('off'), getSupportedThinkingLevels(glm).join());
     // A pinned thinking_level must survive pi-ai's clamp unchanged (xhigh/max
     // are only offered when the map lists them explicitly).
-    const lunaHigh = registry['gpt-6-luna-xhigh'];
-    const luna = { id: lunaHigh.model, reasoning: true, thinkingLevelMap: thinkingLevelMap(lunaHigh.reasoningEfforts) };
-    check('GPT-6 Luna (High): xhigh is sent as xhigh', clampThinkingLevel(luna, lunaHigh.thinkingLevel) === 'xhigh', clampThinkingLevel(luna, lunaHigh.thinkingLevel));
+    for (const [id, entry] of Object.entries(registry)) {
+      if (entry.thinkingLevel === undefined) continue;
+      const model = { id: entry.model, reasoning: true, thinkingLevelMap: thinkingLevelMap(entry.reasoningEfforts) };
+      const sent = clampThinkingLevel(model, entry.thinkingLevel);
+      check(`${id}: thinking_level ${entry.thinkingLevel} is sent unchanged`, sent === entry.thinkingLevel, sent);
+    }
   }
 
   // 3. agents/ scanner + JSONC config: comments/trailing commas parse; a

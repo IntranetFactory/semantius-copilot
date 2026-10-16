@@ -19,6 +19,17 @@ description: >-
 
 # semantius-importer Skill
 
+## Execution context (mandatory, read before anything else)
+
+**This skill is interactive and MUST run in the conversation the user is in.**
+
+- Do NOT start this skill, or any of its stages, in an agent that another agent started to run on its own (a background worker, subagent, executor, or Task). Those agents cannot ask the user questions, so they cannot run this skill correctly. Running in the cloud is fine when the user is talking to that agent directly.
+- Do NOT write a delegation prompt that tells another agent to run this skill, "build and deploy end to end", or "make the decisions yourself".
+- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the **Muse chat** paragraph of this skill.
+- An agent's general habit of delegating long or multi-step work does not apply here. This rule overrides it.
+
+**What may be delegated:** only steps that ask nothing and change nothing the user has not confirmed.
+
 The front door for getting a **file** into Semantius. One CSV in, one entity out (created or reused), rows loaded in batches. The pipeline skills (architect → analyst → modeler) design and deploy whole systems from specs; this skill deliberately does lightweight, single-entity creation driven by what a file actually contains — no blueprint, no catalog reconciliation machinery.
 
 Division of responsibility:
@@ -48,6 +59,15 @@ Self-contained — no other skill file needs to be read for these. They govern c
 3. **Plain language.** Say "table", "field", "row", "the file" — never internal jargon (csvschema verdict, disposition, mapping artifact) without a plain-English gloss.
 4. **Narration restraint.** Never announce what you are about to do ("Let me read...", "Now let me check..."). Do the work; render only the decision points and the final report. Play-by-play between tool calls is noise.
 5. **Data is sacred.** CSV values travel into Semantius byte-for-byte except for the coercions the mapping explicitly declares; house style (spelling, dash policy) is never applied to payloads, titles, or enum values derived from the file.
+
+**Muse chat: no `AskUserQuestion` tool.** If `AskUserQuestion` is not in
+this session's tool list, load
+[`../semantius-admin/references/muse-questions.md`](../semantius-admin/references/muse-questions.md)
+before the first question of the run, and follow it in place of every
+`AskUserQuestion` rule in this skill, for single-select and
+`multiSelect: true` alike. Skip the load when the tool is present. One
+load per run covers every skill active in the same conversation.
+
 6. **`AskUserQuestion` fires alone.** Apply mapping edits, re-renders, and task updates first, in earlier steps, then call `AskUserQuestion` as the only tool call of its response; a sibling tool call in the same response cancels the pause and the run continues before the user has answered. The answers arrive as a `<user_answers>` input block keyed by question text; there is no `user_answers` tool, never call one.
    **Option count is 2 to 4 per question object, never 1 and never 5**; the tool rejects the whole call otherwise, including every other question in it. When the options come from data (one per column, candidate table, module), shape the list before firing: a single-select pick list shows at most the 3 best candidates (2 when two fixed options must stay) plus the stage's fixed alternative ("Create new", "Skip"), and the question text says another can be typed in (the tool always adds its own free-text slot, so never list an "Other" option); a multiSelect with more than 4 items becomes several question objects with the same header and the text suffixed ` (<i> of <N>)`, each holding 2 to 4 items (5 → 3 + 2, never 4 + 1); exactly 1 item with no fixed alternative means no question (the one item counts as chosen). Never pad with a filler option, never merge two items into one option. The tool has no pre-checked option; "(Recommended)" on one label is the only default marker.
 7. **Task tracking and the question ledger.** The harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`) track the run and the open questions. Full mechanics: [`../semantius-admin/references/task-tracking.md`](../semantius-admin/references/task-tracking.md). The importer's part, in short:
@@ -61,9 +81,9 @@ Self-contained — no other skill file needs to be read for these. They govern c
 
 The shared environment checks live in **[`../semantius-admin/references/preflight.md`](../semantius-admin/references/preflight.md)**; do not duplicate them. Standalone summary: install the toolchain if missing, probe `getCurrentUser` to confirm the CLI is authenticated, halt if the org guard trips. This skill runs from wherever the user's CSV work happens; it needs no repository and makes no assumptions about one. This skill critically needs **Bun** (the import script runs with `bun run`); `jq` is convenient but optional; `yq` and the customizations file are not used.
 
-Preflight check 1 (**never `cd`**) binds this skill's helper scripts too, not only bare `semantius` commands: `create-fields.ts` and `import.ts` spawn `semantius call crud …`, a child process inherits the shell's cwd, and the CLI reads `.env` from that cwd. So every helper is run **from `<cwd>` by path** — `bun run <run-folder>/<helper>` with `<run-folder>` = `.tmp_import/run-<ts>` — never from inside the run folder; the one step that needs the run folder as its working directory is the dependency install, done as `bun add --cwd <run-folder> csv-parse`. Run from inside the run folder, an API-key install fails every field create and every batch insert with an auth error (exit 5) that reads like a CLI bug; a JWT- or env-injected install merely hides the mistake. Mechanics and rationale: import-script-template.md → Workspace layout.
+Preflight check 1 (**never `cd`**) binds this skill's helper scripts too, not only bare `semantius` commands: `create-fields.ts` and `import.ts` spawn `semantius call crud …`, a child process inherits the shell's cwd, and the CLI reads `.env` from that cwd. So every helper is run **from `<cwd>` by path** — `bun run <run-folder>/<helper>` with `<run-folder>` = `.tmp_import/run-<ts>` — never from inside the run folder; the one step that needs the run folder as its working directory is the dependency install, done as `bun add --cwd <run-folder> csv-parse`. Run from inside the run folder, the CLI never reads the session's `.env`: every field create and batch insert either fails with an auth error (exit 5) that reads like a CLI bug, or, worse, lands with whatever the global `.env` or the current host supplies. Mechanics and rationale: import-script-template.md → Workspace layout.
 
-Also confirm the CLI ships the introspection util: `semantius info utils` must list `get_csvschema`. An older CLI without it needs the installer re-run first.
+Also confirm the CLI ships the introspection util: `semantius info utils` must list `get_csvschema`. If it is missing, re-run the installer first.
 
 ## Step 0 (hard gate): load the essentials
 
@@ -90,7 +110,7 @@ That file is the distilled subset of `use-semantius` this workflow needs: CLI fo
 | `update_field` identifier | Composite id string: `{"id": "<table>.<field>", "data": {...}}`; payload carries only the changing keys | data-modeling.md → Updating and Deleting |
 | `update_entity` identifier | Keyed by `table_name` at top level, not numeric id | data-modeling.md |
 | Big payloads | Pipe JSON via stdin (`... | semantius call crud postgrestRequest`); the CLI reads stdin when no JSON argument is given. The "always pass inline JSON" warning is about interactive shells with an empty stdin, not scripts that pipe | cli-usage.md → Passing Arguments |
-| Format vocabulary | `enum` (with `enum_values`), never `select`; monetary values are `number` + `precision` | data-modeling.md |
+| Format vocabulary | `enum` (with `enum_values`), never `select`; monetary values are `number` + `precision`; a 0–5 judgment is `rating` | data-modeling.md |
 
 ---
 
@@ -129,7 +149,7 @@ First create the run workspace with the **canonical setup block** (import-script
 Apply schema-mapping.md sections 2–7 to produce the proposed mapping:
 
 - format passthrough (the CLI vocabulary is aligned; unlisted formats flow through verbatim per the fallback rule) plus the `multiline` naming heuristic;
-- **enum review** for every `enum` verdict (low-cardinality columns masquerade as enums);
+- **enum review** for every `enum` verdict (low-cardinality columns masquerade as enums; a 1–5 rating column is offered as `rating`);
 - **the id line** (schema-mapping.md section 4): `id_mode` applies to the **new-entity path only** — report the detection ("this file carries a usable primary key" / "the first column is an id candidate"), then apply the **classic policy**: id-named column renamed to `external_id` (offered as the unique key, below), an `id_move_column` kept as its own integer field. Importing source ids into a newly created entity's primary key is **deferred** (design and roadmap in the README; the `fix_id_sequence` RPC it needs now ships with the platform, but re-enabling preservation still needs its own plan). For an **existing target entity**, `id_mode` is ignored; the live `id_column` drives the collision policy and the payload guard;
 - **the unique-key question** (schema-mapping.md section 4): when the file carries a column that identifies each row (a source system id, a code, an external reference), ask **once**, in plain words, whether to **mark that field unique** so re-imports cannot create duplicates: *"`<Header>` looks like a unique id from the source. Mark `<field>` as unique so re-running this import skips rows that are already there?"* with two options — **Unique** (Recommended: `unique_value: true` on the field; the import skips rows whose value already exists) / **Not unique** (plain insert; re-running the file inserts every row again). Never say "natural key" to the user; that is only the internal `mapping.json` name (`natural_key`) for the field the script dedupes on. Never offer an "update existing rows" option: **updating existing records is postponed** (README → Postponed), the import is insert-only;
 - field-name verification, digit-leading renames, and **reserved-column resolutions** (`created_at`, `updated_at`, `label`);
@@ -196,7 +216,7 @@ Payload hygiene: any payload carrying free text from the CSV or the user (descri
 The workspace, mapping, and dependencies already exist from Stage 2. Per **[`references/import-script-template.md`](references/import-script-template.md)**:
 
 1. `import.ts` already sits in the run folder — the Stage 2 setup block copied `references/import.template.ts` to that final name, **byte-for-byte, never retyped or edited per run** (no placeholders; it reads all run configuration from `./mapping.json` at startup). If it is missing, re-run that one copy line; never re-author the file.
-2. `bun run <run-folder>/import.ts <absolute-csv-path>`, issued from `<cwd>` (the script spawns `semantius call` per batch; run from inside the run folder, an API-key install fails every batch with exit 5, see Preflight): streaming parse, coercion per mapping, uniform-key batches via stdin-piped `postgrestRequest`, exit-code-aware retries, `failed-batches.json` capture, unique-key dedupe (rows already present are skipped; existing rows are never modified), built-in count verify.
+2. `bun run <run-folder>/import.ts <absolute-csv-path>`, issued from `<cwd>` (the script spawns `semantius call` per batch; run from inside the run folder, it misses the session's `.env`, see Preflight): streaming parse, coercion per mapping, uniform-key batches via stdin-piped `postgrestRequest`, exit-code-aware retries, `failed-batches.json` capture, unique-key dedupe (rows already present are skipped; existing rows are never modified), built-in count verify.
 
 ### Stage 6 — Verify and report
 

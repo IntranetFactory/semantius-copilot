@@ -63,14 +63,13 @@ from live state, which then feeds `semantius-analyst` Extend/Audit or a
 
 ---
 
-## Schema compatibility
+## File format version
 
-This skill writes files at `version: "5.8"` (the analyst's `CURRENT_VERSION`; the
-`SPEC_VERSION` constant in `spec-extract-lib.ts`). The `semantius-modeler` carries
-an `EXPECTED_MAJOR` and rejects a mismatched major, so the constant must track the
-analyst. A major analyst bump (section renumber, table-shape change, new required
-key) forces a coordinated update of the analyst template, this skill's extractor,
-and the modeler.
+This skill writes files at `version: "3.1"` (the `FORMAT_VERSION` constant in
+`spec-extract-lib.ts`), the file format version shared by every skill.
+
+`version` is the file format version. It changes only when the file format changes,
+and only with the user's approval.
 
 The authoritative output shape is
 `semantius-plugin/skills/semantius-analyst/references/semantic-spec-template.md`
@@ -136,7 +135,8 @@ If the user named a module, use its slug directly. Otherwise list candidates:
 semantius call crud read_module '{"order": "module_name.asc"}'
 ```
 
-Present `module_name`, `module_slug`, `module_type`, `access_scope` as a compact
+Present `module_name`, `module_slug`, `module_type`, `access_scope` (`custom` /
+`basic` / `advanced` / `gated` / `raci`, copied verbatim into the spec) as a compact
 table and ask which to extract. Never guess when several match. Never create a
 module here (read-only).
 
@@ -240,7 +240,7 @@ based entity, audit log, edit permission, entity type, label parent, key type / 
 `**Based on:**`, reconciliation, including `reuse-from <module>.<table>` for a related
 entity of another module such as a family base); every §3 field's name / format /
 required / Notes; §3 Relationships prose (with the family sentence); §4 rows; §5
-enumerations (a `{value, label}` entry as `` - `value` - Label ``); the dotted family
+enumerations (a `{value, label}` entry as a `` - `value` `` bullet with its `label`, `color`, `icon` and `description` as property sub-bullets); the dotted family
 edges;
 §8.1 permission names, descriptions, and `included in :admin?` (derived from the live
 hierarchy); §9.1 baseline roles (with `♻ exists`, since live is the source), §9.1
@@ -249,7 +249,7 @@ Processes catalog. Entity order is the canonical `entity_type` tier
 then `table_name` A->Z, so it round-trips against a convention-compliant spec.
 
 **Category B — best-effort or omitted (this is your fix-by-hand source):**
-1. Authored frontmatter keys — `description` block, `blueprint_version`, `license`,
+1. Authored frontmatter keys — `description` block, `license`,
    `created_at`, `reconciled_*`, `source_blueprint`, `related_modules`,
    `related_domains`, `departments`, `initial_request`, `persona`,
    `raci_mode` / `raci_mode_source`. Omitted (not persisted).
@@ -266,11 +266,12 @@ then `table_name` A->Z, so it round-trips against a convention-compliant spec.
    modeler accepts; `reconciliation` is `(none)` (a `re-prefixed-from` origin is not
    recoverable).
 9. §8.2 Business rules and §9.2 Functional ownership — `_(none: …)_` placeholders
-   (the `basic` reason under `access_scope: basic`, "not extracted" otherwise).
+   (the definitional reason under `access_scope: basic` / `custom`, "not extracted"
+   otherwise; the Processes placeholder is definitional under every value but `raci`).
 10. The RACI surface (`**RACI mode:**`, `**RACI realization:**`, the RACI plan) — NOT
     emitted at all (not even as placeholders; `consistency-check.ts` keys its
     `raci_mode` provenance gate on the `**RACI realization:**` literal). Author by
-    hand under `access_scope: full`.
+    hand under `access_scope: raci`.
 11. A junction M:N's hand-authored business verb — the structure round-trips (canonical
     "`X` ↔ `Y` is many-to-many through the `<junction>` junction table"), the verb does not.
 
@@ -323,7 +324,7 @@ analyst template:
 
 1. **Offline round-trip (always available):** `bun evals/round-trip/check.ts` from
    this skill folder. It renders `evals/round-trip/fixture-*.json` (JSON snapshots of
-   the live reads, one `basic` and one `full` module) via `--from-fixture`, diffs
+   the live reads, `basic` modules and one `raci` module) via `--from-fixture`, diffs
    each against its committed `expected-*.md` golden, runs the architect's
    `consistency-check.ts` on the render, and lints the analyst template's skeleton
    against the extractor. Exit 0 means green. After an intentional extractor change,

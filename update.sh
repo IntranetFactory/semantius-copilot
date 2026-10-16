@@ -68,7 +68,9 @@ if [ -f "$CLI_BIN" ] && [ "$(sha256 "$CLI_BIN")" = "$want" ]; then
   echo "    already up to date ($want)"
 else
   mkdir -p "$(dirname "$CLI_BIN")"
-  curl -fL --progress-bar -o "$CLI_TMP" "$base/$CLI_ASSET"
+  # Redirect instead of `-o`: Git Bash's curl is a native Windows binary and cannot open
+  # /c/... paths when MSYS path conversion is off (MSYS_NO_PATHCONV=1).
+  curl -fL --progress-bar "$base/$CLI_ASSET" > "$CLI_TMP"
   got="$(sha256 "$CLI_TMP")"
   [ "$got" = "$want" ] || die "checksum mismatch for $CLI_ASSET: got $got, want $want"
   chmod 0755 "$CLI_TMP"
