@@ -26,7 +26,7 @@ The modeler never consults the customizations file (specs already carry every de
 ## Output discipline
 
 - **Orchestrated by admin:** produce **no chat output** for these checks; the admin owns all narration and keeps the machinery invisible.
-- **Standalone:** keep it quiet too. The only user-facing output is a halt message (the active org is `adenin`, or a required tool could not be installed) or a setup action the user must see (installing a tool, getting the CLI on PATH, naming the host, or opening the sign-in link). A single brief line on the customizations file (check 4) is acceptable standalone. On all-pass with everything already installed and authenticated, say nothing.
+- **Standalone:** keep it quiet too. The only user-facing output is a halt message (the active org is `adenin`, or a required tool could not be installed) or a setup action the user must see (installing a tool, getting the CLI on PATH, naming the host, or opening the sign-in link). A single brief line on the customizations file (check 4) is shown standalone in expert flow only. On all-pass with everything already installed and authenticated, say nothing.
 
 ---
 

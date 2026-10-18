@@ -258,7 +258,7 @@ The environment checks are shared across all four Semantius skills and live in o
 - **Orchestrated by `semantius-admin` (a `Run context:` block is present in your input, see Step 0 below):** the admin already ran the preflight. Read `Customizations file:` from the header (export it as `CUSTOMIZATIONS_FILE`) and skip the checks.
 - **Standalone (no `Run context:` block):** run the shared preflight yourself. In brief: stay in the repo root; install the toolchain (Bun, jq, yq) if missing; probe `getCurrentUser` to install/authenticate the CLI and halt if the org is `adenin`; compute `CUSTOMIZATIONS_FILE="semantius/${org}/customizations.yaml"`. The full per-check procedure, install matrix, and exit handling are in the reference file.
 
-After preflight, narrate one short line on first invocation: *"Using customizations from `semantius/<org>/customizations.yaml`"* (if the file exists) or *"No customizations file yet; will create on first decision."* (if absent). The file is created lazily by the first widget answer.
+After preflight, in expert flow only (read the switch as "Expert flow" below describes), narrate one short line on first invocation: *"Using customizations from `semantius/<org>/customizations.yaml`"* (if the file exists) or *"No customizations file yet; will create on first decision."* (if absent). In guided and fast flow, say nothing about the file. The file is created lazily by the first widget answer.
 
 ---
 
@@ -426,7 +426,7 @@ It parses the file, treats §3 as the entity registry, and byte-compares every o
 **On success: write the file, then say one line in plain English, no more.** Templates:
 
 - Guided flow: *Wrote `<path>`.* No deploy question and no invitation to deploy. Set the task `completed` and, under the admin, let it move straight on to the analyst without waiting for the user.
-  - **Standalone exception** (no `Run context:` block): no orchestrator moves the run on, so the line carries one clause naming the next step: *Wrote `<path>`. Say the word and I'll set it up in Semantius.* Still no question widget, no second paragraph, no deploy confirmation question.
+  - **Standalone exception** (no `Run context:` block): no orchestrator moves the run on, so the line carries one clause naming the next step: *Wrote `<path>`. When you're ready, ask me to set it up in Semantius.* Still no question widget, no second paragraph, no deploy confirmation question.
 - Expert flow: *Wrote `<path>`. Deploy it now?* This is the deploy confirmation, asked in expert flow only. Under the admin, a yes moves on to the analyst; a no ends the run after the design.
 
 The line never mentions the tagline or description. With expert flow on, the user already confirmed them in Stage 13; with it off, they are written silently.

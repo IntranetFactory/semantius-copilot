@@ -150,7 +150,7 @@ The environment checks are shared across all four Semantius skills and live in o
   When the `Run context:` block is present the admin already ran the preflight; export `CUSTOMIZATIONS_FILE` from the header's path and skip the checks.
 - **Standalone (no `Run context:` block):** run the shared preflight yourself. In brief: stay in the repo root; install the toolchain (Bun, jq, yq) if missing; probe `getCurrentUser` to install/authenticate the CLI and halt if the org is `adenin`; compute `CUSTOMIZATIONS_FILE="semantius/${org}/customizations.yaml"`. The full per-check procedure, install matrix, and exit handling are in the reference file.
 
-After preflight, narrate one short line on first invocation: *"Using customizations from `semantius/<org>/customizations.yaml`"* (if the file exists) or *"No customizations file yet; will create on first decision."* (if absent). The file is created lazily by the first widget answer.
+After preflight, in expert flow only (read the switch as "Expert flow" below describes), narrate one short line on first invocation: *"Using customizations from `semantius/<org>/customizations.yaml`"* (if the file exists) or *"No customizations file yet; will create on first decision."* (if absent). In guided and fast flow, say nothing about the file. The file is created lazily by the first widget answer.
 
 ---
 
@@ -436,7 +436,7 @@ One line; no "next step" hint in admin-orchestrated mode (the admin narrates whe
 
 **Stand-alone** (no handoff header):
 
-> *Done. Wrote the design to `semantius/specs/<slug>-semantic-spec.md` (<plain-English summary>). Ask me to deploy it whenever you're ready, or run `/semantius:deploy`.*
+> *Done. Wrote the design to `semantius/specs/<slug>-semantic-spec.md` (<plain-English summary>). When you're ready, ask me to deploy it.*
 
 **Never** emit raw `reconciliation_summary: {...}` curly-brace data, "Tell the admin to invoke the modeler," or any skill-name references. Use the plain-English translation table from §3g (create-new → "new", promote-to-master → "adopted from <module>", reuse-from → "reusing existing from <module>", dropped → "skipped", reuse-from semantius_builtin.* → "reusing platform built-in").
 
