@@ -64,7 +64,8 @@ Understanding which layer you're working with determines which tools to use:
 | `references/cube-queries.md` | Layer 3, CubeJS query DSL, date filtering, analysis modes |
 | `references/cube-tools.md` | Layer 3, discover/validate/load/chart tool signatures |
 | `references/webhook-import.md` | Bulk import of records into Layer 2 via signed webhook |
-| `references/lucide-icons.ts` | Run it (`bun`), don't read it: `find <word…>` finds Lucide icon names, `check <name…>` confirms them before an icon is written; see `data-modeling.md` → "Icons are Lucide icons" |
+| `references/lucide-icon-finder.ts` | Run it (`bun`), don't read it: `<query…>` (one or more words each, most specific first) lists Lucide icon names per query, in that order; see `data-modeling.md` → "Icons are Lucide icons" |
+| `references/lucide-icon-checker.ts` | Run it (`bun`), don't read it: `<name…>` confirms Lucide icon names before an icon is written, exit 1 names the unknown ones; see `data-modeling.md` → "Icons are Lucide icons" |
 
 ---
 

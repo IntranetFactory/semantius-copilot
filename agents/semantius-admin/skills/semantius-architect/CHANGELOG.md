@@ -8,6 +8,30 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## An unreachable verification host never stops a run
+
+2026-10-18. A standalone guided run ("i want to track leads") ran every stage, wrote the blueprint and passed `consistency-check.ts`, then ended on a note that the icon check could not run because `cdn.jsdelivr.net` was blocked by the sandbox's egress allow list, with no next step. `lucide-icons.ts` downloaded the icon list at run time and exited 2 when it could not, the same code as a usage error, and the `icon_name` gate read any non-zero exit as an unknown icon. The guided close-out assumed an orchestrator moves the run on, which a standalone run does not have.
+
+1. **The icon list is bundled, and the icon tool is two scripts.** `lucide-icons.ts` (with its `check` / `find` subcommands) is replaced by `use-semantius/references/lucide-icon-checker.ts <name…>` (exit 0 valid, 1 unknown name, 2 no arguments) and `lucide-icon-finder.ts <query…>` (exit 0 a query matched, 1 none, 2 no arguments). Both read `lucide-icon-tags.json`, a snapshot of one `lucide-static` release (its `version` key), and need no network. Maintainers refresh the snapshot with `bun run update-icons` from the repo root.
+2. **A blocked host is named, never worked around** (shared preflight, `semantius-admin/references/preflight.md`). A tool install that gets the allow list's `egress denied` 403 stops with the host and "your admin must allow it" (check 2). The same 403 from the Semantius host, which the CLI reports as exit 5, stops with the host instead of starting a sign-in that cannot help (check 3b). No mirror, proxy, other host or retry.
+3. **Guided close-out, standalone** (no `Run context:` block): the one line carries one clause naming the next step (*Wrote `<path>`. Say the word and I'll set it up in Semantius.*). Still no question widget, no second paragraph, no deploy confirmation.
+4. **`circle-question-mark` replaces `circle-help`** as the example icon in the blueprint template and Stage 13: Lucide renamed the icon, and the checker rejects the old name.
+5. **The icon search is one run with a defined end.** The finder takes up to five queries, most specific first (`"user plus" user person "contact card"`; the words of one query must all match), and answers them in that order, one line per query. Stage 13 takes the first icon that fits; when none fits, the module icon is `box`. Before, nothing said when to stop searching or what to use after an empty search.
+
+Minor: no file format change, no change to the blueprint's shape, and no change to any confirmation the user is asked.
+
+---
+
+## No turn without an ask
+
+2026-10-17.
+
+1. **The Stage 1 guidance aside is never a turn of its own.** It opens the turn of the next question: the Stage 2 design question in guided flow, the name and scope question in expert flow, the Stage 3 entity list when Stage 2 skips its question. A turn that asked nothing left the user with nothing to answer.
+2. **The pre-emit check also confirms the turn ends with an ask**: a turn that names a coming question, decision or step contains it. Scan tokens: "next I", "then I", "before we continue", "one decision", "I'll now", "let me know once". The close-out line is the one turn that needs none.
+3. **A "you didn't ask" report is answered with the question**, never with an explanation of why the turn was shaped that way (Narration restraint).
+
+---
+
 ## Deploy question after the design is expert-only
 
 2026-10-16.

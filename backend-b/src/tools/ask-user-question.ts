@@ -104,7 +104,8 @@ export const askUserQuestion = defineTool({
     '<user_answers type="ask_user_question.answer" toolCallId="..."> block. That is an ' +
     'input block, NOT a tool — there is no user_answers tool; never call one. Its JSON body ' +
     'has "answers" mapping each question text to the chosen label(s) (multi-select labels ' +
-    'joined with ", "; a free-form "Other" answer appears verbatim), and "cancelled": true ' +
+    'joined with ", "; a free-form "Other" answer appears verbatim; an empty string for a ' +
+    'multi-select question means the user deliberately chose none of the options), and "cancelled": true ' +
     'when the user dismissed the form — then continue without the answers and do not ' +
     'immediately re-ask. The user may also ignore the form and type a normal message ' +
     'instead; treat that message as superseding the questions. If, in this same response, ' +

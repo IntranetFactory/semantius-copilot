@@ -90,6 +90,11 @@ function isAnswered(selection: Selection | undefined): boolean {
   return selection.selected.length > 0 || (selection.otherActive && selection.otherText.trim().length > 0);
 }
 
+/** Submittable: single-select needs a pick; multi-select may be empty (answers ""), per the spec. */
+function isSubmittable(question: AskUserQuestionItem, selection: Selection | undefined): boolean {
+  return question.multiSelect === true || isAnswered(selection);
+}
+
 /** question text → answer string, per the Claude Code encoding rules. */
 function assembleAnswers(questions: AskUserQuestionItem[], selections: Record<number, Selection>): Record<string, string> {
   const answers: Record<string, string> = {};
@@ -129,7 +134,7 @@ export function AskUserQuestionCard({
   }
 
   const interactive = status.kind === "pending";
-  const complete = questions.every((_, index) => isAnswered(selections[index]));
+  const complete = questions.every((q, index) => isSubmittable(q, selections[index]));
   const active = Math.min(activeTab, questions.length - 1);
   const question = questions[active];
   const selection = selections[active] ?? EMPTY_SELECTION;
@@ -334,7 +339,7 @@ function AnsweredCard({ questions, answer }: { questions: AskUserQuestionItem[];
               <span className="text-muted-foreground text-xs">{q.question}</span>
             </div>
             <p className={cn("text-sm", answer.cancelled ? "text-muted-foreground" : "font-medium")}>
-              {answer.cancelled ? "—" : answer.answers[q.question] || "—"}
+              {answer.cancelled ? "—" : answer.answers[q.question] || (q.multiSelect ? "None selected" : "—")}
             </p>
           </div>
         ))}

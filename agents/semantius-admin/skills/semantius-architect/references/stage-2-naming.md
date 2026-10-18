@@ -12,7 +12,7 @@ Draw on your general knowledge of the market to identify **the top 3 cloud platf
 
 > **Fast flow** (a fast run, before the go-ahead; `../../semantius-admin/references/fast-flow.md`, section 3). Always modern, self-describing names (`naming_mode: agent-optimized`), even with a Stage 1 baseline: no widget, no question, nothing saved. Skip the rest of this section up to "Naming rules by choice".
 
-**You MUST use the AskUserQuestion tool here** (guided and expert flow, new blueprints only). It is a standalone question (no `Q:` task); fire it alone in its own response. The answer goes only into this blueprint's `naming_mode`, never into `$CUSTOMIZATIONS_FILE`. Do not enumerate the vendors or describe the choices in prose before calling the tool, the option descriptions carry all the information the user needs. The only prose preceding the tool call should be one short framing sentence (e.g. *"{Domain} is a well-established category, here's the choice that shapes the design for the rest of this session."*).
+**You MUST use the AskUserQuestion tool here** (guided and expert flow, new blueprints only). It is a standalone question (no `Q:` task); fire it alone in its own response. The answer goes only into this blueprint's `naming_mode`, never into `$CUSTOMIZATIONS_FILE`. Do not enumerate the vendors or describe the choices in prose before calling the tool, the option descriptions carry all the information the user needs. The only prose preceding the tool call should be the Stage 1 guidance aside, when this turn carries it (guided flow; `stage-1-capture.md`), then one short framing sentence (e.g. *"{Domain} is a well-established category, here's the choice that shapes the design for the rest of this session."*).
 
 Construct exactly one question with **2 to 4 options**: the modern design first (the recommended default), followed by the named vendors, **at most 3** (so 4 options with 3 vendors, 3 with 2, 2 with 1; never a 5th). The runtime adds its own free-text slot; the question text says what it is for: another product to follow, or a structure of the user's own. Never list "Other" yourself. With zero confident vendors, skip the widget entirely (last paragraph of this section).
 
@@ -52,7 +52,7 @@ Then map the choice to a `naming_mode` value for the rest of the session (this v
 - Typed, a structure of the user's own or a product's structure under modern names, confirmed → `naming_mode: agent-optimized`; Stage 3 starts from the confirmed records instead of first principles.
 - Anything else (e.g. "blend Salesforce and HubSpot") → settle it in the details step, then commit to one `naming_mode` value before continuing.
 
-If the domain has no meaningful SaaS incumbents (e.g., a niche internal tool; in expert flow, also when no product passed Stage 1's four-object test), skip AskUserQuestion entirely and go straight to the modern design; tell the user in one sentence why.
+If the domain has no meaningful SaaS incumbents (e.g., a niche internal tool; in expert flow, also when no product passed Stage 1's four-object test), skip AskUserQuestion entirely and go straight to the modern design; tell the user in one sentence why, in the same turn as the Stage 3 entity list (with the Stage 1 guidance aside before it, when this turn carries it).
 
 **Naming rules by choice:**
 

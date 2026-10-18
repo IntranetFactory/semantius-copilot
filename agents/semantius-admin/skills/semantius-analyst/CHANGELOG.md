@@ -8,6 +8,18 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## The icon check needs no network
+
+2026-10-18. In a sandbox whose egress allow list blocks `cdn.jsdelivr.net`, `lucide-icons.ts check` could not download the icon list and exited 2, the same code as a usage error, and the "Icons exist" pre-save row read any non-zero exit as an unknown icon: a Blocker caused by the environment, not the design.
+
+1. **The icon list is bundled, and the icon tool is two scripts.** "Icons exist" runs `use-semantius/references/lucide-icon-checker.ts <name…>` (exit 0 valid, 1 unknown name, 2 no arguments) and Stage 4 finds icons with `lucide-icon-finder.ts <query…>`, replacing `lucide-icons.ts check` / `find`. Both read `lucide-icon-tags.json`, a snapshot of one `lucide-static` release, so "Icons exist" no longer depends on a host.
+2. **`circle-question-mark` replaces `circle-help`** as the example icon in the spec template: Lucide renamed the icon, and the checker rejects the old name.
+3. **The icon search is one run with a defined end.** Stage 4 runs the finder once with up to five queries, most specific first (the words of one query must all match), and takes the first icon that fits; when none fits, the entry gets no icon.
+
+Minor: no file format change, no change to the spec's shape, and no change to any confirmation the user is asked.
+
+---
+
 ## every enum entry gets a label and a color; `label` is a §5 property
 
 2026-10-16. A deployed `workflow_state` showed raw values (`checked_in`) because readable values got no label, and colors were limited to state-like enums while tools like Airtable and SmartSuite color the options of every select field. The label sat inline on the value bullet while every other property was a named sub-bullet.
