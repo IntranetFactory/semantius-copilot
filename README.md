@@ -46,7 +46,12 @@ link can open a page ready to chat:
 /agent/<name>#jwt=<org>:<jwt>                  either key works here; jwt wins over cookie
 /agent/<name>#cookie=<value>
 …any of the above with &session=<id>           also open that session (deep link)
+…any page with #prompt=<url-encoded text>      prefill the composer — NOT sent
 ```
+
+`#prompt=` (combinable with the others via `&`) fills the first chat's composer for the
+user to edit and submit; it is stripped like the credentials, so a reload does not
+re-fill it, and later "New session"/"New request" drafts start empty.
 
 The fragment is consumed once at page load and stripped from the address bar; the
 credential is persisted to this browser's localStorage, so the next visit needs no
@@ -126,6 +131,7 @@ and `App.tsx`, which are NOT part of the copy.
 | `onSessionCreated?` | `(id, info)` — the server-minted id, for status lines/deep links |
 | `onError?` | session-create failure (also rendered inline by the container) |
 | `className?`, `placeholder?` | frame styling override / composer placeholder |
+| `initialInput?` | composer prefill, read once at mount — the user submits it; never auto-sent |
 
 `agentName`/`sessionId` are fixed per instance — hosts navigate by changing the
 container's `key` (see the key contract in the component header). Never feed

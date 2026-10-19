@@ -62,23 +62,29 @@ export function agentNameFromPath(pathname: string): string | undefined {
  * Which key(s) a page honors is the page's call: /chat reads `jwt`, /copilot
  * reads `cookie`, /agent/<name> reads both (the bearer wins server-side).
  *
+ * `#prompt=<text>` (any page, URL-encoded) prefills the first chat's composer
+ * WITHOUT sending it. It is one-shot like the credentials: stripped too, so a
+ * reload does not re-fill a composer the user may have already cleared.
+ *
  * Call once per mount (via useMemo): it mutates history.
  */
-export function consumeCredentialFragment(): { jwt?: string; cookie?: string; session?: string } {
+export function consumeCredentialFragment(): { jwt?: string; cookie?: string; session?: string; prompt?: string } {
   const raw = window.location.hash.replace(/^#/, '');
   if (!raw) return {};
   const params = new URLSearchParams(raw);
   const jwt = params.get('jwt') ?? undefined;
   const cookie = params.get('cookie') ?? undefined;
   const session = params.get('session') ?? undefined;
-  if (jwt || cookie) {
+  const prompt = params.get('prompt') || undefined;
+  if (jwt || cookie || params.has('prompt')) {
     // Don't leave a credential sitting in the address bar. (It stays in browser
     // history for this entry either way — a link-borne credential is a
     // convenience for POC/automation, not a way to keep one secret.)
     params.delete('jwt');
     params.delete('cookie');
+    params.delete('prompt');
     const rest = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${rest ? `#${rest}` : ''}`);
   }
-  return { jwt, cookie, session };
+  return { jwt, cookie, session, prompt };
 }

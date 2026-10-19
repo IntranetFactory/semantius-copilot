@@ -55,9 +55,11 @@ export type ChatPageProps = {
   };
   /** Session id from a deep link, opened once a credential is present. */
   initialSessionId?: string;
+  /** Composer prefill from a `#prompt=` link — the first chat only, never sent. */
+  initialPrompt?: string;
 };
 
-export function ChatPage({ title, auth, credential, initialSessionId }: ChatPageProps) {
+export function ChatPage({ title, auth, credential, initialSessionId, initialPrompt }: ChatPageProps) {
   /** The dropdown's list — the RUNTIME registry (GET /agents), fetched once a
    * credential is present. undefined = not fetched yet. */
   const [agentNames, setAgentNames] = useState<string[]>();
@@ -203,6 +205,7 @@ export function ChatPage({ title, auth, credential, initialSessionId }: ChatPage
           onSessionCreated={onSessionCreated}
           onError={(err) => setDetail(`session create failed — ${String(err)}`)}
           hintStore={localHintStore}
+          initialInput={epoch === 0 ? initialPrompt : undefined}
         />
       ) : null}
     </main>

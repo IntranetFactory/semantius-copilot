@@ -51,6 +51,7 @@ export function CopilotApp() {
         prompt: 'Paste the value of your better-auth.session_token cookie to begin.',
       }}
       initialSessionId={fragment.session}
+      initialPrompt={fragment.prompt}
     />
   );
 }

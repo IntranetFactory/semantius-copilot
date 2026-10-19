@@ -68,6 +68,7 @@ export function AgentChatContainer({
   hintStore,
   className,
   placeholder,
+  initialInput,
 }: {
   /** WHICH deployed agent to talk to (`pnpm deploy:agent <name>`). */
   agentName: string;
@@ -99,6 +100,10 @@ export function AgentChatContainer({
   className?: string;
   /** Composer placeholder text. */
   placeholder?: string;
+  /** Text the composer starts out holding — NOT sent: the user edits it and
+   * submits it themselves. Read once, at mount (like `sessionId`, fixed per
+   * instance). */
+  initialInput?: string;
 }) {
   const auth = useMemo<ChatAuth>(() => {
     const b = bearer?.trim();
@@ -261,6 +266,9 @@ export function AgentChatContainer({
         onModelChange={setPickedModelId}
         className={className}
         placeholder={placeholder}
+        // Only the instance mounted first: the draft's submit already consumed
+        // the text, so the live instance after the key flip must not re-seed it.
+        initialInput={createdId ? undefined : initialInput}
       />
     </>
   );

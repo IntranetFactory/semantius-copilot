@@ -165,6 +165,8 @@ export function AgentApp() {
           onSessionCreated={onSessionCreated}
           onResponseSettled={onResponseSettled}
           hintStore={localHintStore}
+          // A `#prompt=` link prefills only the chat the page opened with.
+          initialInput={epoch === 0 ? fragment.prompt : undefined}
           className="h-auto min-h-0 flex-1"
         />
       </main>

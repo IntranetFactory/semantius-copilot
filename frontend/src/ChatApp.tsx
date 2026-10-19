@@ -40,6 +40,7 @@ export function ChatApp() {
         prompt: 'Paste your Semantius token to begin.',
       }}
       initialSessionId={fragment.session}
+      initialPrompt={fragment.prompt}
     />
   );
 }

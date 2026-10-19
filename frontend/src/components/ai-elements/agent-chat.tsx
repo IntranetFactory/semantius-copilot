@@ -99,6 +99,7 @@ export function AgentChat({
   onModelChange,
   className,
   placeholder,
+  initialInput,
 }: {
   /** Absent = draft mode: the surface renders before any session exists (the
    * hook stays dormant), and the first submit goes through onDraftSend. */
@@ -148,8 +149,10 @@ export function AgentChat({
   className?: string;
   /** Composer placeholder text. */
   placeholder?: string;
+  /** The composer's starting text (a prefill, never sent). Read once, at mount. */
+  initialInput?: string;
 }) {
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialInput ?? '');
   const [uploadError, setUploadError] = useState<string>();
   // What the markdown link override needs to resolve and download
   // /workspace/{sessionId}/<file> links from agent replies.
@@ -579,7 +582,18 @@ export function AgentChat({
                       agent instance with the pick); then shown, disabled. */}
                   {meta?.models && meta.models.length > 1 && modelId ? (
                     <span title={messages.length > 0 ? 'Model is fixed for this conversation' : undefined}>
-                      <PromptInputSelect value={modelId} onValueChange={onModelChange} disabled={messages.length > 0}>
+                      {/* `form` names an id no element has, detaching the picker
+                          from the composer's <form>: PromptInput calls
+                          form.reset() on submit, and Radix Select answers a
+                          reset by firing onValueChange with its MOUNT value —
+                          the agent default — clobbering the pick right before
+                          the first send seeds the session with it. */}
+                      <PromptInputSelect
+                        form="agent-chat-model-picker"
+                        value={modelId}
+                        onValueChange={onModelChange}
+                        disabled={messages.length > 0}
+                      >
                         {/* Once fixed, drop the chevron — nothing to open. */}
                         <PromptInputSelectTrigger className="disabled:[&>svg]:hidden">
                           <PromptInputSelectValue />
