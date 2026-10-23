@@ -10,7 +10,7 @@ The interaction flow is a **persisted switch**, stored as `.interaction_flow` in
   - Architect Stage 1 brings domain knowledge up front. When a well-known product matches the request, a short aside names the products the design draws on and a few best-practice points, in the same turn as the design question. When nothing similar is known, a short discovery interview (closest product, who uses it, what it replaces; only what the request leaves open) comes first (`../../semantius-architect/references/stage-1-capture.md`). An unclear category is settled by the interview's "Closest to" question.
   - The questions in section 3 are skipped and answered with a fixed default.
 - **`expert`: control.** For users who know what they want. Everything guided flow asks, plus every question in section 3. Stage 1 gives the guided-flow aside and interview, and keeps only products that pass the four-object test.
-- **`fast` (experimental): autonomy.** For a new build only: a baseline product, a short interview, one go-ahead, then no further questions until the module is deployed and the demo-data question waits. An unclear category is settled by the fast-flow interview. Everything else runs as in guided flow. The rules are in [`fast-flow.md`](./fast-flow.md).
+- **`fast`: autonomy.** For a new build only: a short interview (which design to follow, the modern one by default, and the must-haves), one go-ahead, then no further questions until the module is deployed and the demo-data question waits. An unclear category is settled by the fast-flow interview. Everything else runs as in guided flow. The rules are in [`fast-flow.md`](./fast-flow.md).
 
 ## 2. Turning it on and off
 

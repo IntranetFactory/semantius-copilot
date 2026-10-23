@@ -1,14 +1,14 @@
-# Fast flow (experimental, shared across Semantius skills)
+# Fast flow (shared across Semantius skills)
 
 *Canonical copy. `semantius-admin`, `semantius-architect`, `semantius-analyst`, and `semantius-modeler` each keep a resident "Fast flow" section of five lines or fewer that points here, and every question point in their stage files carries its own one-line "Fast flow, after the go-ahead" rule naming its pick. So a gate resolves correctly even when this file was not read; this file holds the detail (the pick procedure, the fixed picks, the log, the summary, the resume rule). Keep the resident sections, the gate lines, and this file in sync.*
 
 ## 1. What it is
 
-Fast flow is the third value of the `.interaction_flow` switch ([`interaction-flow.md`](./interaction-flow.md)). For a new build: a baseline product, a short interview, one go-ahead, then no further questions until the module is deployed and the demo-data question waits.
+Fast flow is the third value of the `.interaction_flow` switch ([`interaction-flow.md`](./interaction-flow.md)). For a new build: a short interview (which design to follow, and the must-haves), one go-ahead, then no further questions until the module is deployed and the demo-data question waits.
 
 ## 2. When a run is a fast run
 
-**The switch.** The user turns it on by saying "fast flow" (`.interaction_flow: fast`); "guided flow" or "expert flow" replaces it. A bare "fast", "just do it", "don't ask me", "quick", or "simple" changes nothing. Switching to it narrates: *"Switched to fast flow (experimental)."*
+**The switch.** The user turns it on by saying "fast flow" (`.interaction_flow: fast`); "guided flow" or "expert flow" replaces it. A bare "fast", "just do it", "don't ask me", "quick", or "simple" changes nothing. Switching to it narrates: *"Switched to fast flow."*
 
 **The scope.** The saved switch is the org's preference, not a per-run fact. The admin decides the flow for each run:
 
@@ -40,10 +40,9 @@ Check both signals at Step 0 and again after a context reset. When neither is pr
 
 The detail lives in the architect's stage files; this is the map.
 
-- **Baseline** (`stage-1-capture.md`). Pick 3 to 4 products whose data model fits the request. With none, there is no baseline: modern names.
-- **Interview** (`stage-1-capture.md`, the interview templates). Zero to two questions: "Closest to" (skipped when the user named a product) and the must-haves question, which replaces Stage 3's "Also track". "Users" and "Replaces" are not asked.
-- **Naming** (`stage-2-naming.md`). Always modern, self-describing names, with or without a baseline: no widget, nothing saved. The baseline shapes the entities, not their names.
-- **Entities** (`stage-3-entities.md`). Drafted from the baseline's object model and trimmed to the interview answers; the family question takes its Recommended option; the entity-list question is not asked (the go-ahead covers it).
+- **Interview** (`stage-1-capture.md`). Zero to two questions, in one message: Stage 2's design question (skipped when the user named a product or no product fits) and the must-haves question, which replaces Stage 3's "Also track". "Users" and "Replaces" are not asked.
+- **Design and naming** (`stage-2-naming.md`). The same design question as guided flow: the modern design (Recommended) or up to 3 products whose data model fits the request. A picked product, or one named in the request, is followed: its records and names. With no product that fits, the design is modern. Nothing is saved.
+- **Entities** (`stage-3-entities.md`). Drafted from the followed product's object model, or from first principles for the modern design, and trimmed to the interview answers; the family question takes its Recommended option; the entity-list question is not asked (the go-ahead covers it).
 - **The go-ahead** (below), at the end of Stage 3.
 
 ### The go-ahead
@@ -52,8 +51,8 @@ The detail lives in the architect's stage files; this is the map.
 
 **The summary**, one message, in plain language (Writing Convention 8):
 
-1. The baseline: *"Based on how <Product> models this, with modern, self-describing names."*
-2. The entity table (Plural Label, one-line purpose).
+1. The design: *"Built on current best practice, with modern, self-describing names."* for the modern design; *"Following <Product>'s records and names."* when following a product.
+2. The entity table (Plural Label, one-line purpose; when following a product, also the <Product> object each entity maps to, `stage-3-entities.md`).
 3. The 2 to 4 best-practice points (Stage 1 aside).
 4. The exact matches, one line, left out when there are none: *"Organizations already exist in Sales; I'll use them."*
 5. What happens next: *"After your go-ahead I build and deploy without more questions. I only connect to records your instance already has when the name matches exactly, and that may share or reshape them; anything that only looks similar is kept separate. Everything I decide is listed at the end."*

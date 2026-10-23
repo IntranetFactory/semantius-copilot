@@ -314,7 +314,7 @@ The interaction flow is a persisted switch, `.interaction_flow` in `$CUSTOMIZATI
 
 It is not a scope flag: no `Q:` task, no widget.
 
-### Fast flow (experimental)
+### Fast flow
 
 In a fast run, read [`references/fast-flow.md`](./references/fast-flow.md) now and again after a context reset. The design step ends with one go-ahead question; after a yes, no sub-skill asks anything until the modeler's closing sample-data question, because the user approved the whole build at once, every further stop breaks that promise, and the closing summary is their review. When the user answers the go-ahead, write the marker into your pipeline tasks' descriptions (`fast: go-ahead given` / `fast: guided flow for this build`; `references/fast-flow.md`, section 3). Before entering the analyst, and again before the modeler, read the marker in your pipeline task's description (`TaskGet`): `fast: go-ahead given` means pass `Interaction flow: fast`; `fast: guided flow for this build` (the user chose "Ask me as usual") means pass `guided`.
 

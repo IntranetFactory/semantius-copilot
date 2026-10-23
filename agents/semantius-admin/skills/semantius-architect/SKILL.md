@@ -188,13 +188,13 @@ load per run covers every skill active in the same conversation.
   | Rebuild (Mode D) | `Design › Rebuild the design` |
 
 - **No ledger stages.** Every architect question is standalone (no `Q:` task):
-  - the Stage 2 design question (new blueprints, guided and expert flow; never saved; Rebuild re-asks it), and its "Build the design on this?" confirmation after a typed answer;
+  - the Stage 2 design question (new blueprints, every flow; in fast flow left out when the request names a product; never saved; Rebuild re-asks it), and its "Build the design on this?" confirmation after a typed answer;
   - the Stage 1 and Stage 3 conversational confirmations (the Stage 1 name and scope question only while expert flow is on);
   - the Stage 3 "Also track" multiSelect;
   - the Stage 3 family question (`references/normalization.md`, only when the deciding fact is unknown; it goes first in the "Also track" call);
   - the Stage 3 re-confirmation of the entity table, when the "Also track" picks added entities;
   - the Stage 5 relationships, diagram and lifecycles confirmation (`references/stage-5-mermaid.md`);
-  - the Stage 1 discovery interview (guided and expert flow, when no well-known product fits; fast flow, "Closest to" and "Must-haves" only);
+  - the Stage 1 discovery interview (guided and expert flow, when no well-known product fits; fast flow, "Must-haves" only, asked with the Stage 2 design question);
   - the fast-flow go-ahead (fast runs only);
   - the Stage 6 related-modules confirmation (only while expert flow is on);
   - the Stage 7 handoffs confirmation (only while expert flow is on);
@@ -334,7 +334,7 @@ When in Audit, Extend, Customize, or Rebuild mode, read the file before doing an
 
 ---
 
-## Fast flow (experimental)
+## Fast flow
 
 A run is a fast run when the run context says `Interaction flow: fast` (the admin sets it only for a new build) or the admin pipeline task's marker (`TaskGet`) says `fast: awaiting go-ahead` or `fast: go-ahead given`; read [`../semantius-admin/references/fast-flow.md`](../semantius-admin/references/fast-flow.md) at Step 0 and after a context reset. **Before the go-ahead:** baseline, short interview, and naming (Stages 1-3), then the go-ahead at the end of Stage 3. **After the go-ahead** (the admin pipeline task's marker says `fast: go-ahead given`): no `AskUserQuestion`, no message ending in a question, no rendered proposals; each gate's "Fast flow" line names its pick, which you log with `log_pick` (fast-flow.md, section 5). The one exception is the Stage 10 permission step's keep-or-replace question for a live module whose permissions were set up by hand: it pauses the run, is asked, and the run continues (`references/stage-10-workflow-perms.md`). Why: the user approved the whole build at once, and every further stop breaks that promise; the "Decided for you" list at the end is their review.
 

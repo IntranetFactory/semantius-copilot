@@ -8,6 +8,27 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## A followed product's names are converted by a script
+
+2026-10-23. Following a product converted its record names to `table_name` by hand, and nothing said how to split a run of capitals (`SLAPolicy`), how to make a compound name plural (`OpportunityLineItem`), or what to do with a name already in lowercase or a custom record (`Invoice__c`), so the same product name could convert differently from run to run. The field-naming rule sat in the architect's naming table, but the architect writes no fields. Rules: `references/stage-2-naming.md`, `../use-semantius/references/vendor-names.ts`.
+
+1. **`vendor-names.ts` converts every name of a followed product**, never by hand: `bun vendor-names.ts entity:<Name>… field:<Name>…`, each name singular and spelled the product's way. A run of capitals is one word, a name already in lowercase is kept as written, only the last word of a table name becomes plural, labels keep acronyms in capitals. It answers `skip:` for a custom record or field and for a field the platform creates on every table, `built-in:` for a record name that lands on a platform built-in, and `reserved:` for a forbidden field name. Tests: `bun test` from the repo root (`scripts/vendor-names.test.ts`).
+2. **The naming rules table** points to the script for records and to the analyst (`stage-4-fields.md`, "Fields of a followed product") for fields; Stage 3 converts with the script when it drafts a product's records.
+
+---
+
+## Fast flow asks guided flow's design question; fast flow is no longer experimental
+
+2026-10-23. A fast run of "i need an applicant tracker, use the fast flow" opened with "Which of these is closest to what you need?": Greenhouse, Lever, Workable, and "None of these, design from scratch". That question came from the discovery interview, where it only runs when no product fits. In fast flow it chose the product whose structure was copied, always under modern names, so the modern design, guided flow's recommended default, was reachable only as "design from scratch", and following a product lost the point of following it: data moves to and from a product easily only when the records and the names line up. Rules: `references/stage-1-capture.md`, `references/stage-2-naming.md`, `../semantius-admin/references/fast-flow.md`.
+
+1. **Fast flow asks Stage 2's design question**, the one guided flow asks: "Modern design (Recommended)" first, then up to 3 products as "Follow <Product>". It is fired in the same call as "Must-haves", and the modern option's description names the one or two practices that set it apart, because fast flow shows no guidance aside. It is left out when the request names a product (that product is followed) or no product fits (modern). A typed answer runs the typed-answer step, as in guided flow. Fast flow no longer asks "Closest to"; the guided and expert discovery interview keeps it.
+2. **A followed product brings its records and names** (`naming_mode: template:<product>`), as in guided flow. Fast flow no longer forces modern names. The go-ahead summary opens with *"Following <Product>'s records and names."* or, for the modern design, *"Built on current best practice, with modern, self-describing names."*, and its entity table names the product object each entity maps to.
+3. **An uncertain product object is not asked about in fast flow:** the entity is marked "inspired by <Product>" and named so in the go-ahead summary's entity table.
+4. **The must-haves come from the products on the list**, because both questions are asked before the design is known.
+5. **Fast flow is no longer marked experimental.** The switch line is *"Switched to fast flow."*, and the "Fast flow" sections of the admin, architect, analyst and modeler drop the label.
+
+---
+
 ## An unreachable verification host never stops a run
 
 2026-10-18. A standalone guided run ("i want to track leads") ran every stage, wrote the blueprint and passed `consistency-check.ts`, then ended on a note that the icon check could not run because `cdn.jsdelivr.net` was blocked by the sandbox's egress allow list, with no next step. `lucide-icons.ts` downloaded the icon list at run time and exited 2 when it could not, the same code as a usage error, and the `icon_name` gate read any non-zero exit as an unknown icon. The guided close-out assumed an orchestrator moves the run on, which a standalone run does not have.

@@ -790,14 +790,14 @@ through the placeholder path (see above) and lose the model's metadata.
 `scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, registry
 plumbing, and drives the installed pi-ai dist against a canned fetch to assert the request
 body's `provider` is the routing object byte-for-byte. The `deepseek-v4.1-flash` entry
-(`semantius-admin`'s default) runs `deepseek/deepseek-v4.1-flash` with `{ "sort": "throughput", "max_price": { "completion":
-0.7 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"] }` — the fastest non-fp4
-host at or under $0.70/M output (filters apply *before* the throughput ranking). `"unknown"`
-is load-bearing: under that cap the only disclosed-quant host (DeepInfra, fp8) caps output
-at 131k, so without it no host qualifies. The model is newer than the pi-ai catalog, so the
-entry pins `max_tokens: 384000` / `context_window: 1048576` explicitly (384000 = DeepSeek
-first-party's output cap); `agents_config.jsonc` records the placeholder-path side effects
-and the eligible hosts. Per-host prices, quantization and output caps for a model:
+(`semantius-admin`'s default) runs `deepseek/deepseek-v4.1-flash-1017` with `{ "sort": "throughput", "max_price": { "completion":
+0.6 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"] }` — the fastest non-fp4
+host at or under $0.60/M output, the list rate (filters apply *before* the throughput
+ranking). `"unknown"` is load-bearing: it admits DeepSeek first-party, Cloudflare, Reka and
+Relace; without it only InferenceNet and Morph qualify. The model is newer than the pi-ai
+catalog, so the entry pins `max_tokens: 384000` / `context_window: 1048576` explicitly
+(under every eligible host's output cap, lowest 393216); `agents_config.jsonc` records the
+placeholder-path side effects and the eligible hosts. Per-host prices, quantization and output caps for a model:
 `GET https://openrouter.ai/api/v1/models/<slug>/endpoints` (public).
 
 Verified against the deployed worker (2026-08-18, hand-crafted turn-1 seeds via

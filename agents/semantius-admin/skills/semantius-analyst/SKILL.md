@@ -237,7 +237,7 @@ Default to Reconcile unless the user references an existing spec. The rest of th
 
 ---
 
-## Fast flow (experimental)
+## Fast flow
 
 - **When:** a run is a fast run for the analyst only when the run context carries `Interaction flow: fast`, or the admin pipeline task's marker (`TaskGet`) says `fast: go-ahead given` (`fast: guided flow for this build` means guided flow). A saved `fast` in `$CUSTOMIZATIONS_FILE` on its own counts as guided flow, and so does a direct call. Check at Step 0 and after a context reset; in a fast run, read [`../semantius-admin/references/fast-flow.md`](../semantius-admin/references/fast-flow.md) at Step 0 and again after a context reset.
 - **The turn rule** (fast-flow.md 4.1): no `AskUserQuestion`, no message ending in a question, no rendered plan or proposal. Each question point takes the pick its "Fast flow, after the go-ahead" line names and logs one line (fast-flow.md section 5).

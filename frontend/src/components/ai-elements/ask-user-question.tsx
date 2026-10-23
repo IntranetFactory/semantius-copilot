@@ -9,7 +9,11 @@
  *
  * Claude Code-style layout: a tab bar of header chips when there are 2+
  * questions (answered tabs get a check), 2-4 option rows with label +
- * description, an auto-added "Other" free-text row, Submit + Dismiss.
+ * description, an auto-added "Other" free-text row, Submit + Dismiss. With
+ * several questions the primary button reads "Continue" (advance to the next
+ * unseen tab, then to any seen-but-unanswered one) until every tab has been
+ * seen and is submittable;
+ * only then does it become Submit.
  *
  * All durable state is derived by the HOST from conversation history (the
  * answer signal); this component keeps only ephemeral selection state, so the
@@ -126,6 +130,10 @@ export function AskUserQuestionCard({
   const questions = parseQuestions(input);
   const [selections, setSelections] = useState<Record<number, Selection>>({});
   const [activeTab, setActiveTab] = useState(0);
+  // Tabs the user has opened. An empty multi-select is a valid answer, so
+  // "every tab submittable" alone would let Submit fire before later tabs
+  // were ever shown — Submit also requires every tab to have been seen.
+  const [visited, setVisited] = useState<ReadonlySet<number>>(() => new Set([0]));
 
   if (!questions) return null;
 
@@ -134,22 +142,29 @@ export function AskUserQuestionCard({
   }
 
   const interactive = status.kind === "pending";
-  const complete = questions.every((q, index) => isSubmittable(q, selections[index]));
   const active = Math.min(activeTab, questions.length - 1);
   const question = questions[active];
   const selection = selections[active] ?? EMPTY_SELECTION;
 
+  /** Still needs the user: never shown, or shown but not yet submittable. */
+  const isPending = (index: number, all: Record<number, Selection>) =>
+    !visited.has(index) || !isSubmittable(questions[index], all[index]);
+  const ready = questions.every((_, index) => !isPending(index, selections));
+
   const update = (index: number, next: Selection) => setSelections((prev) => ({ ...prev, [index]: next }));
 
-  /** After a single-select pick, jump to the next unanswered question. */
-  const advanceFrom = (index: number, next: Record<number, Selection>) => {
-    for (let step = 1; step < questions.length; step += 1) {
-      const candidate = (index + step) % questions.length;
-      if (!isAnswered(next[candidate])) {
-        setActiveTab(candidate);
-        return;
-      }
-    }
+  const goTo = (index: number) => {
+    setActiveTab(index);
+    setVisited((prev) => (prev.has(index) ? prev : new Set(prev).add(index)));
+  };
+
+  /** Jump to the next pending question after `index` (wrapping): unseen tabs
+   * first, then seen-but-unanswered ones; stay put if none. */
+  const advanceFrom = (index: number, all: Record<number, Selection>) => {
+    const order = Array.from({ length: questions.length - 1 }, (_, step) => (index + step + 1) % questions.length);
+    const target =
+      order.find((candidate) => !visited.has(candidate)) ?? order.find((candidate) => isPending(candidate, all));
+    if (target !== undefined) goTo(target);
   };
 
   const pick = (label: string) => {
@@ -205,7 +220,7 @@ export function AskUserQuestionCard({
                 type="button"
                 role="tab"
                 aria-selected={index === active}
-                onClick={() => setActiveTab(index)}
+                onClick={() => goTo(index)}
                 className={cn(
                   "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
                   index === active
@@ -292,15 +307,26 @@ export function AskUserQuestionCard({
         </div>
 
         <div className="flex items-center gap-2 px-3 pb-3">
-          <Button
-            type="button"
-            size="sm"
-            disabled={!interactive || !complete}
-            onClick={() => onSubmit?.({ answers: assembleAnswers(questions, selections), cancelled: false })}
-          >
-            {status.kind === "submitting" ? <Spinner className="size-3" /> : null}
-            Submit {questions.length > 1 ? "answers" : "answer"}
-          </Button>
+          {ready ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!interactive}
+              onClick={() => onSubmit?.({ answers: assembleAnswers(questions, selections), cancelled: false })}
+            >
+              {status.kind === "submitting" ? <Spinner className="size-3" /> : null}
+              Submit {questions.length > 1 ? "answers" : "answer"}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!interactive || !isSubmittable(question, selection)}
+              onClick={() => advanceFrom(active, selections)}
+            >
+              Continue
+            </Button>
+          )}
           <Button
             type="button"
             size="sm"
