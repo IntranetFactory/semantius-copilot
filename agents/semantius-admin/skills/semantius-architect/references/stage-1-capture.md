@@ -11,7 +11,7 @@ Ask the user what system they want to model. Two shapes are common:
 
 **Bring what you know about similar products.**
 
-> **Interaction flow** (the `.interaction_flow` switch, read at Step 0; `../../semantius-admin/references/interaction-flow.md`). **Guided flow (the default):** think of the products that fit, then give the guidance aside (a product fits) or run the discovery interview first (none fits). **Expert flow:** as in guided flow, plus one step: apply the four-object test before deciding whether a product fits. **Fast flow:** think of the products that fit, then run the fast-flow interview (the last part of this stage). In every flow, an unclear category (e.g., the user says "a system for my coaches") is settled by the interview's "Closest to" question; in fast flow, by Stage 2's design question (`stage-2-naming.md`).
+> **Interaction flow** (the `.interaction_flow` switch, read at Step 0; `../../semantius-admin/references/interaction-flow.md`). **Guided flow:** think of the products that fit, then give the guidance aside (a product fits) or run the discovery interview first (none fits). **Expert flow:** as in guided flow, plus one step: apply the four-object test before deciding whether a product fits. **Fast flow:** think of the products that fit, then run the fast-flow interview (the last part of this stage). In every flow, an unclear category (e.g., the user says "a system for my coaches") is settled by the interview's "Closest to" question; in fast flow, by Stage 2's design question (`stage-2-naming.md`).
 
 **Products that fit.** Think of the 3 to 4 well-known products (point solutions or cloud platforms) whose data model best fits the request. Keep the list: Stage 2 uses it for its vendor options.
 

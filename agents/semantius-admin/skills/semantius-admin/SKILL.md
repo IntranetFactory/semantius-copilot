@@ -306,17 +306,21 @@ Use the inference-then-ask procedure in Step 6.4 (intent table 6.4.1, exact word
 
 ### Interaction flow switch (no question)
 
-The interaction flow is a persisted switch, `.interaction_flow` in `$CUSTOMIZATIONS_FILE`: `guided` (default), `expert`, or `fast` (rules: [`references/interaction-flow.md`](./references/interaction-flow.md)). Handle it here, before any sub-skill starts:
+The interaction flow is a persisted switch, `.interaction_flow` in `$CUSTOMIZATIONS_FILE`: `guided`, `expert`, or `fast` (the default when nothing is saved; rules: [`references/interaction-flow.md`](./references/interaction-flow.md)). Handle it here, before any sub-skill starts:
 
 1. If the request says "expert flow", "guided flow", or "fast flow", write `.interaction_flow` (`expert` / `guided` / `fast`) with the usual provenance comment (`references/customizations-protocol.md` 7.5, step 4a) and narrate the one line from interaction-flow.md section 2.
 2. Otherwise, if `.interaction_flow` is `expert`, narrate once: *"Running in expert flow."*
-3. **Decide the flow for this run** and pass it to every sub-skill as `Interaction flow:` (Step 7.3): `fast` only for a new build (`Architect mode: create`) while the switch is `fast`; `guided` for any other run that starts from an existing design while the switch is `fast` (Rebuild excepted: it always runs in expert flow, so pass `expert` and narrate nothing), narrating once *"Fast flow covers new builds only; this run uses guided flow."*; otherwise the switch value.
+3. **Decide the flow for this run** and pass it to every sub-skill as `Interaction flow:` (Step 7.3):
+   - Rebuild: `expert`, whatever the switch says; narrate nothing.
+   - Switch `expert` or `guided`: the switch value.
+   - Switch `fast` or not set, new build (`Architect mode: create`): `fast`; but `guided` for this build only when the request asks to be guided (`references/interaction-flow.md`, section 2), narrating once *"Using guided flow for this one."* and writing nothing.
+   - Switch `fast` or not set, any other run (it starts from an existing design): `guided`; only when the switch is saved as `fast`, narrate once *"Fast flow covers new builds only; this run uses guided flow."*
 
 It is not a scope flag: no `Q:` task, no widget.
 
 ### Fast flow
 
-In a fast run, read [`references/fast-flow.md`](./references/fast-flow.md) now and again after a context reset. The design step ends with one go-ahead question; after a yes, no sub-skill asks anything until the modeler's closing sample-data question, because the user approved the whole build at once, every further stop breaks that promise, and the closing summary is their review. When the user answers the go-ahead, write the marker into your pipeline tasks' descriptions (`fast: go-ahead given` / `fast: guided flow for this build`; `references/fast-flow.md`, section 3). Before entering the analyst, and again before the modeler, read the marker in your pipeline task's description (`TaskGet`): `fast: go-ahead given` means pass `Interaction flow: fast`; `fast: guided flow for this build` (the user chose "Ask me as usual") means pass `guided`.
+In a fast run, read [`references/fast-flow.md`](./references/fast-flow.md) now and again after a context reset. The design step ends with one go-ahead question; after a yes, no sub-skill asks anything until the modeler's closing sample-data question, because the user approved the whole build at once, every further stop breaks that promise, and the closing summary is their review. When the user answers the go-ahead, write the marker into your pipeline tasks' descriptions (`fast: go-ahead given` / `fast: guided flow for this build`; `references/fast-flow.md`, section 3). Before entering the analyst, and again before the modeler, read the marker in your pipeline task's description (`TaskGet`): `fast: go-ahead given` means pass `Interaction flow: fast`; `fast: guided flow for this build` (the user chose "Ask me along the way") means pass `guided`.
 
 ### Presenting the plan
 

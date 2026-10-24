@@ -8,20 +8,21 @@ Fast flow is the third value of the `.interaction_flow` switch ([`interaction-fl
 
 ## 2. When a run is a fast run
 
-**The switch.** The user turns it on by saying "fast flow" (`.interaction_flow: fast`); "guided flow" or "expert flow" replaces it. A bare "fast", "just do it", "don't ask me", "quick", or "simple" changes nothing. Switching to it narrates: *"Switched to fast flow."*
+**The switch.** Fast flow is the default: with no saved flow, a new build runs in fast flow. The user can also save it by saying "fast flow" (`.interaction_flow: fast`); "guided flow" or "expert flow" replaces it. A bare "fast", "just do it", "don't ask me", "quick", or "simple" changes nothing. Switching to it narrates: *"Switched to fast flow."*
 
 **The scope.** The saved switch is the org's preference, not a per-run fact. The admin decides the flow for each run:
 
 | Run | Flow |
 |---|---|
-| New build from an idea (`Architect mode: create`), switch `fast` | `fast` |
-| Anything that starts from an existing design: clone, deploying a blueprint or spec, customize, extend, audit | `guided`; the admin narrates once: *"Fast flow covers new builds only; this run uses guided flow."* |
+| New build from an idea (`Architect mode: create`), switch `fast` or not set | `fast` |
+| The same, when the request asks to be guided ([`interaction-flow.md`](./interaction-flow.md), section 2) | `guided` for this build only, nothing saved; the admin narrates once: *"Using guided flow for this one."* |
+| Anything that starts from an existing design: clone, deploying a blueprint or spec, customize, extend, audit | `guided`; only when the switch is saved as `fast`, the admin narrates once: *"Fast flow covers new builds only; this run uses guided flow."* |
 | Rebuild | `expert` (reopening every decision is its purpose) |
 
 **The two signals.** A sub-skill is in fast flow only when one of these says so; the saved switch on its own never makes a sub-skill skip a question.
 
 1. **The run context line** `Interaction flow: fast`, passed by the admin to every sub-skill (`semantius-admin/SKILL.md`, Step 7.3).
-2. **The task marker.** The admin writes the state into the description of its pipeline tasks (read it with `TaskGet`): `fast: awaiting go-ahead` when the run starts, `fast: go-ahead given` when the user says yes, `fast: guided flow for this build` when the user picks "Ask me as usual".
+2. **The task marker.** The admin writes the state into the description of its pipeline tasks (read it with `TaskGet`): `fast: awaiting go-ahead` when the run starts, `fast: go-ahead given` when the user says yes, `fast: guided flow for this build` when the user picks "Ask me along the way".
 
 | Skill | Fast flow before the go-ahead | Fast flow after the go-ahead |
 |---|---|---|
@@ -30,7 +31,7 @@ Fast flow is the third value of the `.interaction_flow` switch ([`interaction-fl
 
 Check both signals at Step 0 and again after a context reset. When neither is present, run in guided flow. **That is the safe direction:** a lost signal means the user is asked questions again, never that a question is answered for them by mistake.
 
-**Direct calls.** The architect called directly on a new idea while the switch is `fast` hands the run to `semantius-admin` (load it with the Skill tool, passing the user's request) before it creates any task; the admin re-enters the architect with the run context. The analyst or modeler called directly runs in guided flow, whatever the switch says.
+**Direct calls.** The architect called directly on a new idea while the switch is `fast` or not set, and the request does not ask to be guided, hands the run to `semantius-admin` (load it with the Skill tool, passing the user's request) before it creates any task; the admin re-enters the architect with the run context. The analyst or modeler called directly runs in guided flow, whatever the switch says.
 
 **Questions before the go-ahead still fire:** the admin's Step 0 clarifying question and the Step 1.3 match widget. If the user picks "Deploy the existing…", the run starts from a blueprint and therefore runs in guided flow.
 
@@ -64,13 +65,13 @@ The detail lives in the architect's stage files; this is the map.
 - options:
   1. `"Yes, build and deploy it (Recommended)"`, description `"I finish the design and deploy it without more questions. You get the list of what I decided at the end."`
   2. `"Change something first"`, description `"Tell me what to change. I update the design and show it to you again."`
-  3. `"Ask me as usual for this build"`, description `"I ask each question as it comes up, like guided flow. Fast flow stays on for later builds."`
+  3. `"Ask me along the way"`, description `"I'll guide you through each piece of the design so we can shape it to how you work."`
 
 **Recording the answer.** Before anything else, the admin updates the marker in its pipeline tasks' descriptions (`TaskList`, then `TaskUpdate` each):
 
 - **Yes:** `fast: go-ahead given`.
 - **Change something first:** stays `fast: awaiting go-ahead`; take the change in prose, update the draft, show the summary again, ask again.
-- **Ask me as usual:** `fast: guided flow for this build`, and the rest of this run is in guided flow (the admin passes `Interaction flow: guided` to the analyst and modeler). The switch stays `fast`.
+- **Ask me along the way:** `fast: guided flow for this build`, and the rest of this run is in guided flow (the admin passes `Interaction flow: guided` to the analyst and modeler). The switch stays `fast`.
 
 ## 4. After the go-ahead
 

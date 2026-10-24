@@ -264,7 +264,7 @@ After preflight, in expert flow only (read the switch as "Expert flow" below des
 
 ## Step 0: Determine the mode
 
-**Fast-flow hand-off (check this first).** When there is no `Run context:` block, the request is a new build (Create-Greenfield by the detection below), and `.interaction_flow` in `$CUSTOMIZATIONS_FILE` is `fast` (or this same request says "fast flow"): before creating any task, load `semantius-admin` with the Skill tool, passing the user's request verbatim, and follow it instead. It runs the build end to end and re-enters this skill with a run context. A fast-flow build needs the admin because the analyst and modeler must run straight after the design, without the user starting them.
+**Fast-flow hand-off (check this first).** When there is no `Run context:` block, the request is a new build (Create-Greenfield by the detection below), and `.interaction_flow` in `$CUSTOMIZATIONS_FILE` is `fast` or not set (or this same request says "fast flow"), and the request does not ask to be guided (`../semantius-admin/references/interaction-flow.md`, section 2): before creating any task, load `semantius-admin` with the Skill tool, passing the user's request verbatim, and follow it instead. It runs the build end to end and re-enters this skill with a run context. A fast-flow build needs the admin because the analyst and modeler must run straight after the design, without the user starting them.
 
 **Header override (admin-orchestrated runs).** When this architect is invoked by `semantius-admin`, the input carries a handoff header with an explicit mode line:
 

@@ -8,6 +8,25 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Fast flow is the default
+
+2026-10-23. A new module ran in guided flow unless the user had said "fast flow", so most people answered every question one at a time without knowing a shorter path existed. Rules: `../semantius-admin/references/interaction-flow.md`, sections 1 and 2; `../semantius-admin/references/fast-flow.md`, section 2.
+
+1. **With no saved flow, a new build runs in fast flow.** A saved `guided` or `expert` still applies; any other saved value reads as not set. The go-ahead's "Ask me along the way" remains the way out for one module.
+2. **A request that asks to be guided runs that one build in guided flow**, saved nowhere, narrated *"Using guided flow for this one."*: "guide me", "walk me through", "step by step", "assist me", "help me design / decide / think through", "ask me as we go". A plain "help me build / set up / get" is not a hint: it is how most people ask for a system they want done.
+3. **Runs that start from an existing design** (clone, deploy, customize, extend, audit) still run in guided flow, or expert when saved. The line *"Fast flow covers new builds only; this run uses guided flow."* is shown only when the user saved fast flow.
+4. **The architect called directly** on a new idea hands the run to the admin when fast flow is saved or nothing is saved, unless the request asks to be guided. The architect and analyst on their own still read no saved flow as guided: a run is fast only when the admin says so.
+
+---
+
+## Go-ahead option "Ask me along the way"
+
+2026-10-23. The fast-flow go-ahead's third option read "Ask me as usual for this build": "build" as a noun is the skills' word, not the user's, and "as usual" made the other two options sound unusual. Rules: `../semantius-admin/references/fast-flow.md`, section 3.
+
+1. **The option is "Ask me along the way"**, description *"I'll guide you through each piece of the design so we can shape it to how you work."* What it does is unchanged: the rest of this run is in guided flow, and fast flow stays on.
+
+---
+
 ## A followed product's names are converted by a script
 
 2026-10-23. Following a product converted its record names to `table_name` by hand, and nothing said how to split a run of capitals (`SLAPolicy`), how to make a compound name plural (`OpportunityLineItem`), or what to do with a name already in lowercase or a custom record (`Invoice__c`), so the same product name could convert differently from run to run. The field-naming rule sat in the architect's naming table, but the architect writes no fields. Rules: `references/stage-2-naming.md`, `../use-semantius/references/vendor-names.ts`.
