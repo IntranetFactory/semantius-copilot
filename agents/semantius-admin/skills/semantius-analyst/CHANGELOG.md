@@ -8,6 +8,17 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## A person is labelled by full name
+
+2026-10-23. A contact entity got `firstname` as its label column, the only required text field, so lists read "Marta", "Daniel" and child records "Marta › Question about pricing". The label-column rule covered a type or category as the only identifier, but not an identity made of several values. Rules: `references/stage-4-fields.md`, "Composite or non-text identity".
+
+1. **A person entity** (contact, lead, candidate, employee, customer contact) takes a `display_name` string field as its label column (Required `no`, deployed `disabled`), kept current by a Stage 10 computed field from the name parts, which stay ordinary fields.
+2. **An address-like entity** uses the same pattern (street plus number or unit).
+3. **A record numbered by a code** uses the code field as its label column when it is text, otherwise a `display_name` built from it.
+4. **A followed product whose screens show "First Last"** has a composite display name, so the rule applies even when the product keeps no display-name field.
+
+---
+
 ## Fields of a followed product take the product's names
 
 2026-10-23. A spec following a product (`naming_mode: template:<vendor>`) got the product's record names from the blueprint, but its fields were named the analyst's own way: the rule to use the product's field names sat only in the architect, which writes no fields. Moving data to and from the product, the reason to follow it, needs both. Rules: `references/stage-4-fields.md`, "Fields of a followed product".

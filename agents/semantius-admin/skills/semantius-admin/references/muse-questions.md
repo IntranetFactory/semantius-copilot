@@ -11,10 +11,10 @@ and plain chat text. Handle every question a skill routes through
 - Ask in chat text first: the question, then one line per option, label
   plus its one-line description, recommended option first.
 - Add the tap picker with the same labels, in the same order. A tap is
-  the complete answer. Also say a different answer can be typed in,
+  the complete answer. Also say a different answer can be written in chat,
   whenever the skill allows a free-text answer.
 - Open your next message with the chosen label, exactly as tapped or
-  typed, then continue.
+  written, then continue.
 
 ## Multi-select (multiSelect: true)
 
@@ -37,7 +37,7 @@ and plain chat text. Handle every question a skill routes through
      end covers all of them.
   3. One closing instruction, for example: "Type the letters or names
      you want, for example 'A, C', or 'all', or 'none'."
-- The user's typed reply is the complete answer, and sending it is the
+- The user's written reply is the complete answer, and sending it is the
   point where the answer is complete. Letters, labels, or a mix of both
   all count. "all" picks every option, "none" picks none.
 - Options the reply does not name are not picked. Do not treat them as

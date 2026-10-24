@@ -179,8 +179,12 @@
       // 1048576, max output 943718, $0.10 / $0.20 per M tokens.
       // reasoning: mandatory, default effort "medium", supported
       // ["minimal","low","medium","high","xhigh","max"] (minimal has no Flue level).
+      // max_tokens is NOT the 943718 host cap: OpenRouter rejects any request whose
+      // input + max_tokens exceeds the 1048576 window, and at 943718 a fresh chat's
+      // ~127k-token baseline already relied on pi-ai's estimated clamp, which came in
+      // ~200 tokens short (400 on turn 1, 2026-10-24). 262144 leaves ~786k for input.
       "model": "meta/muse-spark-1.3-contributor",
-      "max_tokens": 943718,
+      "max_tokens": 262144,
       "context_window": 1048576,
       "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
     },

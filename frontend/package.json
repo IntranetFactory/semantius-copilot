@@ -17,7 +17,7 @@
     "@radix-ui/react-use-controllable-state": "^1.2.4",
     "@semantius-copilot/core": "workspace:*",
     "@streamdown/cjk": "^1.0.3",
-    "@streamdown/code": "^1.1.1",
+    "@streamdown/code": "^2.0.0",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
     "@tailwindcss/vite": "^4.3.3",

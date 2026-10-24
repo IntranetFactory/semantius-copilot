@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite dev --port 3584",
     "build": "vite build",
-    "deploy": "vite build && wrangler deploy",
+    "deploy": "node ../scripts/fetch-cli.mjs && vite build && wrangler deploy",
     "logs": "wrangler tail --format pretty"
   },
   "dependencies": {

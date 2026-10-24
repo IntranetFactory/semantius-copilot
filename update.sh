@@ -4,8 +4,10 @@
 #   1. agents/semantius-admin/skills/<skill>/  <- mirror of the semantius-plugin skills.
 #      Every skill folder is REPLACED, not merged, so files and whole skills dropped
 #      upstream disappear here too. Ships with `pnpm deploy:agent semantius-admin`.
-#   2. linux-x64/semantius-linux-x64           <- semantius CLI release binary, baked into
-#      the backend-b container image. Ships with `pnpm deploy:b` (image change).
+#   2. linux-x64/semantius-cli.json            <- pinned semantius CLI release { version,
+#      sha256 }. The binary itself (linux-x64/semantius-linux-x64, >100 MiB) is gitignored
+#      and fetched by scripts/fetch-cli.mjs, which `pnpm deploy:b` runs before baking it
+#      into the backend-b container image.
 #
 # Usage:  ./update.sh [cli-version]     e.g. ./update.sh v0.8.12   (default: latest release)
 # Env:    SEMANTIUS_SKILLS_SRC          skills source folder
@@ -16,14 +18,7 @@ shopt -s nullglob
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_SRC="${SEMANTIUS_SKILLS_SRC:-/c/dev/semantius-agent/semantius-plugin/skills}"
 SKILLS_DST="$ROOT/agents/semantius-admin/skills"
-CLI_REPO="https://github.com/semantius/semantius-cli"
-CLI_ASSET="semantius-linux-x64"
-CLI_BIN="$ROOT/linux-x64/$CLI_ASSET"
-CLI_TMP="$CLI_BIN.download"
-trap 'rm -f "$CLI_TMP"' EXIT
-
 die() { echo "update.sh: $*" >&2; exit 1; }
-sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 
 # Git Bash: accept a Windows path (C:\dev\...) for SEMANTIUS_SKILLS_SRC.
 if command -v cygpath >/dev/null; then SKILLS_SRC="$(cygpath -u "$SKILLS_SRC")"; fi
@@ -49,33 +44,7 @@ if rev="$(git -C "$SKILLS_SRC" rev-parse --short HEAD 2>/dev/null)"; then
 fi
 
 # ── 2. semantius CLI ─────────────────────────────────────────────────────────
-version="${1:-}"
-if [ -z "$version" ]; then
-  # /releases/latest redirects to /releases/tag/<tag> — no API token or jq needed.
-  version="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$CLI_REPO/releases/latest")"
-  version="${version##*/}"
-fi
-case "$version" in v*) ;; *) version="v$version" ;; esac
-[[ "$version" =~ ^v[0-9] ]] || die "could not resolve a release tag (got '$version')"
-
-base="$CLI_REPO/releases/download/$version"
-echo "==> semantius CLI $version: $base/$CLI_ASSET"
-want="$(curl -fsSL "$base/checksums.txt" | tr -d '\r' \
-  | awk -v f="$CLI_ASSET" '$2 == f || $2 == "*" f { print $1 }')"
-[ -n "$want" ] || die "no $CLI_ASSET entry in $base/checksums.txt"
-
-if [ -f "$CLI_BIN" ] && [ "$(sha256 "$CLI_BIN")" = "$want" ]; then
-  echo "    already up to date ($want)"
-else
-  mkdir -p "$(dirname "$CLI_BIN")"
-  # Redirect instead of `-o`: Git Bash's curl is a native Windows binary and cannot open
-  # /c/... paths when MSYS path conversion is off (MSYS_NO_PATHCONV=1).
-  curl -fL --progress-bar "$base/$CLI_ASSET" > "$CLI_TMP"
-  got="$(sha256 "$CLI_TMP")"
-  [ "$got" = "$want" ] || die "checksum mismatch for $CLI_ASSET: got $got, want $want"
-  chmod 0755 "$CLI_TMP"
-  mv -f "$CLI_TMP" "$CLI_BIN"
-  echo "    installed linux-x64/$CLI_ASSET ($want)"
-fi
+# Re-pins linux-x64/semantius-cli.json (commit it) and fetches the binary (gitignored).
+node "$ROOT/scripts/fetch-cli.mjs" "${1:-latest}"
 
 echo "==> done. Ship with: pnpm deploy:agent semantius-admin (skills), pnpm deploy:b (CLI image)"

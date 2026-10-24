@@ -9,3 +9,7 @@ dist-bundle/
 *.tsbuildinfo
 .api-token
 .reports/
+# semantius CLI binary: >100 MiB (GitHub's limit); pinned by linux-x64/semantius-cli.json
+# and fetched by scripts/fetch-cli.mjs
+linux-x64/semantius-linux-x64
+linux-x64/semantius-linux-x64.download

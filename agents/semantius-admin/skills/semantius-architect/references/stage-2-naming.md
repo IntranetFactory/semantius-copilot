@@ -16,7 +16,7 @@ Draw on your general knowledge of the market to identify **the top 3 cloud platf
 > 3. **The modern option's description** cannot point to "the practices listed above", because fast flow shows no guidance aside before it: `"Built on current best practice, with names that explain themselves: {entity_1}, {entity_2}, {entity_3}. {structure}. {practice}."`, where `{practice}` is one sentence with the one or two Stage 1 best-practice points that most set it apart from the vendors' designs.
 > 4. **After the answer,** no bold opening sentence of its own: the go-ahead summary names the design (`fast-flow.md`, section 3).
 >
-> A typed answer runs the typed-answer step below, as in guided flow.
+> A free-text answer runs the free-text-answer step below, as in guided flow.
 
 **You MUST use the AskUserQuestion tool here** (new blueprints only). It is a standalone question (no `Q:` task); fire it alone in its own response. The answer goes only into this blueprint's `naming_mode`, never into `$CUSTOMIZATIONS_FILE`. Do not enumerate the vendors or describe the choices in prose before calling the tool, the option descriptions carry all the information the user needs. The only prose preceding the tool call should be the Stage 1 guidance aside, when this turn carries it (guided flow; `stage-1-capture.md`), then one short framing sentence (e.g. *"{Domain} is a well-established category, here's the choice that shapes the design for the rest of this session."*).
 
@@ -39,14 +39,14 @@ The example entity names inside the descriptions must be in **lowercase plural s
 
 The "(Recommended)" suffix on the modern design is intentional, it's the better default for new builds.
 
-**A typed answer: show the details, then confirm.** The user typed another product, a structure of their own (e.g. *"one record per candidate, no separate applications"*), or a mix (e.g. *"Lever's structure with modern names"*). Before Stage 3:
+**A free-text answer: show the details, then confirm.** The user wrote in another product, a structure of their own (e.g. *"one record per candidate, no separate applications"*), or a mix (e.g. *"Lever's structure with modern names"*). Before Stage 3:
 
 1. **Details**, in prose, 3 to 6 lines: the core records the design starts from, by display name, and how they link, one link per line.
    - Another product: its core records and names. When you cannot name at least four of its headline records, spelled the way it spells them (Stage 1's four-object test), say so in one sentence instead of guessing, and offer the modern design, or that the user pastes the product's list of records.
    - A structure of the user's own: its records with modern names, linked as described.
-2. **Confirm**: one `AskUserQuestion`, fired alone in its response: question `"Build the design on this?"`, header `"Design"`, options `"Yes, use this"` (description `"The list of things to track starts from these records."`) and `"Use the modern design instead"`. A typed correction updates the details: show them again and re-ask.
+2. **Confirm**: one `AskUserQuestion`, fired alone in its response: question `"Build the design on this?"`, header `"Design"`, options `"Yes, use this"` (description `"The list of things to track starts from these records."`) and `"Use the modern design instead"`. A free-text correction updates the details: show them again and re-ask.
 
-**After the user's answer arrives** (as a `<user_answers>` input block mapping each question text to the chosen label; there is no `user_answers` tool to call, and the widget must have been the only tool call of its response), your very first sentence MUST start with the chosen option name in **bold** so the transcript stays readable; after a confirmed typed answer, the confirmed design in a few words. Examples:
+**After the user's answer arrives** (as a `<user_answers>` input block mapping each question text to the chosen label; there is no `user_answers` tool to call, and the widget must have been the only tool call of its response), your very first sentence MUST start with the chosen option name in **bold** so the transcript stays readable; after a confirmed free-text answer, the confirmed design in a few words. Examples:
 - *"**Follow Greenhouse**, I'll start from Greenhouse's records and names..."*
 - *"**Modern design**, I'll build from best practice with names that explain themselves..."*
 - *"**Lever's structure, modern names**, I'll start from Lever's records under clear names..."*
@@ -54,8 +54,8 @@ The "(Recommended)" suffix on the modern design is intentional, it's the better 
 Then map the choice to a `naming_mode` value for the rest of the session (this value is internal — never shown to the user):
 - Follow a vendor → `naming_mode: template:<vendor>`
 - Modern design, or "Use the modern design instead" → `naming_mode: agent-optimized` (internal token only; never use this phrase in user-facing prose)
-- Typed, another product, confirmed → `naming_mode: template:<that-product>`
-- Typed, a structure of the user's own or a product's structure under modern names, confirmed → `naming_mode: agent-optimized`; Stage 3 starts from the confirmed records instead of first principles.
+- Free-text, another product, confirmed → `naming_mode: template:<that-product>`
+- Free-text, a structure of the user's own or a product's structure under modern names, confirmed → `naming_mode: agent-optimized`; Stage 3 starts from the confirmed records instead of first principles.
 - Anything else (e.g. "blend Salesforce and HubSpot") → settle it in the details step, then commit to one `naming_mode` value before continuing.
 
 If the domain has no meaningful SaaS incumbents (e.g., a niche internal tool; in expert flow, also when no product passed Stage 1's four-object test), skip AskUserQuestion entirely and go straight to the modern design; tell the user in one sentence why, in the same turn as the Stage 3 entity list (with the Stage 1 guidance aside before it, when this turn carries it).

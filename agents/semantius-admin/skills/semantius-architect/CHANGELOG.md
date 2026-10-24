@@ -8,6 +8,26 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## A direct new build with no saved flow reaches fast flow; free-text replies are answered and re-asked
+
+2026-10-24. A direct call with no customizations file ran as guided flow ("the default when you have not picked one") and created its tasks before the fast-flow hand-off: two rules still read no saved flow as guided without naming the hand-off. In the same run, a question written into the "Also track" free-text slot got a long answer with the options as a prose list, and the question was never asked again. Rules: SKILL.md, Step 0, "Task tracking", "Expert flow" and "AskUserQuestion mechanics"; `../semantius-admin/references/interaction-flow.md`, section 2.
+
+1. **No saved flow is read as guided only after the hand-off check.** A direct new build whose request does not ask to be guided goes to the admin, and a missing customizations file counts as no saved flow.
+2. **Stage tasks are created only once the hand-off has not applied.**
+3. **A free-text reply that does not answer the question** gets a short answer, and the same question is fired again in that response, its options changed only where the reply changed them. The options are never turned into a prose list.
+
+---
+
+## Entity table shows how each entity appears in lists
+
+2026-10-23. A user could approve a design without seeing that Contacts would be listed by first name only. Rules: `references/stage-3-entities.md`, "Present the list as a table" and the template-mode note; `../semantius-admin/references/fast-flow.md`, section 3.
+
+1. **The entity table has a "Shown as" column:** the field each entity appears as in lists ("full name" for Contacts, blank for a link table). It is chat-only and adds no column to §3.
+2. **The fast-flow go-ahead summary's entity table carries the same column.**
+3. **Template mode:** a followed product's composite display name ("First Last") is named in "Shown as" and built by the analyst's display-name rule, never reduced to a first-name-only label.
+
+---
+
 ## Fast flow is the default
 
 2026-10-23. A new module ran in guided flow unless the user had said "fast flow", so most people answered every question one at a time without knowing a shorter path existed. Rules: `../semantius-admin/references/interaction-flow.md`, sections 1 and 2; `../semantius-admin/references/fast-flow.md`, section 2.

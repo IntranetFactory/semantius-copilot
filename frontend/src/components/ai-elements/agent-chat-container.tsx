@@ -146,7 +146,7 @@ export function AgentChatContainer({
   // is orphaned in a session nobody ever opens). The shared promise is the
   // dedup — concurrent callers await the same create, and a failed create
   // clears the slot so the next attempt retries.
-  const pendingCreate = useRef<Promise<SessionCreateInfo>>();
+  const pendingCreate = useRef<Promise<SessionCreateInfo> | undefined>(undefined);
   function ensureSessionInfo(): Promise<SessionCreateInfo> {
     if (!pendingCreate.current) {
       pendingCreate.current = createAgentSession(auth, agentName, baseUrl).then(

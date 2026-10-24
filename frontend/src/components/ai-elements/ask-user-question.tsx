@@ -196,21 +196,6 @@ export function AskUserQuestionCard({
 
   return (
     <div className="w-full max-w-xl rounded-md border bg-muted/30">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="font-medium text-sm">
-          {questions.length > 1 ? "Questions from the agent" : "Question from the agent"}
-        </span>
-        {status.kind === "submitting" ? (
-          <Badge variant="secondary" className="ml-auto gap-1">
-            <Spinner className="size-3" /> Sending…
-          </Badge>
-        ) : status.kind === "stale" ? (
-          <Badge variant="outline" className="ml-auto">
-            Skipped
-          </Badge>
-        ) : null}
-      </div>
-
       <div className={cn(!interactive && status.kind === "stale" && "pointer-events-none opacity-60")}>
         {questions.length > 1 ? (
           <div className="flex flex-wrap gap-1 px-3 pt-2" role="tablist">
@@ -337,39 +322,45 @@ export function AskUserQuestionCard({
           >
             Dismiss
           </Button>
-          <span className="ml-auto text-muted-foreground text-xs">or type a reply below</span>
+          {status.kind === "submitting" ? (
+            <Badge variant="secondary" className="ml-auto gap-1">
+              <Spinner className="size-3" /> Sending…
+            </Badge>
+          ) : status.kind === "stale" ? (
+            <Badge variant="outline" className="ml-auto">
+              Skipped
+            </Badge>
+          ) : (
+            <span className="ml-auto text-muted-foreground text-xs">or type a reply below</span>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-/** Post-answer rendering: each question's header chip + the recorded choice. */
+/** Post-answer rendering: each question (muted) over the recorded choice. */
 function AnsweredCard({ questions, answer }: { questions: AskUserQuestionItem[]; answer: AskUserAnswerPayload }) {
   return (
-    <div className="w-full max-w-xl rounded-md border bg-muted/30">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="font-medium text-sm">
-          {questions.length > 1 ? "Questions from the agent" : "Question from the agent"}
-        </span>
-        <Badge variant={answer.cancelled ? "outline" : "secondary"} className="ml-auto gap-1">
-          {answer.cancelled ? null : <CheckIcon className="size-3" />}
-          {answer.cancelled ? "Dismissed" : "Answered"}
-        </Badge>
-      </div>
-      <div className="flex flex-col gap-2 p-3">
-        {questions.map((q, index) => (
+    <div className="flex w-full max-w-xl flex-col gap-3 rounded-md border bg-muted/30 px-3 py-2.5">
+      {questions.map((q, index) => {
+        const value = answer.cancelled ? "" : answer.answers[q.question];
+        return (
           <div key={index} className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <Badge variant="outline">{q.header}</Badge>
-              <span className="text-muted-foreground text-xs">{q.question}</span>
-            </div>
-            <p className={cn("text-sm", answer.cancelled ? "text-muted-foreground" : "font-medium")}>
-              {answer.cancelled ? "—" : answer.answers[q.question] || (q.multiSelect ? "None selected" : "—")}
-            </p>
+            <p className="text-muted-foreground text-xs">{q.question}</p>
+            {value ? (
+              <p className="flex items-start gap-1.5 text-sm">
+                <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                <span>{value}</span>
+              </p>
+            ) : (
+              <p className="text-muted-foreground text-sm italic">
+                {answer.cancelled ? "Dismissed" : q.multiSelect ? "None selected" : "No answer"}
+              </p>
+            )}
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }

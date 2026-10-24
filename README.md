@@ -489,11 +489,17 @@ SEMANTIUS_SKILLS_SRC='C:\other\skills' ./update.sh   # other skills checkout
   `agents/semantius-admin/skills/<skill>/`: a mirror, not a merge, so files and whole
   skills dropped upstream disappear here too. Prints the source's git revision. Ships
   with `pnpm deploy:agent semantius-admin`; `pnpm bundle` checks the bundle limits.
-- **CLI** — resolves the latest tag via the `releases/latest` redirect (no API token),
-  downloads `semantius-linux-x64` from
-  `github.com/semantius/semantius-cli/releases/download/<tag>/`, verifies it against that
-  release's `checksums.txt`, and only then replaces `linux-x64/semantius-linux-x64`
-  (a no-op when the hash already matches). Ships with `pnpm deploy:b` (image change).
+- **CLI** — `scripts/fetch-cli.mjs <tag|latest>` resolves the tag (`latest` via the
+  `releases/latest` redirect, no API token), reads `semantius-linux-x64`'s sha256 from
+  that release's `checksums.txt` and writes the pin `linux-x64/semantius-cli.json`
+  (`{ version, sha256 }`, **committed**). It then downloads the binary from
+  `github.com/semantius/semantius-cli/releases/download/<tag>/`, verifies it against the
+  pin, and only then replaces `linux-x64/semantius-linux-x64`. If the hash already
+  matches, nothing is downloaded. The binary is **gitignored**: from v0.8.19 on it is
+  104.8 MiB, over GitHub's 100 MiB file limit, which rejects the whole push. `pnpm
+  deploy:b` runs `fetch-cli.mjs` with no argument first, which fetches the *pinned*
+  release, so a fresh checkout deploys exactly the CLI the repo pins. Ships with
+  `pnpm deploy:b` (image change).
 
 `.gitattributes` pins `*.sh` to LF: with `core.autocrlf=true` a Windows checkout would
 otherwise give the script CRLF endings, which bash rejects.
@@ -703,7 +709,12 @@ Three pieces:
   replaces the whole object), one level deep, and it must set its own `name`, so
   `gpt-6-luna-xhigh` is just `base` + `name` + `thinking_level`. An openai entry
   takes no overrides (rejected at parse) and must be an exact Pi catalog id (anything else
-  gets a deploy-time `modelWarning`, and its turns fail). Registry edits take effect on the
+  gets a deploy-time `modelWarning`, and its turns fail). Keep `max_tokens` well below
+  `context_window` (≤ ~75% of the window), never the host's raw output cap. OpenRouter
+  rejects any request with input + `max_tokens` > window (400 "maximum context length"),
+  and pi-ai's per-request clamp (`window − estimated input − safety`) uses a heuristic
+  token estimate that can come in low. Muse Spark at `max_tokens: 943718` failed on the
+  first turn of a fresh chat this way. Registry edits take effect on the
   next backend-b deploy, for live sessions too — they are not part of the agent bundle.
 - **Per-agent `models`** (`agent.jsonc`, required): the registry ids the agent may run on;
   the first is the default. `PUT /agents/:name` answers 422 for an id the *deployed*
