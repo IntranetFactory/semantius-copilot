@@ -45,6 +45,9 @@ fi
 
 # ── 2. semantius CLI ─────────────────────────────────────────────────────────
 # Re-pins linux-x64/semantius-cli.json (commit it) and fetches the binary (gitignored).
-node "$ROOT/scripts/fetch-cli.mjs" "${1:-latest}"
+# Git Bash: Windows node.exe needs a Windows path (it reads /c/dev/... as C:\c\dev\...).
+FETCH_CLI="$ROOT/scripts/fetch-cli.mjs"
+if command -v cygpath >/dev/null; then FETCH_CLI="$(cygpath -m "$FETCH_CLI")"; fi
+node "$FETCH_CLI" "${1:-latest}"
 
 echo "==> done. Ship with: pnpm deploy:agent semantius-admin (skills), pnpm deploy:b (CLI image)"

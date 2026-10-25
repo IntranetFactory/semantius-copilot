@@ -1,5 +1,5 @@
 {
-  "$schema": "../../core/agent.schema.json",  
+  "$schema": "../../core/agent.schema.json",
   // Model ids from backend-b/agents_config.jsonc (limits, routing, rationale live there).
   // The first is the default; the chat UI offers the others in a dropdown.
   "models": [
@@ -13,13 +13,39 @@
     "xiaomi/mimo-v2.6-flash"
   ],
   "proxy_whitelist": [
-    "registry.npmjs.org",  // for  dependencies
-    "registry.npmjs.org",  // for  dependencies
+    "registry.npmjs.org", // for  dependencies
+    "registry.npmjs.org", // for  dependencies
     "*.semantius.ai",
-    "*.semantius.cloud",  // semantius CLI >= 0.8.9: api.semantius.cloud org lookup (-> the org's postgrest_url)
-    "$SEMANTIUS_DATA_HOST",  // that postgrest_url's host (per-org Neon endpoint), looked up per session; the CLI's data calls go there with the user's JWT
+    "*.semantius.cloud", // semantius CLI >= 0.8.9: api.semantius.cloud org lookup (-> the org's postgrest_url)
+    "$SEMANTIUS_DATA_HOST", // that postgrest_url's host (per-org Neon endpoint), looked up per session; the CLI's data calls go there with the user's JWT
     "*.semantius.io",
     "www.semantius.com"
+  ],
+  "web_tools": [
+    {
+      "type": "openrouter:web_search",
+      "parameters": {
+        "engine": "auto",
+        "max_results": 5,
+        "max_total_results": 20,
+        "max_uses": 5,
+        "search_context_size": "medium",
+        "excluded_domains": [
+          "pinterest.com"
+        ]
+      }
+    },
+    {
+      "type": "openrouter:web_fetch",
+      "parameters": {
+        "engine": "auto",
+        "max_uses": 10,
+        "max_content_tokens": 50000,
+        "blocked_domains": [
+          "pinterest.com"
+        ]
+      }
+    }
   ],
   // Shown by the chat UI while a conversation is empty (UI-only, never reaches
   // the model). Clicking a prompt sends `prompt ?? display` immediately, unless
@@ -41,18 +67,30 @@
             "prefill": true,
             "hint": "A few sentences about your domain is enough to start — name the things you track and who works with them, and I'll interview you for the rest."
           },
-          { "display": "Audit my existing data model" },
-          { "display": "What can you build for me?" },
-          { "display": "Show me the data model diagram for a module" }
+          {
+            "display": "Audit my existing data model"
+          },
+          {
+            "display": "What can you build for me?"
+          },
+          {
+            "display": "Show me the data model diagram for a module"
+          }
         ]
       },
       {
         "title": "Operate & analyze",
         "subtitle": "Work with the live instance",
         "prompts": [
-          { "display": "Show me the entities in my data model" },
-          { "display": "Run an analytical query over my data" },
-          { "display": "Onboard a new user to the platform" }
+          {
+            "display": "Show me the entities in my data model"
+          },
+          {
+            "display": "Run an analytical query over my data"
+          },
+          {
+            "display": "Onboard a new user to the platform"
+          }
         ]
       }
     ]

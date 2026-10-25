@@ -8,6 +8,16 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Entity table: "Shown as" gives field titles, the product column gives API names
+
+2026-10-24. A fast-flow go-ahead for a design following Sine showed "Shown as" values as loose lowercase phrases ("expected visitor and date"), and its "Sine object" column only repeated each entity's name in the singular: in template mode the entity names are made from the product's display names, so a display name in that column checks nothing. Rules: `references/stage-3-entities.md`, the template-mode note and "Present the list as a table"; `references/stage-2-naming.md`, naming rules table; `../semantius-admin/references/fast-flow.md`, section 3.
+
+1. **"Shown as" gives the title of the field that names each record, in Title Case**, as the user will see it ("Full Name"). A name built from several fields lists their titles joined by " + " ("First Name + Last Name").
+2. **The product column is "<Vendor> API object":** the name the product's API or data export uses, in its own casing (Salesforce `Opportunity`, ServiceNow `incident`). The display name does not count. The §3 notes cell carries `<Vendor> API object: <Name>`.
+3. **An API object that can't be named** (also for a product with no API or data export) leaves that entity's cell empty, with no note in §3: guided and expert flow ask first (switch to the modern design, paste the product's list of records, or go on with the cell empty); fast flow goes on without asking. No "inspired by <Vendor>" text is written.
+
+---
+
 ## A direct new build with no saved flow reaches fast flow; free-text replies are answered and re-asked
 
 2026-10-24. A direct call with no customizations file ran as guided flow ("the default when you have not picked one") and created its tasks before the fast-flow hand-off: two rules still read no saved flow as guided without naming the hand-off. In the same run, a question written into the "Also track" free-text slot got a long answer with the options as a prose list, and the question was never asked again. Rules: SKILL.md, Step 0, "Task tracking", "Expert flow" and "AskUserQuestion mechanics"; `../semantius-admin/references/interaction-flow.md`, section 2.
