@@ -75,7 +75,7 @@ import { commentOnIssue, gitHubRefFromConversation, GITHUB_AGENT_NAME } from '..
 import { lazySessionEnv } from '../lazy-env';
 import { askUserQuestion } from '../tools/ask-user-question';
 import { taskTools, TASKS_FILE } from '../tools/tasks';
-import { MODELS, modelSpecifierFor } from '../llm';
+import { MODELS, modelSpecifierFor, webToolsAllowed } from '../llm';
 import { drainTitleTranscript, maybeGenerateTitle } from '../title';
 import { drainLlmCalls } from '../usage';
 
@@ -163,8 +163,10 @@ type AgentMeta = {
    */
   skillCatalog?: SkillCatalogEntry[];
   /** The agent's `web_tools`: OpenRouter server tools appended to every model
-   * turn's request-body `tools` (modelSpecifierFor). Part of the bundle
-   * version hash, so a change re-lands meta at the next start. */
+   * turn's request-body `tools` (modelSpecifierFor). Set only when the org's
+   * copilot firewall is OFF (webToolsAllowed); on the seed path the HTTP gate
+   * (app.ts) strips them otherwise. Part of the bundle version hash, so a
+   * change re-lands meta at the next start. */
   webTools?: Record<string, unknown>[];
 };
 
@@ -208,7 +210,24 @@ type SessionState = {
   tool_calls_count: number;
   llm_calls_count: number;
   responses_count: number;
+  /** OpenRouter server-tool counters summed key-wise (`web_search_requests`,
+   * ...; the agent's web_tools), from usage.server_tool_use via the pi-ai and
+   * Flue patches. Absent until a response reports one. */
+  server_tool_use?: Record<string, number>;
 };
+
+/** Key-wise sum of numeric server-tool counters; non-numbers are skipped. */
+function addServerToolUse(
+  prev: Record<string, number> | undefined,
+  next: unknown,
+): Record<string, number> | undefined {
+  if (!next || typeof next !== 'object') return prev;
+  const sum = { ...prev };
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === 'number') sum[key] = (sum[key] ?? 0) + value;
+  }
+  return sum;
+}
 
 const ZERO_SESSION_STATE: SessionState = {
   input_tokens: 0,
@@ -362,6 +381,8 @@ export function Main({ id }: AgentProps) {
     const { usage } = response;
     const llmCalls = drainLlmCalls(id);
     let next = ZERO_SESSION_STATE;
+    // Not on Flue's PromptUsage type — added by the Flue patch when present.
+    const serverToolUse = (usage as { serverToolUse?: unknown }).serverToolUse;
     setSessionState(
       (prev) =>
         (next = {
@@ -376,6 +397,9 @@ export function Main({ id }: AgentProps) {
           llm_calls_count: prev.llm_calls_count + llmCalls,
           // ?? 0: sessions persisted before this field existed.
           responses_count: (prev.responses_count ?? 0) + 1,
+          ...(prev.server_tool_use || serverToolUse
+            ? { server_tool_use: addServerToolUse(prev.server_tool_use, serverToolUse) }
+            : {}),
         }),
     );
     // Mirror every agent-side data channel into THE session record in one
@@ -499,13 +523,16 @@ export function Main({ id }: AgentProps) {
       const modelId =
         [meta?.modelId, seed?.modelId].find((m): m is string => !!m && bundle.models.includes(m)) ??
         bundle.models[0];
+      // web_tools only for an org running with its copilot firewall OFF (the
+      // record's `copilot`, fixed at session create) — webToolsAllowed.
+      const webTools = bundle.webTools?.length && webToolsAllowed(await readSession(STORE, id)) ? bundle.webTools : undefined;
       setMeta({
         agentName: bundle.agentName,
         version: bundle.version,
         instructions: bundle.instructions,
         modelId,
         ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
-        ...(bundle.webTools?.length ? { webTools: bundle.webTools } : {}),
+        ...(webTools ? { webTools } : {}),
         binding,
       });
       // Mirrored onto the session record so the UI shows the locked model

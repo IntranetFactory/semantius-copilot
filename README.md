@@ -266,14 +266,24 @@ valid — nothing is provisioned, the bundle still carries instructions/model.
 (`openrouter:web_search`, `openrouter:web_fetch`, …). Entries may contain any values —
 only "array of JSON objects, ≤16 entries, ≤16 KiB serialized" is checked
 (`validateWebTools`, `core/src/agent.js`); OpenRouter validates the fields and an
-ill-formed entry fails the turn with its error. Every entry is appended verbatim to the
-request-body `tools` of each model turn on an **openrouter** registry model (openai models
-ignore them): `modelSpecifierFor` (`backend-b/src/llm.ts`) routes such sessions through a
+ill-formed entry fails the turn with its error. **Only for orgs running with their copilot
+firewall OFF** (`webToolsAllowed`, `backend-b/src/llm.ts`: the session record's
+`copilot.firewallEnabled === false`, fetched at session create): server-side search/fetch is
+egress the sandbox firewall cannot see, so firewalled orgs — and sessions without copilot
+settings (bearer sessions, GitHub-issue conversations) — get none. Every entry is appended
+verbatim to the request-body `tools` of each model turn on an **openrouter** registry model
+(openai models ignore them): `modelSpecifierFor` (`backend-b/src/llm.ts`) routes such sessions through a
 dedicated provider `model-<id>-w<hash>` whose API is wrapped by `withWebTools`, which
 uses pi-ai's `onPayload` hook to append the entries after the harness's own function
-tools. They reach the session via `GET /agents/:name/meta` → the turn-1 seed, and via
-`useAgentStart` → `AgentMeta.webTools` afterwards; they are part of the bundle version
-hash. The title side call (`title.ts`) does not send them.
+tools. They reach the session via `GET /agents/:name/meta` → the turn-1 seed (the
+`/agents/main/*` gate in `app.ts` strips `initialData.webTools` unless the session's
+firewall is off — the client never decides), and via `useAgentStart` → `AgentMeta.webTools`
+(set under the same check) afterwards; they are part of the bundle version hash. The title side call (`title.ts`) does not send them. OpenRouter's per-call
+`usage.server_tool_use` (e.g. `{ "web_search_requests": 2 }`) is carried through by the
+pi-ai patch (`usage.serverToolUse`) and the Flue patch (`fromProviderUsage`/`addUsage`, summed
+key-wise across turns): it shows as `metadata.usage.serverToolUse` per response and as the
+running `session_state.server_tool_use` per session. Their charges are already inside
+`cost_total` (OpenRouter's billed amount).
 
 **Deploying an agent** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
 builds `agents/<name>/` fresh with the same loader and `PUT`s it to the backend's

@@ -1,5 +1,5 @@
 diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
-index c21819049689124caf8ce3440c9d4e12902285c2..1387b936fe792179e31a37f0f73ed34797d1550c 100644
+index c21819049689124caf8ce3440c9d4e12902285c2..b04f2e638c09dfb027e4e1a5bc92458c46b26d5a 100644
 --- a/dist/api/openai-completions.js
 +++ b/dist/api/openai-completions.js
 @@ -4,7 +4,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
@@ -48,7 +48,7 @@ index c21819049689124caf8ce3440c9d4e12902285c2..1387b936fe792179e31a37f0f73ed347
      if (compat.supportsStore) {
          params.store = false;
      }
-@@ -1085,6 +1106,13 @@ function parseChunkUsage(rawUsage, model) {
+@@ -1085,6 +1106,19 @@ function parseChunkUsage(rawUsage, model) {
          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
      };
      calculateCost(model, usage);
@@ -58,6 +58,12 @@ index c21819049689124caf8ce3440c9d4e12902285c2..1387b936fe792179e31a37f0f73ed347
 +    // OpenRouter only reports the total.
 +    if (typeof rawUsage.cost === "number" && rawUsage.cost > 0) {
 +        usage.cost.total = rawUsage.cost;
++    }
++    // PATCH (semantius-copilot): carry OpenRouter's server-tool counters
++    // (usage.server_tool_use, e.g. { web_search_requests: 2 } from the agent's
++    // web_tools) verbatim; the Flue patch sums them across turns.
++    if (rawUsage.server_tool_use && typeof rawUsage.server_tool_use === "object") {
++        usage.serverToolUse = rawUsage.server_tool_use;
 +    }
      return usage;
  }

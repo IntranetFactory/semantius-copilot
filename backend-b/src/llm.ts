@@ -187,6 +187,15 @@ function withWebTools(api: ProviderStreams, webTools: Record<string, unknown>[])
   };
 }
 
+/** Whether a session may use its agent's `web_tools`: ONLY when the org's
+ * copilot settings, read at session create (session record `copilot`), say
+ * the firewall is OFF. Server-side web search/fetch is egress the sandbox
+ * firewall cannot see, so a firewalled org, and any session without copilot
+ * settings (bearer sessions, GitHub-issue conversations), gets none. */
+export function webToolsAllowed(record: Record<string, unknown> | null | undefined): boolean {
+  return (record?.copilot as { firewallEnabled?: unknown } | undefined)?.firewallEnabled === false;
+}
+
 /** Short stable hash (FNV-1a, 32-bit hex) — keys the per-web-tools provider id
  * so agents sharing a model but not their web_tools never share a provider. */
 function shortHash(text: string): string {

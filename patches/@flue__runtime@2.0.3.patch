@@ -1,5 +1,5 @@
 diff --git a/dist/conversation-stream-store-CXwRWonS.mjs b/dist/conversation-stream-store-CXwRWonS.mjs
-index 3da59aa268cbfaa38b106e8a03351091544b0061..300996567fdb36bfe98e341252de310bb289bc6e 100644
+index 3fa342b27631ffcf2a05f0f8dcf571fc2236e2cd..f2c9ac131815962fc149cad8cbbb6b19d494b77d 100644
 --- a/dist/conversation-stream-store-CXwRWonS.mjs
 +++ b/dist/conversation-stream-store-CXwRWonS.mjs
 @@ -389,7 +389,6 @@ function mergeSkillCatalog(definitionSkills, discoveredSkills) {
@@ -10,3 +10,51 @@ index 3da59aa268cbfaa38b106e8a03351091544b0061..300996567fdb36bfe98e341252de310b
  		merged[name] = skill;
  	}
  	return merged;
+diff --git a/dist/dispatch-nU3cIlT-.mjs b/dist/dispatch-nU3cIlT-.mjs
+index c661b214b2c1e0e33c5fe696e23f44e3ac96a474..132c2a975697adae0f345c6c94e8e5e81eb72acc 100644
+--- a/dist/dispatch-nU3cIlT-.mjs
++++ b/dist/dispatch-nU3cIlT-.mjs
+@@ -1023,6 +1023,7 @@ function emptyUsage() {
+ * sub-object. Returns a fresh object; neither argument is mutated.
+ */
+ function addUsage(a, b) {
++	const serverToolUse = addServerToolUse(a.serverToolUse, b.serverToolUse);
+ 	return {
+ 		input: a.input + b.input,
+ 		output: a.output + b.output,
+@@ -1035,10 +1036,24 @@ function addUsage(a, b) {
+ 			cacheRead: a.cost.cacheRead + b.cost.cacheRead,
+ 			cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
+ 			total: a.cost.total + b.cost.total
+-		}
++		},
++		...serverToolUse ? { serverToolUse } : {}
+ 	};
+ }
+ /**
++* PATCH (semantius-copilot): OpenRouter server-tool counters (pi-ai patch:
++* usage.serverToolUse = the provider's usage.server_tool_use, e.g.
++* { web_search_requests: 2 }). Numeric fields are summed key-wise; anything
++* else keeps the latest value. Absent on both sides -> undefined.
++*/
++function addServerToolUse(a, b) {
++	if (!a) return b;
++	if (!b) return a;
++	const sum = { ...a };
++	for (const [key, value] of Object.entries(b)) sum[key] = typeof value === "number" && typeof a[key] === "number" ? a[key] + value : value;
++	return sum;
++}
++/**
+ * Convert pi-ai's `Usage` into Flue's public `PromptUsage`. The shapes are
+ * structurally identical today, but going through this normalizer keeps
+ * Flue's public types decoupled from pi-ai's so future divergence in
+@@ -1059,7 +1074,8 @@ function fromProviderUsage(usage) {
+ 			cacheRead: usage.cost.cacheRead,
+ 			cacheWrite: usage.cost.cacheWrite,
+ 			total: usage.cost.total
+-		}
++		},
++		...usage.serverToolUse && typeof usage.serverToolUse === "object" ? { serverToolUse: usage.serverToolUse } : {}
+ 	};
+ }
+ //#endregion

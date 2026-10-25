@@ -115,7 +115,7 @@ import {
 } from './backups';
 import { channel } from './channels/github';
 import { fetchContainerCosts } from './costs';
-import { MODELS, modelCatalogWarning } from './llm';
+import { MODELS, modelCatalogWarning, webToolsAllowed } from './llm';
 import {
   base64ToBytes,
   bytesToBase64,
@@ -538,6 +538,8 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     models: modelOptions(MODELS, bundle.models),
     ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
     // Seed field (turn 1 runs before useAgentStart lands meta); no secrets in it.
+    // Returned regardless of the org's firewall — the conversation gate strips
+    // it from the seed unless the session's copilot firewall is off.
     ...(bundle.webTools ? { webTools: bundle.webTools } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });
@@ -1038,6 +1040,28 @@ app.use('/agents/main/*', userTokenGuard(), async (c, next) => {
         semantius_user: verified.user.sub,
       },
     });
+  }
+
+  // web_tools on turn 1: the seed (`initialData.webTools`, copied from /meta
+  // by the client) is what the first render runs with, before useAgentStart
+  // lands the server-decided meta. The client cannot know — and must not
+  // decide — whether its org's copilot firewall is off, so unless THIS
+  // session's record says so (webToolsAllowed) the field is stripped here.
+  // Flue's router reads c.req.raw, so replacing it is the whole rewrite.
+  if (c.req.method === 'POST' && !webToolsAllowed(record) && c.req.header('content-type')?.includes('application/json')) {
+    const body = (await c.req.raw.clone().json().catch(() => null)) as { initialData?: unknown } | null;
+    const initialData = body?.initialData as Record<string, unknown> | undefined;
+    if (initialData && typeof initialData === 'object' && 'webTools' in initialData) {
+      const { webTools: _stripped, ...rest } = initialData;
+      const headers = new Headers(c.req.raw.headers);
+      headers.delete('content-length');
+      c.req.raw = new Request(c.req.raw.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...body, initialData: rest }),
+        signal: c.req.raw.signal,
+      });
+    }
   }
   await next();
 });

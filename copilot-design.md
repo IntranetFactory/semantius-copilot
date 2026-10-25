@@ -90,7 +90,8 @@ are added to schema + `validateAgentConfig` together):
   `DOMAIN_WHITELIST` constant is gone.
 - `web_tools` — optional array of OpenRouter server-tool objects (`openrouter:web_search`,
   `openrouter:web_fetch`, …), any content, ≤16 entries / ≤16 KiB. Appended verbatim to the
-  request-body `tools` of every turn on an openrouter model (README "web_tools").
+  request-body `tools` of every turn on an openrouter model — only when the org's copilot
+  firewall is off (`copilotFirewallEnabled: false`) (README "web_tools").
 
 Skills live in `agents/<name>/skills/<skill>/` (0..16; each needs a `SKILL.md` whose
 frontmatter `name` matches the skill dir name). `hoth-trip-planner` has one skill,
