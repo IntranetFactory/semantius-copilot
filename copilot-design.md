@@ -127,7 +127,7 @@ instructions, the allowed model ids, and every file of every skill:
 ```jsonc
 { "agentName":"hoth-trip-planner", "version":"<content-hash>", "baseImage":"node",
   "instructions":"…agent.jsonc instructions + INSTRUCTIONS.md…",
-  "models":["deepseek-v4.1-flash","glm-5.3-flash"],  // model registry ids, first = default (§3)
+  "models":["deepseek/deepseek-v4.1-flash-1017","z-ai/glm-5.3-flash"],  // model registry ids = upstream model ids, first = default (§3)
   "proxyWhitelist":["postman-echo.com"],  // optional — DENY-ALL egress when absent (§7)
   "skills": { "planner": { "SKILL.md":"…", "references/echo-basin.md":"…",
                            "references/north-ridge.md":"…", "scripts/opening-times.js":"…" } } }

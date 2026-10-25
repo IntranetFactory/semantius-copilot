@@ -18,7 +18,7 @@
  */
 import { observe, type LlmMessage } from '@flue/runtime';
 import { mergeExistingSessionRecord, readSession } from '@semantius-copilot/core';
-import { chatCompletionsTarget } from './llm';
+import { chatCompletionsTarget, OPENROUTER_APP_HEADERS } from './llm';
 
 const TITLE_REFINE_AT = 4;
 const MESSAGE_MAX_CHARS = 500;
@@ -96,6 +96,7 @@ async function generateTitle(transcript: string, modelId: string | undefined): P
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${target.apiKey}`,
+      ...(target.baseUrl.includes('openrouter.ai') ? OPENROUTER_APP_HEADERS : {}),
     },
     body: JSON.stringify({
       model: target.model,

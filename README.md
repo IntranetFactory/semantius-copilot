@@ -246,7 +246,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "version": "<sha256-16>",           // content hash over config + all skill files
   "baseImage": "node",                // selects the Sandbox binding
   "instructions": "…",                // agent.jsonc instructions + INSTRUCTIONS.md (appended)
-  "models": ["deepseek-v4.1-flash", "glm-5.3-flash"],  // model registry ids, first = default (see LLM configuration)
+  "models": ["deepseek/deepseek-v4.1-flash-1017", "z-ai/glm-5.3-flash"],  // model registry ids = upstream model ids, first = default (see LLM configuration)
   "proxyWhitelist": ["postman-echo.com"],  // optional — hosts/URLs, `*` anywhere; unioned with the org's list at egress
   "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
@@ -692,22 +692,26 @@ Three pieces:
 
 - **Model registry** (`backend-b/agents_config.jsonc`, parsed and validated at worker
   start by `parseModelsConfig`, `core/src/models.js`): the whitelist of model ids all
-  agents share. The KEY is the stable id agents reference and sessions persist (never
-  rename one in use); each entry has a display `name`, a `provider` — `openrouter` (key:
-  the `LLM_API_KEY` secret) or `openai` (key: the `OPENAI_API_KEY` secret, Responses API)
-  — and the upstream `model`. openrouter entries may add `max_tokens`/`context_window`,
+  agents share. The KEY is the provider's own model id (`deepseek/deepseek-v4.1-flash-1017`)
+  — exactly what each request sends — and it is the id agents reference and sessions persist,
+  so a session's `model_id` always names what ran (there is no separate `model` field). Moving
+  to a new snapshot means a new key; a session on a key that is no longer listed falls back
+  to the agent's default model when reopened. Each entry has a display `name` and a
+  `provider` — `openrouter` (key: the `LLM_API_KEY` secret) or `openai` (key: the
+  `OPENAI_API_KEY` secret, Responses API). openrouter entries may add `max_tokens`/`context_window`,
   `openrouter_routing` (next subsection) and `reasoning_efforts` (the OpenRouter efforts a
   mandatory-reasoning model accepts, e.g. GLM 5.3's `["low","high","max"]`: the entry
   becomes reasoning-capable and Flue's default `medium` clamps to the nearest listed
   effort, `high`, sent as `reasoning: {effort}`; "none" is never sent) and `thinking_level`
   (one of its `reasoning_efforts`, rejected otherwise: the effort every turn runs at,
-  passed as `useModel(…, { thinkingLevel })` in `src/agents/main.ts`; e.g. `gpt-6-luna` at
-  `medium` and `gpt-6-luna-xhigh`, "GPT-6 Luna (Extra High)", the same upstream model at
-  `xhigh`). The session-title side call ignores it and uses the lowest listed effort. Any
-  entry may set `base` (another model id) to be a variant: it starts as a copy of that
+  passed as `useModel(…, { thinkingLevel })` in `src/agents/main.ts`; e.g. `openai/gpt-6-luna`
+  at `medium`). The session-title side call ignores it and uses the lowest listed effort. An
+  id `<model id>@<level>` is a variant: that entry at thinking level `<level>` (e.g.
+  `openai/gpt-6-luna@xhigh`, "GPT-6 Luna (Extra High)"). It starts as a copy of the base
   entry and its own keys replace the base's — top-level only (an own `openrouter_routing`
-  replaces the whole object), one level deep, and it must set its own `name`, so
-  `gpt-6-luna-xhigh` is just `base` + `name` + `thinking_level`. An openai entry
+  replaces the whole object) — it must set its own `name`, and the level comes only from
+  the suffix (an own `thinking_level` is rejected), so `openai/gpt-6-luna@xhigh` is just a
+  `name`. An openai entry
   takes no overrides (rejected at parse) and must be an exact Pi catalog id (anything else
   gets a deploy-time `modelWarning`, and its turns fail). Keep `max_tokens` well below
   `context_window` (≤ ~75% of the window), never the host's raw output cap. OpenRouter
@@ -739,7 +743,8 @@ At runtime `modelSpecifierFor()` (`src/llm.ts`) resolves the session's model id
 caps output): a model Pi's catalog knows verbatim, with no overrides, keeps its
 `<provider>/<model>` specifier and full catalog entry (every `openai` entry takes this
 path); with limits, routing or efforts set, a dedicated one-model provider
-`model-<id>` reuses the catalog entry with only those swapped; only a catalog miss falls
+`model-<id>` (`/` and `@` in the id flattened to `-`: Flue splits a specifier at its first
+`/`) reuses the catalog entry with only those swapped; only a catalog miss falls
 back to a conservative placeholder entry (no reasoning, 128k window, 8k output) that the
 entry's explicit limits override. Usage and cost are reported on every response:
 the total is OpenRouter's billed `usage.cost` whenever OpenRouter reports it (pi-ai patch),
@@ -789,6 +794,12 @@ direction** — `prompt` = input and `completion` = output are independent ceili
 per-unit `request`/`image`/`audio`), `preferred_min_throughput`, `preferred_max_latency`.
 Setting `sort` or `order` disables OpenRouter's default price-based load balancing.
 
+**App attribution.** Every OpenRouter request carries `HTTP-Referer: https://www.semantius.com`
+and `X-Title: Semantius` (`OPENROUTER_APP_HEADERS` in `backend-b/src/llm.ts`; model turns
+via the model entry's `headers`, the title call explicitly), so OpenRouter's activity log
+shows the app as Semantius instead of unknown. The host that served each call (and its
+latency and throughput) is listed per request at openrouter.ai/activity.
+
 Mechanics (`backend-b/src/llm.ts`): the routing rides on the per-model `model-<id>`
 provider entry as pi-ai's `compat.openRouterRouting`, which its openai-completions API
 sends as `params.provider` unchanged — so it works for catalog-known models (full catalog
@@ -800,8 +811,8 @@ title. Prefer this over the
 through the placeholder path (see above) and lose the model's metadata.
 `scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, registry
 plumbing, and drives the installed pi-ai dist against a canned fetch to assert the request
-body's `provider` is the routing object byte-for-byte. The `deepseek-v4.1-flash` entry
-(`semantius-admin`'s default) runs `deepseek/deepseek-v4.1-flash-1017` with `{ "sort": "throughput", "max_price": { "completion":
+body's `provider` is the routing object byte-for-byte. The `deepseek/deepseek-v4.1-flash-1017`
+entry (`semantius-admin`'s default) runs with `{ "sort": "throughput", "max_price": { "completion":
 0.6 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"] }` — the fastest non-fp4
 host at or under $0.60/M output, the list rate (filters apply *before* the throughput
 ranking). `"unknown"` is load-bearing: it admits DeepSeek first-party, Cloudflare, Reka and

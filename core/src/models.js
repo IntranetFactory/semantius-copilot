@@ -1,8 +1,10 @@
 /**
  * The model registry (backend-b/agents_config.jsonc): the whitelist of model
  * ids agents may list in agent.jsonc `models`, each with its display name,
- * provider, upstream model and optional limits/routing/reasoning efforts; a
- * `base` entry is a variant of another (withBase).
+ * provider and optional limits/routing/reasoning efforts. The id IS the
+ * upstream model id at the provider (`deepseek/deepseek-v4.1-flash-1017`), so
+ * the id a session records is exactly what ran; `<id>@<level>` is the same
+ * model at a fixed thinking level (withVariant).
  * Parsed and validated once at worker module init (backend-b/src/llm.ts).
  *
  * @typedef {'openrouter' | 'openai'} ModelProvider
@@ -10,7 +12,7 @@
  * @typedef {Object} ModelEntry
  * @property {string} name          display name shown in the chat UI's model dropdown
  * @property {ModelProvider} provider openrouter (LLM_API_KEY) | openai (OPENAI_API_KEY)
- * @property {string} model         upstream model id at that provider
+ * @property {string} model         upstream model id at that provider: the registry id, minus any `@<level>`
  * @property {number} [maxTokens]   output-token cap, wins over catalog metadata
  * @property {number} [contextWindow] context window in tokens, wins over catalog metadata
  * @property {Record<string, unknown>} [openRouterRouting] OpenRouter provider-routing object
@@ -32,30 +34,34 @@ const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
- * An entry with `base` starts as a copy of that registry entry, then its own
- * keys replace the base's. Shallow on purpose: an own `openrouter_routing` or
- * `reasoning_efforts` replaces the base's whole value. One level only (a base
- * cannot itself have a base), and the variant must set its own `name` so the
+ * A `<base>@<level>` id is a variant: the `<base>` entry run at thinking
+ * level `<level>`. It starts as a copy of the base entry, then its own keys
+ * replace the base's. Shallow on purpose: an own `openrouter_routing` or
+ * `reasoning_efforts` replaces the base's whole value. The level comes only
+ * from the suffix (an own `thinking_level` is rejected, so the id can never
+ * disagree with what runs), and the variant must set its own `name` so the
  * model dropdown never shows two identical labels. The merged entry is then
- * validated like any other.
+ * validated like any other (the level must be one of its reasoning_efforts).
  *
  * @param {Record<string, unknown>} models the raw `models` object
+ * @param {string} id
  * @param {Record<string, unknown>} own
  * @param {string} label
  */
-function withBase(models, own, label) {
-  if (own.base === undefined) return own;
-  const { base, ...rest } = own;
-  if (typeof base !== 'string' || !Object.hasOwn(models, base) || !isObject(models[base])) {
-    throw new BundleValidationError(`${label}: "base" must name another model id in agents_config.jsonc`);
+function withVariant(models, id, own, label) {
+  const at = id.indexOf('@');
+  if (at === -1) return own;
+  const base = id.slice(0, at);
+  if (!Object.hasOwn(models, base) || !isObject(models[base])) {
+    throw new BundleValidationError(`${label}: "${base}" (the part before "@") must be another model id in agents_config.jsonc`);
   }
-  if (models[base].base !== undefined) {
-    throw new BundleValidationError(`${label}: base "${base}" has a "base" itself (one level only)`);
+  if (own.thinking_level !== undefined) {
+    throw new BundleValidationError(`${label}: the thinking level comes from the "@" suffix; drop "thinking_level"`);
   }
-  if (rest.name === undefined) {
-    throw new BundleValidationError(`${label}: an entry with "base" must set its own "name"`);
+  if (own.name === undefined) {
+    throw new BundleValidationError(`${label}: an "@" variant must set its own "name"`);
   }
-  return { ...models[base], ...rest };
+  return { ...models[base], ...own, thinking_level: id.slice(at + 1) };
 }
 
 /**
@@ -83,12 +89,10 @@ export function parseModelsConfig(text) {
     if (!isObject(own)) {
       throw new BundleValidationError(`${label} must be an object`);
     }
-    const entry = withBase(models, own, label);
+    const entry = withVariant(models, id, own, label);
     const allowed = [
-      'base',
       'name',
       'provider',
-      'model',
       'max_tokens',
       'context_window',
       'openrouter_routing',
@@ -106,8 +110,9 @@ export function parseModelsConfig(text) {
     if (!MODEL_PROVIDERS.includes(entry.provider)) {
       throw new BundleValidationError(`${label}: "provider" must be one of ${MODEL_PROVIDERS.join(', ')}`);
     }
-    if (typeof entry.model !== 'string' || entry.model.length === 0) {
-      throw new BundleValidationError(`${label}: "model" must be a non-empty string`);
+    const model = id.split('@')[0];
+    if (model.length === 0) {
+      throw new BundleValidationError(`${label}: the id must be the provider's model id`);
     }
     checkTokenLimit(entry.max_tokens, `${label} "max_tokens"`);
     checkTokenLimit(entry.context_window, `${label} "context_window"`);
@@ -139,7 +144,7 @@ export function parseModelsConfig(text) {
     registry[id] = {
       name: entry.name,
       provider: entry.provider,
-      model: entry.model,
+      model,
       ...(entry.max_tokens !== undefined ? { maxTokens: entry.max_tokens } : {}),
       ...(entry.context_window !== undefined ? { contextWindow: entry.context_window } : {}),
       ...(entry.openrouter_routing !== undefined ? { openRouterRouting: entry.openrouter_routing } : {}),

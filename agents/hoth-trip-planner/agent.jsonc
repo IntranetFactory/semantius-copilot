@@ -2,7 +2,7 @@
   "$schema": "../../core/agent.schema.json",
   // instructions come from INSTRUCTIONS.md in this folder.
   // Model id from backend-b/agents_config.jsonc; a single model shows no dropdown.
-  "models": ["hy4"],
+  "models": ["tencent/hy4-preview"],
   // The only egress this agent needs: the planner skill's opening-times.js
   // calls the (mock) Hoth Tourism API on this host — everything else is denied.
   "proxy_whitelist": [

@@ -91,7 +91,7 @@ console.log('\n== registry max_tokens / context_window overrides ==');
   check('a partial override leaves the other limit alone', partial.maxTokens === 4096 && partial.contextWindow === 128000);
 
   const registryEntry = (extra) =>
-    JSON.stringify({ models: { m: { name: 'M', provider: 'openrouter', model: 'deepseek/deepseek-v4-flash-0731', ...extra } } });
+    JSON.stringify({ models: { 'deepseek/deepseek-v4-flash-0731': { name: 'M', provider: 'openrouter', ...extra } } });
   let threw = null;
   let parsed;
   try {
@@ -100,7 +100,7 @@ console.log('\n== registry max_tokens / context_window overrides ==');
     threw = err;
   }
   check('parseModelsConfig accepts max_tokens/context_window', threw === null, String(threw ?? ''));
-  check('…and carries them as maxTokens/contextWindow', parsed?.m.maxTokens === 393216 && parsed?.m.contextWindow === 1048576);
+  check('…and carries them as maxTokens/contextWindow', parsed?.['deepseek/deepseek-v4-flash-0731'].maxTokens === 393216 && parsed?.['deepseek/deepseek-v4-flash-0731'].contextWindow === 1048576);
 
   const rejects = (extra) => {
     try {

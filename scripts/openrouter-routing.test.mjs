@@ -47,7 +47,7 @@ const rejects = (fn) => {
 // --- 1. validation -------------------------------------------------------
 console.log('== openrouter_routing validation (model registry) ==');
 const registry = (routing, provider = 'openrouter') =>
-  parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider, model: 'deepseek/deepseek-v4-flash', openrouter_routing: routing } } }));
+  parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider, openrouter_routing: routing } } }));
 {
   const routing = { sort: 'throughput', max_price: { prompt: 0.5, completion: 1 }, only: ['deepseek'] };
   check('a routing object is accepted', !rejects(() => registry(routing)));
@@ -71,7 +71,7 @@ console.log('\n== registry plumbing ==');
 {
   const withRouting = registry({ sort: 'throughput' });
   check('the entry carries openRouterRouting verbatim', JSON.stringify(withRouting.m.openRouterRouting) === '{"sort":"throughput"}');
-  const without = parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider: 'openrouter', model: 'x/y' } } }));
+  const without = parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider: 'openrouter' } } }));
   check('no routing -> no entry field', !('openRouterRouting' in without.m));
 }
 

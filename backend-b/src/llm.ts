@@ -29,6 +29,21 @@ import modelsConfigText from '../agents_config.jsonc?raw';
 
 const vars = env as Record<string, string | undefined>;
 
+/** OpenRouter app attribution (openrouter.ai/docs/app-attribution): without
+ * these every request shows as an unknown app in OpenRouter's activity log.
+ * Sent on every OpenRouter request — model turns via the model entry's
+ * `headers` (pi-ai merges them into the client's default headers), the title
+ * side call explicitly (title.ts). */
+export const OPENROUTER_APP_HEADERS: Record<string, string> = {
+  'HTTP-Referer': 'https://www.semantius.com',
+  'X-Title': 'Semantius',
+};
+
+/** A catalog/placeholder entry with the app attribution headers added. */
+function withAppHeaders<T extends { headers?: Record<string, string> }>(entry: T): T {
+  return { ...entry, headers: { ...(entry.headers ?? {}), ...OPENROUTER_APP_HEADERS } };
+}
+
 function registerProvider(id: string, opts: { api?: string; baseUrl?: string; apiKey?: string }): void {
   const auth = {
     apiKey: {
@@ -41,7 +56,7 @@ function registerProvider(id: string, opts: { api?: string; baseUrl?: string; ap
     // Built-in provider: keeps its model catalog, overrides transport/auth.
     const models = openrouterProvider()
       .getModels()
-      .map((model) => (opts.baseUrl ? { ...model, baseUrl: opts.baseUrl } : model));
+      .map((model) => withAppHeaders(opts.baseUrl ? { ...model, baseUrl: opts.baseUrl } : model));
     setProvider(createProvider({ id, auth, models, api: openAICompletionsApi() }));
     return;
   }
@@ -282,7 +297,9 @@ export function modelSpecifierFor(modelId?: string | null): string {
     }
   }
 
-  const id = `model-${modelId}`;
+  // Flue splits a specifier at its FIRST "/", and registry ids are upstream
+  // ids (`deepseek/…`, `…@max`), so the provider id flattens both.
+  const id = `model-${modelId.replace(/[/@]/g, '-')}`;
   const auth = {
     apiKey: {
       name: 'LLM_API_KEY',
@@ -294,28 +311,30 @@ export function modelSpecifierFor(modelId?: string | null): string {
       id,
       auth,
       models: [
-        withReasoning(
-          withRouting(
-            applyModelLimits(
-              catalogEntry
-                ? { ...catalogEntry, provider: id }
-                : {
-                    id: model.model,
-                    name: model.model,
-                    api: 'openai-completions' as const,
-                    provider: id,
-                    baseUrl: OPENROUTER_BASE_URL,
-                    reasoning: false,
-                    input: ['text' as const],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 8192,
-                  },
+        withAppHeaders(
+          withReasoning(
+            withRouting(
+              applyModelLimits(
+                catalogEntry
+                  ? { ...catalogEntry, provider: id }
+                  : {
+                      id: model.model,
+                      name: model.model,
+                      api: 'openai-completions' as const,
+                      provider: id,
+                      baseUrl: OPENROUTER_BASE_URL,
+                      reasoning: false,
+                      input: ['text' as const],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 128000,
+                      maxTokens: 8192,
+                    },
+                model,
+              ),
               model,
             ),
             model,
           ),
-          model,
         ),
       ],
       api: openAICompletionsApi(),

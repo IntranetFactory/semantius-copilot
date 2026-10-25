@@ -1,6 +1,9 @@
 {
-  // Model whitelist shared by all agents. The KEY is the stable model_id that
-  // agent.jsonc `models` references and sessions persist; never rename one in use.
+  // Model whitelist shared by all agents. The KEY is the provider's own model id
+  // (exactly what each request sends), and it is the model_id agent.jsonc `models`
+  // references and sessions persist — so a session record shows what ran. Moving
+  // to a new snapshot means a new key: sessions on a key that is no longer listed
+  // fall back to the agent's default model on reopen.
   // provider: "openrouter" (key: LLM_API_KEY secret) | "openai" (key: OPENAI_API_KEY secret).
   // An openai model must be an exact pi-ai catalog id (no limits/routing/efforts).
   // Model ids resolve against Pi's catalog of that provider; dated snapshot slugs
@@ -9,12 +12,13 @@
   // entry resolves for runs on a conservative placeholder (no reasoning flag,
   // 128k window, 8k output cap — long single-pass writes truncate), so set
   // max_tokens/context_window for it; drop them once pi-ai catalogs it.
-  // "base": "<model id>" makes an entry a variant: it starts as a copy of that
-  // entry and its own keys replace the base's (top-level only, one level deep,
-  // own "name" required) — e.g. gpt-6-luna-xhigh changes only name + thinking_level.
+  // "<model id>@<level>" is a variant: that entry at thinking level <level> (one
+  // of its reasoning_efforts). It starts as a copy of the base entry and its own
+  // keys replace the base's (top-level only, own "name" required, no own
+  // "thinking_level") — e.g. openai/gpt-6-luna@xhigh sets only its name.
   // Parsed and validated at worker start (parseModelsConfig, core/src/models.js).
   "models": {
-    "deepseek-v4.1-flash": {
+    "deepseek/deepseek-v4.1-flash-1017": {
       "name": "DeepSeek V4.1 Flash",
       "provider": "openrouter",
       // deepseek-v4.1-flash (released 2026-09-10) is a catalog miss: neither the
@@ -31,7 +35,7 @@
       //  - cost: the placeholder's per-token rates are 0, but the billed total
       //    still comes from OpenRouter's inline usage.cost (pi-ai patch); only
       //    the per-direction split in traces reads 0.
-      "model": "deepseek/deepseek-v4.1-flash-1017", // alternatives: "deepseek/deepseek-v4.1-flash" (the 09-10 release), "deepseek/deepseek-v4-flash-0731" (in catalog, 0.14/0.28 list rate), "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
+      // Alternatives: "deepseek/deepseek-v4.1-flash" (the 09-10 release), "deepseek/deepseek-v4-flash-0731" (in catalog, 0.14/0.28 list rate), "xiaomi/mimo-v2.5-pro" (1M window, 131k output)
       // OpenRouter routes only to hosts whose output cap covers the request's
       // max_tokens (docs: "if you set a max_tokens, OpenRouter will only route
       // to providers that support a response of that length"). 384000 sits
@@ -70,7 +74,7 @@
         "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
       }
     },
-    "deepseek-v4.1-flash-max": {
+    "deepseek/deepseek-v4.1-flash-1017@max": {
       // deepseek-v4.1-flash at thinking effort "max" (its default is "high").
       // OpenRouter, checked 2026-09-30: reasoning optional, supported
       // ["low","high","max"]. reasoning_efforts lives on this variant only, so
@@ -79,15 +83,12 @@
       // role and replay stay as on the base (pi-ai's DeepSeek-specific compat
       // keys off deepseek.com, not the model id); the title side call sends
       // effort "low" instead of reasoning off.
-      "base": "deepseek-v4.1-flash",
       "name": "DeepSeek V4.1 Flash (Max)",
-      "reasoning_efforts": ["low", "high", "max"],
-      "thinking_level": "max"
+      "reasoning_efforts": ["low", "high", "max"]
     },
-    "glm-5.3-flash": {
+    "z-ai/glm-5.3-flash": {
       "name": "GLM 5.3 Flash",
       "provider": "openrouter",
-      "model": "z-ai/glm-5.3-flash",
       // Not in pi-ai 0.83.0's catalog. OpenRouter, checked 2026-09-28: list rate
       // $0.15 / $0.50 per M tokens, max output 943717, context 1310720 on
       // Cloudflare only ($1.00 output, outside the cap) and 1048576 on the rest,
@@ -114,7 +115,7 @@
         "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
       }
     },
-    "gpt-6-luna": {
+    "openai/gpt-6-luna": {
       "name": "GPT-6 Luna",
       "provider": "openrouter",
       // Via OpenRouter, not OpenAI direct. Not in pi-ai 0.83.0's catalog; the
@@ -131,12 +132,11 @@
       //    request field overrides it (OpenRouter BYOK docs). Such a turn reports
       //    usage.is_byok: true and usage.cost 0, so traces show $0 and OpenAI
       //    bills the key's account. Seen 2026-09-28.
-      "model": "openai/gpt-6-luna",
       "max_tokens": 128000,
       "context_window": 1050000,
       "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
       // The effort every turn runs at (must be one of reasoning_efforts). "medium"
-      // = Luna's own default; gpt-6-luna-xhigh below is the same model at xhigh.
+      // = Luna's own default; openai/gpt-6-luna@xhigh below is the same model at xhigh.
       "thinking_level": "medium",
       //  - max_price: USD per MILLION output tokens; 0.5 = the list rate. Keeps
       //    OpenAI (0.5, flex tier 0.25) and Azure (0.5); drops Azure US/EU and
@@ -146,15 +146,13 @@
         "max_price": { "completion": 0.5 }
       }
     },
-    "gpt-6-luna-xhigh": {
+    "openai/gpt-6-luna@xhigh": {
       // gpt-6-luna at thinking effort "xhigh" (one below "max"); everything else
       // comes from the base entry. Reasoning tokens bill as output, so turns
       // cost more and take longer than at "medium".
-      "base": "gpt-6-luna",
-      "name": "GPT-6 Luna (Extra High)",
-      "thinking_level": "xhigh"
+      "name": "GPT-6 Luna (Extra High)"
     },
-    "hy4": {
+    "tencent/hy4-preview": {
       "name": "Tencent Hy4 Preview",
       "provider": "openrouter",
       // OpenRouter lists only the preview slug (no tencent/hy4 yet). Not in pi-ai
@@ -164,13 +162,12 @@
       // keeps every host routable, Tencent first-party included.
       // reasoning: optional (default on), default effort "high", supported
       // ["high","low","none"].
-      "model": "tencent/hy4-preview",
       "max_tokens": 64000,
       "context_window": 1048576,
       // Flue's default "medium" clamps to "high", Hy4's own default.
       "reasoning_efforts": ["low", "high"]
     },
-    "muse-spark-1.3-contributor": {
+    "meta/muse-spark-1.3-contributor": {
       "name": "Muse Spark 1.3 Contributor",
       "provider": "openrouter",
       // Meta's cost-efficient "contributor" tier of Muse Spark 1.3 ($1.25 / $4.25
@@ -183,18 +180,39 @@
       // input + max_tokens exceeds the 1048576 window, and at 943718 a fresh chat's
       // ~127k-token baseline already relied on pi-ai's estimated clamp, which came in
       // ~200 tokens short (400 on turn 1, 2026-10-24). 262144 leaves ~786k for input.
-      "model": "meta/muse-spark-1.3-contributor",
       "max_tokens": 262144,
       "context_window": 1048576,
       "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
     },
-    "muse-spark-1.3-contributor-xhigh": {
+    "xiaomi/mimo-v2.6-flash": {
+      "name": "MiMo V2.6 Flash",
+      "provider": "openrouter",
+      // Xiaomi, 309B MoE / 15B active, released 2026-09-21. Not in pi-ai 0.83.0's
+      // catalog. OpenRouter, checked 2026-10-24: list rate $0.14 / $0.28 per M
+      // tokens, context 1048576 (Io Net 1048320), output cap 131072 on most hosts
+      // (Cohere 384000, GMICloud 945000) — max_tokens 131072 keeps them all routable.
+      // reasoning: optional, NO effort levels (no supported_efforts, no
+      // reasoning_effort param). Probed 2026-10-24: it thinks by default with no
+      // `reasoning` param; effort "none" turns thinking off; "low" and "high"
+      // reason the same amount. So no reasoning_efforts and no "high" variant:
+      // the placeholder sends no `reasoning` param and the model thinks every turn.
+      "max_tokens": 131072,
+      "context_window": 1048576,
+      //  - max_price: USD per MILLION output tokens; 0.3 keeps every 0.18–0.28 host
+      //    and drops Venice (0.35). All hosts charge ≤0.14 input.
+      //  - quantizations: same floor as DeepSeek/GLM; drops Darkbloom (fp4) and
+      //    Relace (mxfp4). Leaves Xiaomi first-party, Novita, Makora, Io Net
+      //    (fp8), GMICloud (bf16), Cohere (unknown), DeepInfra (fp8).
+      "openrouter_routing": {
+        "max_price": { "completion": 0.3 },
+        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+      }
+    },
+    "meta/muse-spark-1.3-contributor@xhigh": {
       // muse-spark-1.3-contributor at thinking effort "xhigh" (its default is
       // "medium"). Reasoning tokens bill as output, so turns cost more and take
       // longer.
-      "base": "muse-spark-1.3-contributor",
-      "name": "Muse Spark 1.3 Contributor (Extra High)",
-      "thinking_level": "xhigh"
+      "name": "Muse Spark 1.3 Contributor (Extra High)"
     }
   }
 }

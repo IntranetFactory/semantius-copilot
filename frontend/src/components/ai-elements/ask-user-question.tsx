@@ -339,7 +339,26 @@ export function AskUserQuestionCard({
   );
 }
 
-/** Post-answer rendering: each question (muted) over the recorded choice. */
+/** Split a recorded answer back into its individual choices. Multi-select
+ * answers are joined with ", " (see assembleAnswers): labels in option order,
+ * then any "Other" text. Labels are matched by prefix rather than splitting on
+ * commas, so a label (or Other text) containing a comma stays intact. */
+function splitAnswer(question: AskUserQuestionItem, value: string): string[] {
+  if (!question.multiSelect) return [value];
+  const choices: string[] = [];
+  let rest = value;
+  for (const { label } of question.options) {
+    if (rest === label) return [...choices, label];
+    if (rest.startsWith(`${label}, `)) {
+      choices.push(label);
+      rest = rest.slice(label.length + 2);
+    }
+  }
+  return rest ? [...choices, rest] : choices;
+}
+
+/** Post-answer rendering: each question (muted) over the recorded choice(s),
+ * one check row per choice. */
 function AnsweredCard({ questions, answer }: { questions: AskUserQuestionItem[]; answer: AskUserAnswerPayload }) {
   return (
     <div className="flex w-full max-w-xl flex-col gap-3 rounded-md border bg-muted/30 px-3 py-2.5">
@@ -349,10 +368,12 @@ function AnsweredCard({ questions, answer }: { questions: AskUserQuestionItem[];
           <div key={index} className="flex flex-col gap-1">
             <p className="text-muted-foreground text-xs">{q.question}</p>
             {value ? (
-              <p className="flex items-start gap-1.5 text-sm">
-                <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                <span>{value}</span>
-              </p>
+              splitAnswer(q, value).map((choice, choiceIndex) => (
+                <p key={choiceIndex} className="flex items-start gap-1.5 text-sm">
+                  <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                  <span>{choice}</span>
+                </p>
+              ))
             ) : (
               <p className="text-muted-foreground text-sm italic">
                 {answer.cancelled ? "Dismissed" : q.multiSelect ? "None selected" : "No answer"}

@@ -107,7 +107,7 @@ try {
   );
   const registryRejects = (entry) => {
     try {
-      parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider: 'openrouter', model: 'a/b', ...entry } } }));
+      parseModelsConfig(JSON.stringify({ models: { 'a/b': { name: 'M', provider: 'openrouter', ...entry } } }));
       return false;
     } catch (err) {
       return err instanceof BundleValidationError;
@@ -122,10 +122,10 @@ try {
   check('registry: thinking_level outside reasoning_efforts rejected', registryRejects({ reasoning_efforts: ['low', 'high'], thinking_level: 'medium' }));
   check('registry: thinking_level inside reasoning_efforts accepted', !registryRejects({ reasoning_efforts: ['low', 'high'], thinking_level: 'high' }));
   const pinned = {
-    'gpt-6-luna': 'medium',
-    'gpt-6-luna-xhigh': 'xhigh',
-    'deepseek-v4.1-flash-max': 'max',
-    'muse-spark-1.3-contributor-xhigh': 'xhigh',
+    'openai/gpt-6-luna': 'medium',
+    'openai/gpt-6-luna@xhigh': 'xhigh',
+    'deepseek/deepseek-v4.1-flash-1017@max': 'max',
+    'meta/muse-spark-1.3-contributor@xhigh': 'xhigh',
   };
   check(
     'registry: shipped thinking_level pins (Luna medium/xhigh, DeepSeek max, Muse xhigh)',
@@ -134,11 +134,17 @@ try {
   );
   check(
     'registry: DeepSeek base stays without reasoning_efforts/thinking_level',
-    registry['deepseek-v4.1-flash'].reasoningEfforts === undefined && registry['deepseek-v4.1-flash'].thinkingLevel === undefined,
+    registry['deepseek/deepseek-v4.1-flash-1017'].reasoningEfforts === undefined &&
+      registry['deepseek/deepseek-v4.1-flash-1017'].thinkingLevel === undefined,
   );
-  // `base` variants: copy the base, own keys win (shallow), one level, own name.
-  const { thinkingLevel: _l, name: lunaName, ...lunaRest } = registry['gpt-6-luna'];
-  const { thinkingLevel: _h, name: highName, ...lunaHighRest } = registry['gpt-6-luna-xhigh'];
+  // The id is the upstream model id; `@<level>` variants copy the base, own
+  // keys win (shallow), the level comes from the suffix, own name required.
+  check(
+    'registry: every entry sends its id (minus any @level) upstream',
+    Object.entries(registry).every(([id, entry]) => entry.model === id.split('@')[0]),
+  );
+  const { thinkingLevel: _l, name: lunaName, ...lunaRest } = registry['openai/gpt-6-luna'];
+  const { thinkingLevel: _h, name: highName, ...lunaHighRest } = registry['openai/gpt-6-luna@xhigh'];
   check(
     'registry: Luna xhigh variant inherits everything but name + thinking_level from its base',
     highName !== lunaName && JSON.stringify(lunaHighRest) === JSON.stringify(lunaRest),
@@ -151,19 +157,30 @@ try {
       return err instanceof BundleValidationError ? 'rejected' : err;
     }
   };
-  const baseEntry = { name: 'B', provider: 'openrouter', model: 'a/b', max_tokens: 1000, openrouter_routing: { sort: 'price' } };
-  const variant = variantParse({ b: baseEntry, v: { base: 'b', name: 'V', openrouter_routing: { sort: 'throughput' } } }).v;
+  const baseEntry = {
+    name: 'B',
+    provider: 'openrouter',
+    max_tokens: 1000,
+    reasoning_efforts: ['low', 'high'],
+    openrouter_routing: { sort: 'price' },
+  };
+  const variant = variantParse({ 'a/b': baseEntry, 'a/b@high': { name: 'V', openrouter_routing: { sort: 'throughput' } } })['a/b@high'];
   check(
-    'registry: base variant merges shallowly (own routing replaces, rest inherited)',
-    variant?.maxTokens === 1000 && variant?.model === 'a/b' && JSON.stringify(variant?.openRouterRouting) === '{"sort":"throughput"}',
+    'registry: @ variant merges shallowly (own routing replaces, rest inherited, level from the suffix)',
+    variant?.maxTokens === 1000 &&
+      variant?.model === 'a/b' &&
+      variant?.thinkingLevel === 'high' &&
+      JSON.stringify(variant?.openRouterRouting) === '{"sort":"throughput"}',
     JSON.stringify(variant),
   );
-  check('registry: unknown base rejected', variantParse({ v: { base: 'nope', name: 'V' } }) === 'rejected');
+  check('registry: @ variant of an unknown id rejected', variantParse({ 'x/y@high': { name: 'V' } }) === 'rejected');
+  check('registry: @ level outside reasoning_efforts rejected', variantParse({ 'a/b': baseEntry, 'a/b@max': { name: 'V' } }) === 'rejected');
   check(
-    'registry: chained base rejected',
-    variantParse({ b: baseEntry, v: { base: 'b', name: 'V' }, w: { base: 'v', name: 'W' } }) === 'rejected',
+    'registry: own thinking_level on an @ variant rejected',
+    variantParse({ 'a/b': baseEntry, 'a/b@high': { name: 'V', thinking_level: 'low' } }) === 'rejected',
   );
-  check('registry: base variant without its own name rejected', variantParse({ b: baseEntry, v: { base: 'b' } }) === 'rejected');
+  check('registry: @ variant without its own name rejected', variantParse({ 'a/b': baseEntry, 'a/b@high': {} }) === 'rejected');
+  check('registry: a "model" key is rejected (the id is the model)', registryRejects({ model: 'c/d' }));
   check('registry: a plain openrouter entry accepted', !registryRejects({}));
   const agentRejects = (bundlePatch) => {
     try {
@@ -185,7 +202,7 @@ try {
   {
     const piAiDir = realpathSync(join(here, '..', 'backend-b', 'node_modules', '@earendil-works', 'pi-ai'));
     const { clampThinkingLevel, getSupportedThinkingLevels } = await import(pathToFileURL(join(piAiDir, 'dist', 'models.js')));
-    const glm = { id: registry['glm-5.3-flash'].model, reasoning: true, thinkingLevelMap: thinkingLevelMap(registry['glm-5.3-flash'].reasoningEfforts) };
+    const glm = { id: registry['z-ai/glm-5.3-flash'].model, reasoning: true, thinkingLevelMap: thinkingLevelMap(registry['z-ai/glm-5.3-flash'].reasoningEfforts) };
     check('GLM 5.3 Flash: medium clamps to high', clampThinkingLevel(glm, 'medium') === 'high', clampThinkingLevel(glm, 'medium'));
     check('GLM 5.3 Flash: off is never offered', !getSupportedThinkingLevels(glm).includes('off'), getSupportedThinkingLevels(glm).join());
     // A pinned thinking_level must survive pi-ai's clamp unchanged (xhigh/max
