@@ -7,7 +7,7 @@ settings:
 patchedDependencies:
   '@durable-streams/client@0.2.6': f8b51ed54a0a0385cb7d284f2977b9bd9afc73dd3f828225510f79ea56e7f9a1
   '@earendil-works/pi-agent-core@0.83.0': c914e9d1c2610b0237394af8d44932a3d08a0c69636d42f4756a3732d4e6a1b3
-  '@earendil-works/pi-ai@0.83.0': 803d02ad4a4ba1a9cf588c22b9b15f299c9c2770b38a0206c032e8fc545aefe8
+  '@earendil-works/pi-ai@0.83.0': 0ff14d05fb236583a4a67ade9814316f2ae4e57b9a54fd25e24bc650b665dcca
   '@flue/runtime@2.0.3': c4570921f9adb0a5df80bf9c6ba8e5a7aefd658fec51fe69f2170595c2cdf65a
 
 importers:
@@ -21,7 +21,7 @@ importers:
         version: 0.12.3
       '@earendil-works/pi-ai':
         specifier: ^0.83.0
-        version: 0.83.0(patch_hash=803d02ad4a4ba1a9cf588c22b9b15f299c9c2770b38a0206c032e8fc545aefe8)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+        version: 0.83.0(patch_hash=0ff14d05fb236583a4a67ade9814316f2ae4e57b9a54fd25e24bc650b665dcca)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
       '@flue/github':
         specifier: 2.0.3
         version: 2.0.3(@flue/runtime@2.0.3(patch_hash=c4570921f9adb0a5df80bf9c6ba8e5a7aefd658fec51fe69f2170595c2cdf65a)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@5.9.3)(ws@8.21.1)(zod@4.4.3))
@@ -6561,7 +6561,7 @@ snapshots:
 
   '@earendil-works/pi-agent-core@0.83.0(patch_hash=c914e9d1c2610b0237394af8d44932a3d08a0c69636d42f4756a3732d4e6a1b3)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/pi-ai': 0.83.0(patch_hash=803d02ad4a4ba1a9cf588c22b9b15f299c9c2770b38a0206c032e8fc545aefe8)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.83.0(patch_hash=0ff14d05fb236583a4a67ade9814316f2ae4e57b9a54fd25e24bc650b665dcca)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
       diff: 8.0.4
       ignore: 7.0.5
       typebox: 1.3.7
@@ -6574,7 +6574,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.83.0(patch_hash=803d02ad4a4ba1a9cf588c22b9b15f299c9c2770b38a0206c032e8fc545aefe8)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.83.0(patch_hash=0ff14d05fb236583a4a67ade9814316f2ae4e57b9a54fd25e24bc650b665dcca)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -6891,7 +6891,7 @@ snapshots:
   '@flue/runtime@2.0.3(patch_hash=c4570921f9adb0a5df80bf9c6ba8e5a7aefd658fec51fe69f2170595c2cdf65a)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@5.9.3)(ws@8.21.1)(zod@4.4.3)':
     dependencies:
       '@earendil-works/pi-agent-core': 0.83.0(patch_hash=c914e9d1c2610b0237394af8d44932a3d08a0c69636d42f4756a3732d4e6a1b3)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
-      '@earendil-works/pi-ai': 0.83.0(patch_hash=803d02ad4a4ba1a9cf588c22b9b15f299c9c2770b38a0206c032e8fc545aefe8)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.83.0(patch_hash=0ff14d05fb236583a4a67ade9814316f2ae4e57b9a54fd25e24bc650b665dcca)(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
       '@hono/node-server': 2.0.9(hono@4.12.32)
       '@modelcontextprotocol/client': 2.0.0
       '@valibot/to-json-schema': 1.7.1(valibot@1.4.2(typescript@5.9.3))

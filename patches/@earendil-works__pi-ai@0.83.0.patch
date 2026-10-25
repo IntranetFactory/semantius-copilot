@@ -1,5 +1,5 @@
 diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
-index c21819049689124caf8ce3440c9d4e12902285c2..b04f2e638c09dfb027e4e1a5bc92458c46b26d5a 100644
+index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8818158cb 100644
 --- a/dist/api/openai-completions.js
 +++ b/dist/api/openai-completions.js
 @@ -4,7 +4,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
@@ -11,7 +11,17 @@ index c21819049689124caf8ce3440c9d4e12902285c2..b04f2e638c09dfb027e4e1a5bc92458c
  import { getProviderEnvValue } from "../utils/provider-env.js";
  import { retryProviderRequest } from "../utils/provider-retry.js";
  import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-@@ -200,7 +200,22 @@ export const stream = (model, context, options) => {
+@@ -131,6 +131,9 @@ export const stream = (model, context, options) => {
+             if (nextParams !== undefined) {
+                 params = nextParams;
+             }
++            // PATCH (semantius-copilot): see parseChunkUsage — the size of what we
++            // actually sent, for requests carrying OpenRouter server tools.
++            const sentTokens = estimateSentTokens(params);
+             const requestOptions = {
+                 ...(options?.signal ? { signal: options.signal } : {}),
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+@@ -200,7 +203,22 @@ export const stream = (model, context, options) => {
                          }
                      }
                      else {
@@ -35,7 +45,25 @@ index c21819049689124caf8ce3440c9d4e12902285c2..b04f2e638c09dfb027e4e1a5bc92458c
                      }
                      // Finalize in-place and strip the scratch buffers so replay only
                      // carries parsed arguments.
-@@ -525,6 +540,12 @@ function buildParams(model, context, options, compat = getCompat(model), cacheRe
+@@ -313,7 +331,7 @@ export const stream = (model, context, options) => {
+                     output.responseModel ||= chunk.model;
+                 }
+                 if (chunk.usage) {
+-                    output.usage = parseChunkUsage(chunk.usage, model);
++                    output.usage = parseChunkUsage(chunk.usage, model, sentTokens);
+                 }
+                 const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+                 if (!choice)
+@@ -321,7 +339,7 @@ export const stream = (model, context, options) => {
+                 // Fallback: some providers (e.g., Moonshot) return usage
+                 // in choice.usage instead of the standard chunk.usage
+                 if (!chunk.usage && choice.usage) {
+-                    output.usage = parseChunkUsage(choice.usage, model);
++                    output.usage = parseChunkUsage(choice.usage, model, sentTokens);
+                 }
+                 if (choice.finish_reason) {
+                     output.rawStopReason = choice.finish_reason;
+@@ -525,6 +543,12 @@ function buildParams(model, context, options, compat = getCompat(model), cacheRe
      if (compat.supportsUsageInStreaming !== false) {
          params.stream_options = { include_usage: true };
      }
@@ -48,7 +76,53 @@ index c21819049689124caf8ce3440c9d4e12902285c2..b04f2e638c09dfb027e4e1a5bc92458c
      if (compat.supportsStore) {
          params.store = false;
      }
-@@ -1085,6 +1106,19 @@ function parseChunkUsage(rawUsage, model) {
+@@ -1060,10 +1084,41 @@ function convertTools(tools, compat) {
+         };
+     });
+ }
+-function parseChunkUsage(rawUsage, model) {
+-    const promptTokens = rawUsage.prompt_tokens || 0;
+-    const cacheReadTokens = rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
+-    const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
++/**
++ * PATCH (semantius-copilot): chars/4 size of the request we actually sent
++ * (messages + our own function tools), or undefined when the request carries
++ * no OpenRouter server tool (`openrouter:web_search`, ...).
++ */
++function estimateSentTokens(params) {
++    const tools = Array.isArray(params?.tools) ? params.tools : [];
++    const isServerTool = (tool) => typeof tool?.type === "string" && tool.type.startsWith("openrouter:");
++    if (!tools.some(isServerTool))
++        return undefined;
++    const sent = JSON.stringify({ messages: params.messages, tools: tools.filter((tool) => !isServerTool(tool)) }) ?? "";
++    return Math.ceil(sent.length / 4);
++}
++function parseChunkUsage(rawUsage, model, sentTokens) {
++    let promptTokens = rawUsage.prompt_tokens || 0;
++    let cacheReadTokens = rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
++    let cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
++    // PATCH (semantius-copilot): with OpenRouter server tools OpenRouter runs the
++    // search/fetch loop itself and reports usage SUMMED over its internal model
++    // calls, each re-sending our context plus the fetched pages. That number is
++    // not our conversation's size, yet pi-ai's overflow guard (simple-options)
++    // and Flue's compaction both read usage as the context size — a few web
++    // fetches then "overflow" a 1M window (incident 2026-10-25, deepseek). When
++    // the tools were used (server_tool_use > 0) or the report exceeds what we
++    // sent, the token fields are replaced by the size of what we sent; the
++    // reported counts move into serverToolUse and the billed cost.total stays.
++    const serverToolUse = rawUsage.server_tool_use && typeof rawUsage.server_tool_use === "object" ? { ...rawUsage.server_tool_use } : undefined;
++    const usedServerTools = serverToolUse !== undefined && Object.values(serverToolUse).some((v) => typeof v === "number" && v > 0);
++    if (sentTokens !== undefined && (usedServerTools || promptTokens > sentTokens)) {
++        const reported = { reported_prompt_tokens: promptTokens, reported_completion_tokens: rawUsage.completion_tokens || 0 };
++        rawUsage = { ...rawUsage, server_tool_use: { ...serverToolUse, ...reported } };
++        promptTokens = Math.min(promptTokens, sentTokens);
++        cacheReadTokens = 0;
++        cacheWriteTokens = 0;
++    }
+     // Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
+     // tokens (hits). OpenAI does not document or emit cache_write_tokens, but
+     // OpenRouter-compatible providers can include it as a separate write count.
+@@ -1085,6 +1140,20 @@ function parseChunkUsage(rawUsage, model) {
          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
      };
      calculateCost(model, usage);
@@ -61,7 +135,8 @@ index c21819049689124caf8ce3440c9d4e12902285c2..b04f2e638c09dfb027e4e1a5bc92458c
 +    }
 +    // PATCH (semantius-copilot): carry OpenRouter's server-tool counters
 +    // (usage.server_tool_use, e.g. { web_search_requests: 2 } from the agent's
-+    // web_tools) verbatim; the Flue patch sums them across turns.
++    // web_tools, plus reported_* above when rewritten); the Flue patch sums
++    // them across turns.
 +    if (rawUsage.server_tool_use && typeof rawUsage.server_tool_use === "object") {
 +        usage.serverToolUse = rawUsage.server_tool_use;
 +    }

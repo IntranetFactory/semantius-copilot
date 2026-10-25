@@ -256,7 +256,9 @@ Every blueprint this skill writes carries `version: "3.1"` in the front-matter. 
 The environment checks are shared across all four Semantius skills and live in one place: **[`../semantius-admin/references/preflight.md`](../semantius-admin/references/preflight.md)**. Do not duplicate them here.
 
 - **Orchestrated by `semantius-admin` (a `Run context:` block is present in your input, see Step 0 below):** the admin already ran the preflight. Read `Customizations file:` from the header (export it as `CUSTOMIZATIONS_FILE`) and skip the checks.
-- **Standalone (no `Run context:` block):** run the shared preflight yourself. In brief: stay in the repo root; install the toolchain (Bun, jq, yq) if missing; probe `getCurrentUser` to install/authenticate the CLI and halt if the org is `adenin`; compute `CUSTOMIZATIONS_FILE="semantius/${org}/customizations.yaml"`. The full per-check procedure, install matrix, and exit handling are in the reference file.
+- **Standalone (no `Run context:` block):** run the shared preflight yourself. In brief: stay in the repo root; install the toolchain (Bun, jq, yq) if missing; probe `getCurrentUser` to install/authenticate the CLI; compute `CUSTOMIZATIONS_FILE="semantius/${org}/customizations.yaml"`. The full per-check procedure, install matrix, and exit handling are in the reference file.
+
+**Nothing about preflight reaches chat:** not the checks, not whether a `Run context:` block is present (under the admin or on your own), not the org, not the customizations path. The user sees only the setup and halt lines the shared preflight's Output discipline names, and the expert-flow line below.
 
 After preflight, in expert flow only (read the switch as "Expert flow" below describes), narrate one short line on first invocation: *"Using customizations from `semantius/<org>/customizations.yaml`"* (if the file exists) or *"No customizations file yet; will create on first decision."* (if absent). In guided and fast flow, say nothing about the file. The file is created lazily by the first widget answer.
 

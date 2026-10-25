@@ -285,6 +285,19 @@ key-wise across turns): it shows as `metadata.usage.serverToolUse` per response 
 running `session_state.server_tool_use` per session. Their charges are already inside
 `cost_total` (OpenRouter's billed amount).
 
+**Server-tool usage is not context size** (incident 2026-10-25): OpenRouter runs the
+search/fetch loop itself and reports usage SUMMED over its internal model calls, each
+re-sending our context plus the fetched pages (`web_fetch` `max_content_tokens` ×
+`max_uses` adds up fast). pi-ai's overflow guard and Flue's compaction both treat the last
+assistant usage as the conversation size, so a few fetches "overflowed" deepseek's 1M window
+(`Context overflow: the conversation (~1203631 tokens …)`). The pi-ai patch
+(`estimateSentTokens` / `parseChunkUsage`) therefore replaces the token fields of a request
+that carried `openrouter:*` tools with the chars/4 size of what we actually sent, whenever
+`server_tool_use` reports use or the reported prompt exceeds that size; OpenRouter's numbers
+move to `serverToolUse.reported_prompt_tokens` / `reported_completion_tokens`, and
+`cost.total` stays the billed amount. A session that already stored an inflated usage stays
+stuck (its last assistant message is the estimate's anchor) — start a new one.
+
 **Deploying an agent** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
 builds `agents/<name>/` fresh with the same loader and `PUT`s it to the backend's
 authenticated `/agents/:name` route, which validates the bundle (the trust boundary —
