@@ -13,7 +13,12 @@
  */
 import { env } from 'cloudflare:workers';
 import { setProvider, type ThinkingLevel } from '@flue/runtime';
-import { createProvider, type OpenRouterRouting } from '@earendil-works/pi-ai';
+import {
+  createProvider,
+  type OpenRouterRouting,
+  type ProviderStreams,
+  type StreamOptions,
+} from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
@@ -164,6 +169,35 @@ function withReasoning<T extends object>(entry: T, model: ModelEntry): T {
   return { ...entry, reasoning: true, thinkingLevelMap: thinkingLevelMap(model.reasoningEfforts) };
 }
 
+/** An agent's `web_tools` (OpenRouter server tools) onto an API
+ * implementation: every request's body gets them appended to `tools`, after
+ * the harness's own function tools, via pi-ai's `onPayload` hook (chained
+ * after any caller-supplied one). Verbatim — OpenRouter validates them. */
+function withWebTools(api: ProviderStreams, webTools: Record<string, unknown>[]): ProviderStreams {
+  const inject = <O extends StreamOptions>(options?: O): O => {
+    const onPayload: StreamOptions['onPayload'] = async (payload, model) => {
+      const params = ((await options?.onPayload?.(payload, model)) ?? payload) as { tools?: unknown[] };
+      return { ...params, tools: [...(params.tools ?? []), ...webTools] };
+    };
+    return { ...options, onPayload } as O;
+  };
+  return {
+    stream: (model, context, options) => api.stream(model, context, inject(options)),
+    streamSimple: (model, context, options) => api.streamSimple(model, context, inject(options)),
+  };
+}
+
+/** Short stable hash (FNV-1a, 32-bit hex) — keys the per-web-tools provider id
+ * so agents sharing a model but not their web_tools never share a provider. */
+function shortHash(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 /**
  * The one predicate for "this model resolves through the degrading
  * placeholder path" (modelSpecifierFor case 3), phrased as the warning to
@@ -274,15 +308,22 @@ export function chatCompletionsTarget(modelId?: string | null): {
  * The `model-<id>` provider is shared by every agent using that model;
  * setProvider replaces same-id registrations, so re-registering on every
  * render is idempotent. Auth is the LLM_API_KEY secret (openrouter only).
+ *
+ * `webTools` (the agent's `web_tools`, openrouter models only) always takes
+ * the dedicated-provider path, wrapped by withWebTools, under a provider id
+ * keyed by a hash of the tools — so agents sharing a model but not their
+ * web_tools never overwrite each other's registration.
  */
-export function modelSpecifierFor(modelId?: string | null): string {
+export function modelSpecifierFor(modelId?: string | null, webTools?: Record<string, unknown>[]): string {
   const model = modelId ? MODELS[modelId] : undefined;
   if (!modelId || !model) return MODEL_SPECIFIER;
+  const tools = model.provider === 'openrouter' && webTools?.length ? webTools : undefined;
   const hasOverride =
     model.maxTokens !== undefined ||
     model.contextWindow !== undefined ||
     model.openRouterRouting !== undefined ||
-    model.reasoningEfforts !== undefined;
+    model.reasoningEfforts !== undefined ||
+    tools !== undefined;
   const { entry: catalogEntry, exact } = resolveCatalogModel(catalogFor(model.provider), model.model);
   if (model.provider === 'openai' || (exact && catalogEntry && !hasOverride)) return `${model.provider}/${model.model}`;
 
@@ -299,7 +340,7 @@ export function modelSpecifierFor(modelId?: string | null): string {
 
   // Flue splits a specifier at its FIRST "/", and registry ids are upstream
   // ids (`deepseek/…`, `…@max`), so the provider id flattens both.
-  const id = `model-${modelId.replace(/[/@]/g, '-')}`;
+  const id = `model-${modelId.replace(/[/@]/g, '-')}${tools ? `-w${shortHash(JSON.stringify(tools))}` : ''}`;
   const auth = {
     apiKey: {
       name: 'LLM_API_KEY',
@@ -337,7 +378,7 @@ export function modelSpecifierFor(modelId?: string | null): string {
           ),
         ),
       ],
-      api: openAICompletionsApi(),
+      api: tools ? withWebTools(openAICompletionsApi(), tools) : openAICompletionsApi(),
     }),
   );
   return `${id}/${model.model}`;

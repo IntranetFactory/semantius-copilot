@@ -88,6 +88,9 @@ are added to schema + `validateAgentConfig` together):
   (`POST /session/copilot` → the session record's `org_whitelist`; an org running with its
   copilot firewall off contributes `*`). There is no global whitelist anymore — the former
   `DOMAIN_WHITELIST` constant is gone.
+- `web_tools` — optional array of OpenRouter server-tool objects (`openrouter:web_search`,
+  `openrouter:web_fetch`, …), any content, ≤16 entries / ≤16 KiB. Appended verbatim to the
+  request-body `tools` of every turn on an openrouter model (README "web_tools").
 
 Skills live in `agents/<name>/skills/<skill>/` (0..16; each needs a `SKILL.md` whose
 frontmatter `name` matches the skill dir name). `hoth-trip-planner` has one skill,

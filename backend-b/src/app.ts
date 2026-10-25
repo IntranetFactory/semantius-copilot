@@ -537,6 +537,8 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     instructions: bundle.instructions,
     models: modelOptions(MODELS, bundle.models),
     ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
+    // Seed field (turn 1 runs before useAgentStart lands meta); no secrets in it.
+    ...(bundle.webTools ? { webTools: bundle.webTools } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });
 });

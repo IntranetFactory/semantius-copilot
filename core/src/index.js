@@ -10,6 +10,7 @@ export {
 export {
   validateAgentBundle,
   validateAgentConfig,
+  validateWebTools,
   mergeInstructions,
   resolveCatalogModel,
   applyModelLimits,

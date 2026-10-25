@@ -17,6 +17,9 @@
  * @property {string[]} [proxyWhitelist] egress allow list (host/URL globs), unioned at
  *   egress with the org's own list; DENY-ALL when both are absent/empty
  * @property {AgentWelcome} [welcome] welcome card shown by the chat UI while a conversation is empty
+ * @property {Record<string, unknown>[]} [webTools] OpenRouter server tools (`openrouter:web_search`,
+ *   `openrouter:web_fetch`, ...) appended verbatim to the request-body `tools` of every
+ *   OpenRouter model turn
  * @property {Record<string, Record<string, string>>} skills skillName -> (rel-path -> utf-8 content)
  */
 
@@ -55,6 +58,10 @@ export const AGENT_LIMITS = {
   // its own routing fields, so new ones need no code change here); the cap
   // only bounds what a hostile bundle can make every request carry.
   maxRoutingBytes: 4 * 1024,
+  // Same posture for web_tools: forwarded verbatim, so only count and
+  // serialized size are bounded.
+  maxWebTools: 16,
+  maxWebToolsBytes: 16 * 1024,
 };
 
 /** Per-string caps on the welcome card. Deliberately no caps on the NUMBER of
@@ -169,6 +176,35 @@ function validateWelcome(raw, label) {
     }
   }
   return /** @type {AgentWelcome} */ (welcome);
+}
+
+/**
+ * Validate a web_tools / webTools value: an array of JSON objects, each
+ * appended verbatim to the `tools` array of every OpenRouter request (e.g.
+ * `{ "type": "openrouter:web_search", "parameters": { ... } }`). Deliberately
+ * NO field validation — same reasoning as checkRouting: OpenRouter is the
+ * authority on its own server-tool shapes, and an ill-formed entry fails the
+ * request with OpenRouter's error, visible in the session. Only the count and
+ * serialized size are capped.
+ *
+ * @param {unknown} raw
+ * @param {string} label
+ * @returns {Record<string, unknown>[]}
+ */
+export function validateWebTools(raw, label) {
+  if (!Array.isArray(raw)) throw new BundleValidationError(`${label} must be an array of tool objects`);
+  if (raw.length > AGENT_LIMITS.maxWebTools) {
+    throw new BundleValidationError(`${label}: too many tools (${raw.length} > ${AGENT_LIMITS.maxWebTools})`);
+  }
+  for (const tool of raw) {
+    if (tool === null || typeof tool !== 'object' || Array.isArray(tool)) {
+      throw new BundleValidationError(`${label}: every entry must be a JSON object`);
+    }
+  }
+  if (utf8Length(JSON.stringify(raw)) > AGENT_LIMITS.maxWebToolsBytes) {
+    throw new BundleValidationError(`${label} too large (> ${AGENT_LIMITS.maxWebToolsBytes} bytes serialized)`);
+  }
+  return raw;
 }
 
 /**
@@ -287,14 +323,14 @@ function checkModels(value, label) {
  * not-yet-supported keys (future egress allow list etc.) fail at bundle time.
  *
  * @param {unknown} raw
- * @returns {{ instructions?: string, models: string[], welcome?: AgentWelcome }}
+ * @returns {{ instructions?: string, models: string[], welcome?: AgentWelcome, web_tools?: Record<string, unknown>[] }}
  */
 export function validateAgentConfig(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BundleValidationError('agent.jsonc must be a JSON object');
   }
   const config = /** @type {Record<string, unknown>} */ (raw);
-  const allowed = ['$schema', 'instructions', 'models', 'proxy_whitelist', 'welcome'];
+  const allowed = ['$schema', 'instructions', 'models', 'proxy_whitelist', 'web_tools', 'welcome'];
   for (const key of Object.keys(config)) {
     if (!allowed.includes(key)) {
       throw new BundleValidationError(`agent.jsonc has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
@@ -306,6 +342,9 @@ export function validateAgentConfig(raw) {
   checkModels(config.models, 'agent.jsonc "models"');
   if (config.proxy_whitelist !== undefined) {
     validateWhitelist(config.proxy_whitelist, 'agent.jsonc "proxy_whitelist"');
+  }
+  if (config.web_tools !== undefined) {
+    validateWebTools(config.web_tools, 'agent.jsonc "web_tools"');
   }
   if (config.welcome !== undefined) {
     validateWelcome(config.welcome, 'agent.jsonc "welcome"');
@@ -368,6 +407,9 @@ export function validateAgentBundle(raw) {
   checkModels(bundle.models, 'models');
   if (bundle.proxyWhitelist !== undefined) {
     validateWhitelist(bundle.proxyWhitelist, 'proxyWhitelist');
+  }
+  if (bundle.webTools !== undefined) {
+    validateWebTools(bundle.webTools, 'webTools');
   }
   if (bundle.welcome !== undefined) {
     validateWelcome(bundle.welcome, 'welcome');

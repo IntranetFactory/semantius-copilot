@@ -8,6 +8,17 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Product knowledge the model lacks is looked up on the web
+
+2026-10-25. Every vendor fallback asked the user or dropped the product as soon as training knowledge ran out (an unfamiliar regional vendor, a very new product, a niche category), and every skill banned `WebFetch` outright, so the web was never consulted. Rules: SKILL.md, "Reference material" and Step 0 "Catalog source"; `references/stage-1-capture.md`, "Products that fit" and the four-object test; `references/stage-2-naming.md`; `references/stage-3-entities.md`, the template-mode note; `../semantius-admin/SKILL.md`, core invariants.
+
+1. **Knowledge first, then the web.** When training knowledge does not give the products in a category, a product's headline objects, or its API object names, search with `WebSearch` and read the product's own documentation, API reference or data-export reference with `WebFetch` before asking the user or falling back. Only what the pages confirm is used, spelled their way.
+2. **The four-object test counts looked-up objects.** A product passes when four headline objects are named from knowledge or the lookup.
+3. **The existing fallbacks apply only after the lookup:** the one-sentence "can't name its records" answer, the API object choice (switch, paste, or leave empty), the no-incumbents skip, and in a fast run modern names with "inspired by" at most.
+4. **`curl` stays the only way to fetch an artifact.** The web tools serve product knowledge only; a blueprint or spec at a URL is fetched with `curl`.
+
+---
+
 ## Entity table: "Shown as" gives field titles, the product column gives API names
 
 2026-10-24. A fast-flow go-ahead for a design following Sine showed "Shown as" values as loose lowercase phrases ("expected visitor and date"), and its "Sine object" column only repeated each entity's name in the singular: in template mode the entity names are made from the product's display names, so a display name in that column checks nothing. Rules: `references/stage-3-entities.md`, the template-mode note and "Present the list as a table"; `references/stage-2-naming.md`, naming rules table; `../semantius-admin/references/fast-flow.md`, section 3.

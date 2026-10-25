@@ -248,6 +248,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "instructions": "…",                // agent.jsonc instructions + INSTRUCTIONS.md (appended)
   "models": ["deepseek/deepseek-v4.1-flash-1017", "z-ai/glm-5.3-flash"],  // model registry ids = upstream model ids, first = default (see LLM configuration)
   "proxyWhitelist": ["postman-echo.com"],  // optional — hosts/URLs, `*` anywhere; unioned with the org's list at egress
+  "webTools": [{ "type": "openrouter:web_search", "parameters": {} }],  // optional — agent.jsonc `web_tools`, see below
   "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
 }
@@ -260,6 +261,19 @@ NEW agent shows up on every page after `pnpm deploy:agent <name>`, with no front
 rebuild. Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
 instructions ≤64 KiB (`core/src/agent.js`). Zero-skill agents (no `skills/` folder) are
 valid — nothing is provisioned, the bundle still carries instructions/model.
+
+**`web_tools`** (agent.jsonc → bundle `webTools`): OpenRouter server tools
+(`openrouter:web_search`, `openrouter:web_fetch`, …). Entries may contain any values —
+only "array of JSON objects, ≤16 entries, ≤16 KiB serialized" is checked
+(`validateWebTools`, `core/src/agent.js`); OpenRouter validates the fields and an
+ill-formed entry fails the turn with its error. Every entry is appended verbatim to the
+request-body `tools` of each model turn on an **openrouter** registry model (openai models
+ignore them): `modelSpecifierFor` (`backend-b/src/llm.ts`) routes such sessions through a
+dedicated provider `model-<id>-w<hash>` whose API is wrapped by `withWebTools`, which
+uses pi-ai's `onPayload` hook to append the entries after the harness's own function
+tools. They reach the session via `GET /agents/:name/meta` → the turn-1 seed, and via
+`useAgentStart` → `AgentMeta.webTools` afterwards; they are part of the bundle version
+hash. The title side call (`title.ts`) does not send them.
 
 **Deploying an agent** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
 builds `agents/<name>/` fresh with the same loader and `PUT`s it to the backend's
@@ -430,6 +444,12 @@ as if instructions or skills are missing.
     opens SSE after reaching up-to-date, so while an agent is actively generating (never
     up-to-date) it busy-polls catch-up reads at network speed — a request flood.
     `node scripts/verify-patch.mjs` proves the first request now carries `live=sse`.
+    Separately (NOT patched): the client pauses its SSE connection on
+    `visibilitychange` → hidden and does not reliably resume it on visible, so a chat
+    backgrounded mid-run could stay on "Working…" until F5 (or Flue's 90s stale-stream
+    watchdog). AgentChat works around it app-side: on visible / `pageshow` (bfcache) /
+    `online` while busy it calls `agent.refresh()` (history re-hydrate + re-follow).
+    Drop that effect once an upstream client resumes reliably.
   - (The beta-era `@flue/cli` patch is gone: Flue v2 replaced the `flue` CLI with Vite —
     `@flue/vite` + `@cloudflare/vite-plugin`.)
 

@@ -59,6 +59,7 @@ import {
   skillCatalogFromBundle,
   SKILLS_DIR,
   validateAgentBundle,
+  validateWebTools,
 } from '@semantius-copilot/core';
 import * as v from 'valibot';
 import {
@@ -161,6 +162,10 @@ type AgentMeta = {
    * empty catalog; see README "Skill delivery to the model").
    */
   skillCatalog?: SkillCatalogEntry[];
+  /** The agent's `web_tools`: OpenRouter server tools appended to every model
+   * turn's request-body `tools` (modelSpecifierFor). Part of the bundle
+   * version hash, so a change re-lands meta at the next start. */
+  webTools?: Record<string, unknown>[];
 };
 
 type SkillCatalogEntry = { name: string; description: string };
@@ -236,6 +241,14 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
           typeof s.description === 'string' && s.description.length > 0 && s.description.length <= 1024,
       )
     : undefined;
+  // Same bounds as the bundle gate; a malformed hand-crafted value is dropped,
+  // not fatal (it would fail every render of this conversation otherwise).
+  let webTools: Record<string, unknown>[] | undefined;
+  try {
+    if (seed.webTools !== undefined) webTools = validateWebTools(seed.webTools, 'seed webTools');
+  } catch {
+    webTools = undefined;
+  }
   return {
     agentName: String(seed.agentName ?? 'unknown'),
     version: String(seed.version ?? ''),
@@ -244,6 +257,7 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
     // model (useAgentStart then narrows it to the agent's own `models`).
     ...(typeof seed.modelId === 'string' && Object.hasOwn(MODELS, seed.modelId) ? { modelId: seed.modelId } : {}),
     ...(skillCatalog && skillCatalog.length > 0 ? { skillCatalog } : {}),
+    ...(webTools && webTools.length > 0 ? { webTools } : {}),
     binding,
   };
 }
@@ -311,7 +325,7 @@ export function Main({ id }: AgentProps) {
   const seed = useInitialData<AgentSeed | undefined>();
   const [meta, setMeta] = usePersistentState<AgentMeta | null>('agentMeta', null);
   const active = meta ?? metaFromSeed(seed);
-  const specifier = modelSpecifierFor(active?.modelId);
+  const specifier = modelSpecifierFor(active?.modelId, active?.webTools);
   // A registry `thinking_level` pins the effort; unset, Flue's default
   // "medium" applies (clamped to the entry's reasoning_efforts by pi-ai).
   const thinkingLevel = active?.modelId ? MODELS[active.modelId]?.thinkingLevel : undefined;
@@ -491,6 +505,7 @@ export function Main({ id }: AgentProps) {
         instructions: bundle.instructions,
         modelId,
         ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
+        ...(bundle.webTools?.length ? { webTools: bundle.webTools } : {}),
         binding,
       });
       // Mirrored onto the session record so the UI shows the locked model

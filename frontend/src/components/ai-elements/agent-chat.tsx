@@ -367,6 +367,34 @@ export function AgentChat({
     }
   }, [busy]);
 
+  // Re-sync from the server when the tab comes back mid-run. @durable-streams/client
+  // pauses its SSE connection on `visibilitychange` → hidden and does not reliably
+  // resume it on visible, leaving the chat on "Working…" with the answer missing
+  // until Flue's 90s stale-stream watchdog fires (or the user presses F5).
+  // refresh() re-hydrates from history and re-follows live — exactly what F5 does
+  // for the conversation. Busy-only: on an idle chat nothing can be missed, and a
+  // refresh would flash the busy strip on every tab switch. pageshow (bfcache
+  // restore) and online (network back) leave the stream equally dead.
+  const resyncWanted = useRef(false);
+  resyncWanted.current = !draft && (busy || answerInFlight);
+  const refreshAgent = agent.refresh;
+  useEffect(() => {
+    const resync = () => {
+      if (!document.hidden && resyncWanted.current) refreshAgent();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) resync();
+    };
+    document.addEventListener('visibilitychange', resync);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('online', resync);
+    return () => {
+      document.removeEventListener('visibilitychange', resync);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('online', resync);
+    };
+  }, [refreshAgent]);
+
   // The draft submit, echoed as an optimistic user bubble while the session
   // create is in flight (the dormant hook has no messages to show it).
   const [draftEcho, setDraftEcho] = useState<string>();

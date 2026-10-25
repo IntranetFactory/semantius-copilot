@@ -43,6 +43,8 @@ export type AgentSeed = {
   modelId?: string;
   /** Explicit skill catalog (name + description) so turn 1 mounts skills via useSkill(). */
   skillCatalog?: Array<{ name: string; description: string }>;
+  /** The agent's `web_tools` (OpenRouter server tools) so turn 1 already sends them. */
+  webTools?: Array<Record<string, unknown>>;
 };
 
 /** What `GET /agents/:name/meta` answers: the seed fields plus the welcome card

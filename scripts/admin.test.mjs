@@ -1034,6 +1034,12 @@ await (async () => {
   check('proxy_whitelist accepts $SEMANTIUS_DATA_HOST', placeholderOk);
   const typoRejected = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], proxy_whitelist: ['$SEMANTIUS_DATAHOST'] }); return false; } catch (err) { return /unknown placeholder/.test(String(err)); } })();
   check('an unknown $-placeholder is rejected at validation', typoRejected);
+
+  // web_tools: any object content passes (forwarded verbatim to OpenRouter); non-objects fail.
+  const webToolsOk = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], web_tools: [{ type: 'openrouter:web_search', parameters: { anything: [1, { deep: true }] } }, { whatever: null }] }); return true; } catch { return false; } })();
+  check('web_tools accepts arbitrary object entries', webToolsOk);
+  const webToolsBad = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], web_tools: ['openrouter:web_search'] }); return false; } catch (err) { return /JSON object/.test(String(err)); } })();
+  check('web_tools rejects a non-object entry', webToolsBad);
 })();
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);
