@@ -8,6 +8,26 @@ Entries below are newest first.
 
 ---
 
+## Entity icon goes to `entities.icon_name`
+
+2026-10-27. The platform renamed `entities.icon_url` to `icon_name`; the analyst's §3 line is now `**Icon:**`. Rules: `references/stage-1-parse.md`, the §3 entity lines and the mapping table; `references/stage-4-execute.md`, 4c; `references/deploy-script-template.md`, the schema preflight.
+
+1. **`**Icon:**` is parsed into `icon_name`** and stamped on `create_entity` / `update_entity`; it is omitted when the line is absent or empty.
+2. **The schema preflight expects `icon_name`** on `create_entity`.
+
+---
+
+## No invalid icon name is ever deployed
+
+2026-10-27. The modeler sent every icon name the spec carried without checking it, so a hand-edited spec, one saved before the analyst's icon gate, or a copied `none` would deploy a name that is not an icon. The analyst now also writes `  - icon: none <!-- finder: …: no fit -->` where no icon fits. Rules: `references/scaffold-lib.ts`, `checkEnumIcons`, `iconFindings` and the module icon; `references/deploy-script-template.md`, the copy step and steps 4 to 6; `references/stage-1-parse.md`, "Enum values from §5"; `references/stage-4-execute.md`, 4a and 4d; `references/stage-5-verify.md`, checks 1 and 5 and the "Icons not deployed" block.
+
+1. **Icons are checked at deploy time against the bundled Lucide list** (`lucide-icon-tags.json`, copied into `.tmp_deploy/` next to the libs), on every enum field, new or existing, and on the module's `icon_name`.
+2. **`icon: none` deploys as no icon** (`""`, never the text "none"), and on a live field it removes the live icon.
+3. **An unknown enum icon deploys as no icon; an unknown module icon deploys as `box`.** Each is listed as a 🟡 in the Stage 5 report's "Icons not deployed" block.
+4. **Each enum field is merged with live once,** on the create path too, so a cleared icon never comes back from a second merge.
+
+---
+
 ## Label column reaches the live table
 
 2026-10-27. The 4c ✨ New rule did not list `label_column` among the `create_entity` payload keys, and Stage 5 only checked that `label_column` was set, not that it named the spec's field. Rules: `references/stage-4-execute.md`, 4c "✨ New"; `references/deploy-script-template.md`, steps 0 and 3; `references/stage-5-verify.md`, check 5.

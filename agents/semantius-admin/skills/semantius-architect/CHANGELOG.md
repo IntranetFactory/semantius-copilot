@@ -8,6 +8,15 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Checker: `icon: none` with finder evidence, and `--require-icons`
+
+2026-10-27. The analyst now records every enum entry's icon check, so the §5 grammar needs a "checked, none fits" state and the analyst's pre-save run needs to refuse an unchecked entry. Rules: `references/consistency-check.ts`, `parseSpecEnums` and `uncheckedIcons`.
+
+1. **`  - icon: none <!-- finder: <query>, <query>: no fit -->`** is a valid §5 icon sub-bullet. `icon: none` without the finder queries is an error.
+2. **`--require-icons`** fails every §5 entry with no icon line. Without the flag a missing icon line is accepted, so the modeler's pre-deploy run and the optimizer's round-trip check are unchanged.
+
+---
+
 ## A clean file write is never narrated as an error
 
 2026-10-27. A run told the user it "hit a file write error" after a file saved cleanly through a shell heredoc. Rules: `SKILL.md`, "Narration restraint".

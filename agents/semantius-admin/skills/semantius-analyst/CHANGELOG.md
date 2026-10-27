@@ -8,6 +8,26 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## Entity icon is `**Icon:**`, stored in `entities.icon_name`
+
+2026-10-27. The platform renamed `entities.icon_url` to `icon_name`, which now takes a Lucide icon name or an icon URL like the module's `icon_name`. The file format version is unchanged. Rules: `references/semantic-spec-template.md`, §3 skeleton and the `**Icon:**` note; `references/stage-11-write.md`, delta 10; `references/stage-2-inspect.md`, the adopted entity index and the drift axes; `references/stage-3f-drift.md`, the drift axes and the cosmetic tier.
+
+1. **The §3 line is `**Icon:** <icon_name>`,** a Lucide icon name or an icon URL, no backticks, after `**Cube mode:**`. It is omitted when empty.
+2. **Drift compares `icon_name`,** in the cosmetic tier.
+
+---
+
+## Every enum entry gets an icon check; the icon itself is optional
+
+2026-10-27. Icons were optional ("an entry gets an icon when a fitting icon exists"), so under time pressure the finder step was skipped and every entry shipped with a label and a color only. A wrong icon is worse than no icon, so the gate enforces that the check ran, never that an icon was set. Rules: `references/stage-4-fields.md`, "Enum values, labels and hints" rule 3; `references/semantic-spec-template.md`, §5 Enumerations; `references/stage-11-write.md`, deltas 13 and 14; `SKILL.md`, "Verification gates".
+
+1. **Every entry is checked before save:** one finder run per entry, up to five queries most specific first (the enum's meaning and the entry's together first), and the checker on a taken icon. The first hit is taken only when it clearly matches the entry's meaning; on any doubt, no icon.
+2. **Two states, no third:** `` - icon: `<name>` `` (passed the checker) or `- icon: none <!-- finder: <query>, <query>: no fit -->` (the queries tried). A missing icon line means not checked yet, never "none fits".
+3. **The pre-save gate fails an unchecked entry:** the analyst runs `consistency-check.ts --require-icons`, which fails any §5 entry with no icon line and any `icon: none` without its finder queries.
+4. **Fast flow runs the check too,** after the go-ahead, and logs one line per enum with `log_pick` ("<N> set, <M> none").
+
+---
+
 ## A clean file write is never narrated as an error
 
 2026-10-27. A run told the user it "hit a file write error" after a file saved cleanly through a shell heredoc. Rules: `SKILL.md`, "Narration restraint" (kept verbatim with `../semantius-admin/references/writing-conventions.md`).
