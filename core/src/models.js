@@ -20,7 +20,8 @@
  * @property {string} [thinkingLevel] the effort every turn runs at (one of reasoningEfforts);
  *   unset = Flue's default "medium", clamped to the nearest listed effort
  * @property {string} [systemPrompt] model-specific text appended to the agent's
- *   system prompt in sessions running this model (main.ts); inherited by `@` variants
+ *   system prompt in sessions running this model (main.ts); inherited by `@` variants.
+ *   The registry may give it as an array of strings, joined here with newlines
  *
  * @typedef {Record<string, ModelEntry>} ModelRegistry  model id -> entry
  */
@@ -162,12 +163,20 @@ export function parseModelsConfig(text) {
     if (level !== undefined && (efforts === undefined || !efforts.includes(level))) {
       throw new BundleValidationError(`${label}: "thinking_level" must be one of its "reasoning_efforts"`);
     }
-    const systemPrompt = entry.system_prompt;
+    // A string, or an array of strings (one rule per element, for readable
+    // diffs) joined with newlines into the single string the prompt carries.
+    const rawPrompt = entry.system_prompt;
+    if (Array.isArray(rawPrompt) && rawPrompt.some((line) => typeof line !== 'string')) {
+      throw new BundleValidationError(`${label}: "system_prompt" array elements must all be strings`);
+    }
+    const systemPrompt = Array.isArray(rawPrompt) ? rawPrompt.join('\n') : rawPrompt;
     if (
       systemPrompt !== undefined &&
       (typeof systemPrompt !== 'string' || systemPrompt.trim().length === 0 || systemPrompt.length > MAX_SYSTEM_PROMPT_CHARS)
     ) {
-      throw new BundleValidationError(`${label}: "system_prompt" must be a non-empty string of at most ${MAX_SYSTEM_PROMPT_CHARS} characters`);
+      throw new BundleValidationError(
+        `${label}: "system_prompt" must be a non-empty string (or array of strings) of at most ${MAX_SYSTEM_PROMPT_CHARS} characters`,
+      );
     }
     // An openai model must be an exact pi-ai catalog id: its limits and
     // reasoning come from the catalog, so it always resolves through the

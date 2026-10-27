@@ -76,9 +76,22 @@
       //    it does (and must then be non-fp4 to pass `quantizations`).
       "openrouter_routing": {
         "sort": "throughput",
-        "max_price": { "completion": 0.6 },
-        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"],
-        "only": ["coreweave", "cloudflare", "relace", "ionstream"],
+        "max_price": {
+          "completion": 0.6
+        },
+        "quantizations": [
+          "fp8",
+          "bf16",
+          "fp16",
+          "fp32",
+          "unknown"
+        ],
+        "only": [
+          "coreweave",
+          "cloudflare",
+          "relace",
+          "ionstream"
+        ],
         "allow_fallbacks": false
       }
     },
@@ -92,7 +105,11 @@
       // keys off deepseek.com, not the model id); the title side call sends
       // effort "low" instead of reasoning off.
       "name": "DeepSeek V4.1 Flash (Max)",
-      "reasoning_efforts": ["low", "high", "max"]
+      "reasoning_efforts": [
+        "low",
+        "high",
+        "max"
+      ]
     },
     "z-ai/glm-5.3-flash": {
       "name": "GLM 5.3 Flash",
@@ -111,7 +128,11 @@
       // non-reasoning, pi-ai sends no `reasoning` param, and GLM thinks at its
       // default "max" on every turn. With it, Flue's thinking level (default
       // "medium") clamps to the nearest listed effort, here "high".
-      "reasoning_efforts": ["low", "high", "max"],
+      "reasoning_efforts": [
+        "low",
+        "high",
+        "max"
+      ],
       //  - max_price: USD per MILLION tokens, per direction. Output 0.5 = the list
       //    rate, so it drops only the above-list hosts (Morph, NextBit, Sail
       //    Research, Cloudflare). Input 0.5 drops Wafer (0.75); every other
@@ -119,8 +140,17 @@
       //  - quantizations: same floor as DeepSeek; excludes the fp4/nvfp4 hosts
       //    (InferenceNet, DeepInfra, Decart, OpenInference, Modal, Crusoe, CoreWeave).
       "openrouter_routing": {
-        "max_price": { "prompt": 0.5, "completion": 0.5 },
-        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+        "max_price": {
+          "prompt": 0.5,
+          "completion": 0.5
+        },
+        "quantizations": [
+          "fp8",
+          "bf16",
+          "fp16",
+          "fp32",
+          "unknown"
+        ]
       }
     },
     "z-ai/glm-5.3": {
@@ -136,7 +166,11 @@
       "max_tokens": 131072,
       "context_window": 1048576,
       // Flue's default "medium" clamps to "high" (as on GLM 5.3 Flash).
-      "reasoning_efforts": ["low", "high", "max"],
+      "reasoning_efforts": [
+        "low",
+        "high",
+        "max"
+      ],
       //  - max_price: USD per MILLION output tokens; 4.4 = the list rate. Drops
       //    Morph (4.75), Mistral EU (4.84), Bedrock (5.28), the fast tiers
       //    (Fireworks/BaseTen 6.60), ModelRun (6.60), Alibaba Prime (8.80).
@@ -146,8 +180,16 @@
       //    Inceptron, Mistral, BaseTen fp4, Nebius, Crusoe). Leaves Z.AI, Together,
       //    Fireworks, Cloudflare, Parasail, GMICloud, CoreWeave fp8 and ~15 more.
       "openrouter_routing": {
-        "max_price": { "completion": 4.4 },
-        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+        "max_price": {
+          "completion": 4.4
+        },
+        "quantizations": [
+          "fp8",
+          "bf16",
+          "fp16",
+          "fp32",
+          "unknown"
+        ]
       }
     },
     "openai/gpt-6-luna": {
@@ -169,7 +211,13 @@
       //    bills the key's account. Seen 2026-09-28.
       "max_tokens": 128000,
       "context_window": 1050000,
-      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       // The effort every turn runs at (must be one of reasoning_efforts). "medium"
       // = Luna's own default; openai/gpt-6-luna@xhigh below is the same model at xhigh.
       "thinking_level": "medium",
@@ -178,7 +226,9 @@
       //    Bedrock (0.55) and the OpenAI fast tier (1.0). BYOK requests still
       //    land on the standard tier (upstream cost = list rate, 2026-09-28).
       "openrouter_routing": {
-        "max_price": { "completion": 0.5 }
+        "max_price": {
+          "completion": 0.5
+        }
       }
     },
     "openai/gpt-6-luna@xhigh": {
@@ -211,7 +261,13 @@
       // variants below are what semantius-admin offers; reasoning tokens bill as
       // output ($2.50/M above 100K prompt tokens), so each step up costs more
       // and takes longer.
-      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     "anthropic/claude-haiku-5.5@high": {
       // claude-haiku-5.5 at thinking effort "high"; everything else comes from
@@ -239,7 +295,10 @@
       "max_tokens": 64000,
       "context_window": 1048576,
       // Flue's default "medium" clamps to "high", Hy4's own default.
-      "reasoning_efforts": ["low", "high"]
+      "reasoning_efforts": [
+        "low",
+        "high"
+      ]
     },
     "meta/muse-spark-1.3-contributor": {
       "name": "Muse Spark 1.3 Contributor",
@@ -256,17 +315,30 @@
       // ~200 tokens short (400 on turn 1, 2026-10-24). 262144 leaves ~786k for input.
       "max_tokens": 262144,
       "context_window": 1048576,
-      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       // Appended to the agent's system prompt whenever a session runs Muse (the
       // @xhigh and @max variants inherit it): Muse narrates status before, between and
       // after tool calls, and repeats it after aborts/retries.
-      "system_prompt": "Silent execution (highest priority, overrides all skills and templates): If your turn includes a tool call, output only the tool call. No prose before, between, or after. Send user-visible text only when you need an answer, need a choice, have a finished result, or are halted on a blocker. Never send acknowledgments or transitions such as Got it, Building, Starting, Switching to, Checking, Setting up, Back in a moment. Never summarize tool activity. Tool rows are the trace. After aborts or retries, resume silently without restating work."
+      "system_prompt": [
+        "Silent operator. Friendly means silent, fast and precise. Silence is helpful service. Chatter is failure.",
+        "One user message gets one response type: tools with zero text, or one text with zero tools. If tools will follow, say nothing now.",
+        "Send text only when you need information only the user has, you hold the finished result, or you are blocked with no forward path. Every other text is forbidden.",
+        "This block outranks persona, skills, templates, stage orders and all examples. Where any skill orders narration, a lead-in or a milestone, skip that sentence and do the work silently.",
+        "Before sending text, scan all messages since the last user message. If you already sent text, send nothing. If your draft is close to any sentence already sent in this run, send nothing.",
+        "Keep tool description fields minimal and neutral. After aborts or retries, resume with tools only and no restatement."
+      ]
     },
     "meta/muse-spark-1.3-contributor@xhigh": {
       // muse-spark-1.3-contributor at thinking effort "xhigh" (its default is
       // "medium"). Reasoning tokens bill as output, so turns cost more and take
-      // longer.
-      "name": "Muse Spark 1.3 Contributor (Extra High)"
+      // longer. semantius-admin's default, so the dropdown names it by effort only.
+      "name": "Effort: standard"
     },
     "meta/muse-spark-1.3-contributor@max": {
       // muse-spark-1.3-contributor at thinking effort "max", its highest. Same
@@ -294,8 +366,16 @@
       //  - quantizations: same floor as DeepSeek/GLM; every host passes today
       //    (Xiaomi, Novita, DeepInfra fp8; GMICloud bf16).
       "openrouter_routing": {
-        "max_price": { "completion": 0.87 },
-        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+        "max_price": {
+          "completion": 0.87
+        },
+        "quantizations": [
+          "fp8",
+          "bf16",
+          "fp16",
+          "fp32",
+          "unknown"
+        ]
       }
     }
   }

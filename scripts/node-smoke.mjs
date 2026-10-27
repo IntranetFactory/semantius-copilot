@@ -183,7 +183,15 @@ try {
   check('registry: @ variant without its own name rejected', variantParse({ 'a/b': baseEntry, 'a/b@high': {} }) === 'rejected');
   check('registry: a "model" key is rejected (the id is the model)', registryRejects({ model: 'c/d' }));
   check('registry: empty system_prompt rejected', registryRejects({ system_prompt: '  ' }));
-  check('registry: non-string system_prompt rejected', registryRejects({ system_prompt: ['x'] }));
+  check('registry: non-string system_prompt rejected', registryRejects({ system_prompt: 42 }));
+  check('registry: system_prompt array with a non-string rejected', registryRejects({ system_prompt: ['x', 1] }));
+  check('registry: empty system_prompt array rejected', registryRejects({ system_prompt: [] }));
+  const joined = variantParse({ 'a/b': { ...baseEntry, system_prompt: ['Rule one.', 'Rule two.'] } });
+  check(
+    'registry: system_prompt array joined with newlines',
+    joined?.['a/b']?.systemPrompt === 'Rule one.\nRule two.',
+    JSON.stringify(joined),
+  );
   check('registry: oversize system_prompt rejected', registryRejects({ system_prompt: 'x'.repeat(8 * 1024 + 1) }));
   check('registry: system_prompt on an openai model accepted', !registryRejects({ provider: 'openai', system_prompt: 'Be brief.' }));
   const prompted = variantParse({ 'a/b': { ...baseEntry, system_prompt: ' Be brief. ' }, 'a/b@high': { name: 'V' } });
@@ -195,7 +203,7 @@ try {
   check(
     'registry: shipped Muse prompt on the base and its @xhigh/@max variants only',
     ['meta/muse-spark-1.3-contributor', 'meta/muse-spark-1.3-contributor@xhigh', 'meta/muse-spark-1.3-contributor@max'].every((id) =>
-      registry[id]?.systemPrompt?.startsWith('Silent execution'),
+      registry[id]?.systemPrompt?.startsWith('Silent'),
     ) && Object.entries(registry).filter(([, e]) => e.systemPrompt).length === 3,
   );
   check('registry: a plain openrouter entry accepted', !registryRejects({}));
