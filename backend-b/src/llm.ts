@@ -109,6 +109,8 @@ type ModelEntry = {
   reasoningEfforts?: string[];
   /** Fixed effort for every turn, one of reasoningEfforts (parseModelsConfig). */
   thinkingLevel?: ThinkingLevel;
+  /** Model-specific text appended to the agent's system prompt (agents/main.ts). */
+  systemPrompt?: string;
 };
 
 /** The model registry: model id -> entry. Validated once here, at module init. */

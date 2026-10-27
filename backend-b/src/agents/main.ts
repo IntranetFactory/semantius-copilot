@@ -590,6 +590,12 @@ export function Main({ id }: AgentProps) {
   for (const tool of taskTools(id)) useTool(tool);
 
   const instructions = active?.instructions ?? DEFAULT_INSTRUCTIONS;
+  // The session model's registry `system_prompt` (agents_config.jsonc):
+  // per-model behaviour rules for every agent on that model. Static per
+  // session (the model is fixed), placed before the per-session suffix so the
+  // cached prompt prefix stays byte-identical across sessions.
+  const modelPrompt = active?.modelId ? MODELS[active.modelId]?.systemPrompt : undefined;
+  const modelInstructions = modelPrompt ? `\n\n${modelPrompt}` : '';
 
   // Per-session context the model should see: the creating send's payload
   // (immutable initialData) and the agent's own stored facts (mutable).
@@ -610,6 +616,7 @@ export function Main({ id }: AgentProps) {
       'reply reaches nobody. You MUST finish every event by calling comment_on_github_issue exactly once with your full ' +
       'answer in Markdown. If the request is unclear, post a comment asking for clarification.' +
       TASK_TRACKING_INSTRUCTIONS +
+      modelInstructions +
       suffix
     );
   }
@@ -618,7 +625,7 @@ export function Main({ id }: AgentProps) {
   // render the question card, so the tool is not mounted there at all.
   useTool(askUserQuestion);
 
-  return instructions + WORKSPACE_LINK_INSTRUCTIONS + TASK_TRACKING_INSTRUCTIONS + suffix;
+  return instructions + WORKSPACE_LINK_INSTRUCTIONS + TASK_TRACKING_INSTRUCTIONS + modelInstructions + suffix;
 }
 
 // The generic multi-agent host: durable identity `main` (generated DO class

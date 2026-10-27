@@ -126,9 +126,10 @@ try {
     'openai/gpt-6-luna@xhigh': 'xhigh',
     'deepseek/deepseek-v4.1-flash-1017@max': 'max',
     'meta/muse-spark-1.3-contributor@xhigh': 'xhigh',
+    'meta/muse-spark-1.3-contributor@max': 'max',
   };
   check(
-    'registry: shipped thinking_level pins (Luna medium/xhigh, DeepSeek max, Muse xhigh)',
+    'registry: shipped thinking_level pins (Luna medium/xhigh, DeepSeek max, Muse xhigh/max)',
     Object.entries(pinned).every(([id, level]) => registry[id]?.thinkingLevel === level),
     Object.keys(pinned).map((id) => `${id}=${registry[id]?.thinkingLevel}`).join(' '),
   );
@@ -181,6 +182,22 @@ try {
   );
   check('registry: @ variant without its own name rejected', variantParse({ 'a/b': baseEntry, 'a/b@high': {} }) === 'rejected');
   check('registry: a "model" key is rejected (the id is the model)', registryRejects({ model: 'c/d' }));
+  check('registry: empty system_prompt rejected', registryRejects({ system_prompt: '  ' }));
+  check('registry: non-string system_prompt rejected', registryRejects({ system_prompt: ['x'] }));
+  check('registry: oversize system_prompt rejected', registryRejects({ system_prompt: 'x'.repeat(8 * 1024 + 1) }));
+  check('registry: system_prompt on an openai model accepted', !registryRejects({ provider: 'openai', system_prompt: 'Be brief.' }));
+  const prompted = variantParse({ 'a/b': { ...baseEntry, system_prompt: ' Be brief. ' }, 'a/b@high': { name: 'V' } });
+  check(
+    'registry: system_prompt trimmed and inherited by @ variants',
+    prompted?.['a/b']?.systemPrompt === 'Be brief.' && prompted?.['a/b@high']?.systemPrompt === 'Be brief.',
+    JSON.stringify(prompted),
+  );
+  check(
+    'registry: shipped Muse prompt on the base and its @xhigh/@max variants only',
+    ['meta/muse-spark-1.3-contributor', 'meta/muse-spark-1.3-contributor@xhigh', 'meta/muse-spark-1.3-contributor@max'].every((id) =>
+      registry[id]?.systemPrompt?.startsWith('Silent execution'),
+    ) && Object.entries(registry).filter(([, e]) => e.systemPrompt).length === 3,
+  );
   check('registry: a plain openrouter entry accepted', !registryRejects({}));
   const agentRejects = (bundlePatch) => {
     try {

@@ -256,13 +256,22 @@
       // ~200 tokens short (400 on turn 1, 2026-10-24). 262144 leaves ~786k for input.
       "max_tokens": 262144,
       "context_window": 1048576,
-      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
+      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+      // Appended to the agent's system prompt whenever a session runs Muse (the
+      // @xhigh and @max variants inherit it): Muse narrates status before, between and
+      // after tool calls, and repeats it after aborts/retries.
+      "system_prompt": "Silent execution (highest priority, overrides all skills and templates): If your turn includes a tool call, output only the tool call. No prose before, between, or after. Send user-visible text only when you need an answer, need a choice, have a finished result, or are halted on a blocker. Never send acknowledgments or transitions such as Got it, Building, Starting, Switching to, Checking, Setting up, Back in a moment. Never summarize tool activity. Tool rows are the trace. After aborts or retries, resume silently without restating work."
     },
     "meta/muse-spark-1.3-contributor@xhigh": {
       // muse-spark-1.3-contributor at thinking effort "xhigh" (its default is
       // "medium"). Reasoning tokens bill as output, so turns cost more and take
       // longer.
       "name": "Muse Spark 1.3 Contributor (Extra High)"
+    },
+    "meta/muse-spark-1.3-contributor@max": {
+      // muse-spark-1.3-contributor at thinking effort "max", its highest. Same
+      // cost caveat as @xhigh, more so.
+      "name": "Muse Spark 1.3 Contributor (Max)"
     },
     "xiaomi/mimo-v2.6-pro": {
       "name": "MiMo V2.6 Pro",

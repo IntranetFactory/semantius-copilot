@@ -19,6 +19,8 @@
  * @property {string[]} [reasoningEfforts] the OpenRouter reasoning efforts the model accepts
  * @property {string} [thinkingLevel] the effort every turn runs at (one of reasoningEfforts);
  *   unset = Flue's default "medium", clamped to the nearest listed effort
+ * @property {string} [systemPrompt] model-specific text appended to the agent's
+ *   system prompt in sessions running this model (main.ts); inherited by `@` variants
  *
  * @typedef {Record<string, ModelEntry>} ModelRegistry  model id -> entry
  */
@@ -30,6 +32,9 @@ import { BundleValidationError } from './bundle.js';
 
 const MODEL_PROVIDERS = ['openrouter', 'openai'];
 const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Model-specific behaviour rules, not a second agent prompt: kept small so a
+// registry edit cannot silently balloon every turn of every agent on the model.
+const MAX_SYSTEM_PROMPT_CHARS = 8 * 1024;
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -98,6 +103,7 @@ export function parseModelsConfig(text) {
       'openrouter_routing',
       'reasoning_efforts',
       'thinking_level',
+      'system_prompt',
     ];
     for (const key of Object.keys(entry)) {
       if (!allowed.includes(key)) {
@@ -130,6 +136,13 @@ export function parseModelsConfig(text) {
     if (level !== undefined && (efforts === undefined || !efforts.includes(level))) {
       throw new BundleValidationError(`${label}: "thinking_level" must be one of its "reasoning_efforts"`);
     }
+    const systemPrompt = entry.system_prompt;
+    if (
+      systemPrompt !== undefined &&
+      (typeof systemPrompt !== 'string' || systemPrompt.trim().length === 0 || systemPrompt.length > MAX_SYSTEM_PROMPT_CHARS)
+    ) {
+      throw new BundleValidationError(`${label}: "system_prompt" must be a non-empty string of at most ${MAX_SYSTEM_PROMPT_CHARS} characters`);
+    }
     // An openai model must be an exact pi-ai catalog id: its limits and
     // reasoning come from the catalog, so it always resolves through the
     // stock provider (Responses API) and never needs a dedicated one.
@@ -150,6 +163,7 @@ export function parseModelsConfig(text) {
       ...(entry.openrouter_routing !== undefined ? { openRouterRouting: entry.openrouter_routing } : {}),
       ...(efforts !== undefined ? { reasoningEfforts: efforts } : {}),
       ...(level !== undefined ? { thinkingLevel: level } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt: systemPrompt.trim() } : {}),
     };
   }
   return registry;

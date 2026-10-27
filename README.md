@@ -754,8 +754,12 @@ Three pieces:
   entry and its own keys replace the base's — top-level only (an own `openrouter_routing`
   replaces the whole object) — it must set its own `name`, and the level comes only from
   the suffix (an own `thinking_level` is rejected), so `openai/gpt-6-luna@xhigh` is just a
-  `name`. An openai entry
-  takes no overrides (rejected at parse) and must be an exact Pi catalog id (anything else
+  `name`. Any entry (openai too) may set `system_prompt` (non-empty, ≤ 8 KiB): model-specific
+  text appended to the agent's system prompt in every session running that model, after the
+  static workspace/task paragraphs and before the per-session payload/data so the cached
+  prefix stays stable (`src/agents/main.ts`); `@` variants inherit it. Use it for behaviour
+  fixes one model needs, e.g. Muse Spark's no-narration rule. An openai entry
+  takes no other overrides (rejected at parse) and must be an exact Pi catalog id (anything else
   gets a deploy-time `modelWarning`, and its turns fail). Keep `max_tokens` well below
   `context_window` (≤ ~75% of the window), never the host's raw output cap. OpenRouter
   rejects any request with input + `max_tokens` > window (400 "maximum context length"),

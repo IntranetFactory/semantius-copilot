@@ -8,6 +8,27 @@ Entries below are newest first.
 
 ---
 
+## Fast run: the closing block links the deployed spec
+
+2026-10-27. A fast run names none of the files it writes, so after the deploy the user had no way to get the spec that was deployed. Rules: `SKILL.md`, "Closing Contract: clean and sticky"; `../semantius-admin/references/fast-flow.md`, sections 4.1 and 6.
+
+1. **In a fast run the closing block has four lines:** the status line, the "Open in UI" link, `[Download the <System Name> spec](<spec path>)`, then the sample-data question. The path is the deployed spec (the `Input artifact:` path, after the Stage 5b stamp), relative to the workspace root.
+2. **The link re-attaches with the sticky footer** while the sample-data question is unanswered.
+3. **Guided and expert runs are unchanged:** three lines, no download link.
+
+---
+
+## Verification report: one fixed shape, in plain language
+
+2026-10-26. A fast-run report dropped the Roles and Permission hierarchy blocks, wrote the handoffs and skipped links as prose paragraphs, put them before Counters, and added facts the template has no place for (record-id prefixes, lifecycle states, "a kind of", shared-module hints). The template allowed it: it was an example, not a contract, and it used tokens the Writing Conventions ban (`module_type`, `origin=`, `lineage`, slugs, permission names), so a run kept some of them and paraphrased the rest. Rules: `references/stage-5-verify.md`, "Structured Stage 5 report".
+
+1. **The shape is required:** one code block, the blocks in a fixed order under fixed headings, each line in one of the listed forms, no other facts and no prose, lines of at most 80 characters. Two tables say when each block is rendered and what its lines hold.
+2. **Plain language:** modules, tables, fields and roles by display name; permissions by level (view, edit, admin) or by action; no slugs, column names, `origin` or `module_type`. Block names: Tables, Access inclusions, Rules on shared tables, Ownership, Business roles, Handoffs to other modules, Links not added, Steps skipped, Business process rules. Counters lose the `origin` breakdown.
+3. **New Checks block:** one ✓ or 🛑 line per check area (module setup, tables and fields, names and descriptions, choice lists, visibility and field display rules), with one indented line per problem. The verdict line reads `🛑 Verification failed: <N> problems, listed under Checks.` when any remain.
+4. **Closing lines in a fixed order:** read-visibility callouts, verdict, access level, then the summary line, reworded in plain language.
+
+---
+
 ## Seed data reads plausibly; a computed label column deploys disabled
 
 2026-10-23. A seeded person table had one surname on every row: the Stage 6 example built first + last name pairs with `combine(i, [firstNames, lastNames])`, whose second pool only advances past `i = F`, so at the default 10 rows with 10 first names every row took `lastNames[0]`. The count guard passed, and nothing checked whether the values read sensibly. Rules: `references/stage-6-sample-data.md`; `references/deploy-lib.ts`.
