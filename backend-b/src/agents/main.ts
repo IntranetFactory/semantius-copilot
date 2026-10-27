@@ -51,6 +51,8 @@ import {
   AGENT_DEF_KEY_PREFIX,
   ensureEgressPolicy,
   mergeSessionRecord,
+  modelAlias,
+  modelIdForAlias,
   provisionAgentSkills,
   provisionSemantiusEnv,
   readSession,
@@ -150,7 +152,8 @@ type AgentMeta = {
   instructions: string;
   /** The session's model: a registry id (../../agents_config.jsonc) from the
    * agent's `models`, picked in the chat UI before the first message and fixed
-   * for the session. Absent = the env default (sessions without meta). */
+   * for the session. Absent = the env default (sessions without meta). On the
+   * SEED this is the UI's alias (modelAlias); metaFromSeed resolves it. */
   modelId?: string;
   binding: string;
   /**
@@ -268,13 +271,15 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
   } catch {
     webTools = undefined;
   }
+  // The UI sends the alias (modelAlias), resolved to the registry id here: a
+  // hand-crafted seed can still only pick a whitelisted model (useAgentStart
+  // then narrows it to the agent's own `models`).
+  const modelId = modelIdForAlias(MODELS, seed.modelId);
   return {
     agentName: String(seed.agentName ?? 'unknown'),
     version: String(seed.version ?? ''),
     instructions: seed.instructions,
-    // Registry ids only: a hand-crafted seed can still only pick a whitelisted
-    // model (useAgentStart then narrows it to the agent's own `models`).
-    ...(typeof seed.modelId === 'string' && Object.hasOwn(MODELS, seed.modelId) ? { modelId: seed.modelId } : {}),
+    ...(modelId ? { modelId } : {}),
     ...(skillCatalog && skillCatalog.length > 0 ? { skillCatalog } : {}),
     ...(webTools && webTools.length > 0 ? { webTools } : {}),
     binding,
@@ -421,10 +426,14 @@ export function Main({ id }: AgentProps) {
     if (drainWorkspaceTouched(id)) {
       requestWorkspacePersist({ env: env as unknown as BackupEnv, namespace, sessionId: id }).catch(() => {});
     }
+    // `model` is the alias, never the specifier: this metadata rides the
+    // conversation read the user's browser gets (the registry id is on the
+    // session record's model_id for admins).
+    const modelEntry = active?.modelId ? MODELS[active.modelId] : undefined;
     return {
       session_state: next,
       usage,
-      model: specifier,
+      ...(modelEntry ? { model: modelAlias(modelEntry.name) } : {}),
     };
   });
   // Lazy boot (see lazy-env.ts): the wrapper serves discovery + skills-tree
@@ -521,7 +530,7 @@ export function Main({ id }: AgentProps) {
       // never switch models mid-session), then the creating seed's pick,
       // then the agent's default — each only if the agent allows it.
       const modelId =
-        [meta?.modelId, seed?.modelId].find((m): m is string => !!m && bundle.models.includes(m)) ??
+        [meta?.modelId, modelIdForAlias(MODELS, seed?.modelId)].find((m): m is string => !!m && bundle.models.includes(m)) ??
         bundle.models[0];
       // web_tools only for an org running with its copilot firewall OFF (the
       // record's `copilot`, fixed at session create) — webToolsAllowed.

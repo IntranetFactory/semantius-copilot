@@ -98,7 +98,7 @@ runDeploy(async () => {
   //    composite-`id` rule, and `update_entity` keys `table_name` at the TOP level (not under `data`), so
   //    listing it here would false-fail against the tool's `data` schema.
   await preflightSchemas({
-    create_entity: ["table_name", "singular_label", "module_id", "view_permission", "edit_permission",
+    create_entity: ["table_name", "singular_label", "label_column", "module_id", "view_permission", "edit_permission",
                     "edit_mode", "cube_mode", "order_column", "id_column", "icon_url", "id_type", "id_prefix",
                     "id_refentity"],
     create_field:  ["table_name", "field_name", "format", "reference_table", "width", "searchable",
@@ -138,7 +138,7 @@ runDeploy(async () => {
   //    all extra hierarchy edges in one ensurePairs(...), all persona grants in one ensurePairs(...).
 
   // 3. ENTITIES FIRST — every ✨-new / rename-incoming / promote-create payload (4c checklist: module_id from the
-  //    scaffold, provenance stamped, computed_fields/validation_rules [] for now, NO label_parent) goes into ONE
+  //    scaffold, label_column from §3, provenance stamped, computed_fields/validation_rules [] for now, NO label_parent) goes into ONE
   //    create_entity call — or, when the spec has is_a / has_a entities, one call per level, bases first
   //    (a based row carries id_type + id_refentity, id_prefix for is_a, and NO label_column / label_parent /
   //    order_column). Nothing below creates a field until this resolves, so every reference_table already

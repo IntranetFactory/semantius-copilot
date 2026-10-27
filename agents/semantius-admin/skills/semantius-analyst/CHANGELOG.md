@@ -8,6 +8,15 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## A clean file write is never narrated as an error
+
+2026-10-27. A run told the user it "hit a file write error" after a file saved cleanly through a shell heredoc. Rules: `SKILL.md`, "Narration restraint" (kept verbatim with `../semantius-admin/references/writing-conventions.md`).
+
+1. **A write is an error only when a tool call failed,** whatever method wrote the file.
+2. **On success, nothing is said about how the file was written;** on a real failure, the tool's error is quoted verbatim and the run stops.
+
+---
+
 ## A followed product's fields are looked up on the web when not known
 
 2026-10-25. Drafting the fields of a followed product relied on training knowledge alone, so an unfamiliar or very new product got guessed field names. Rules: `references/stage-4-fields.md`, "Fields of a followed product".

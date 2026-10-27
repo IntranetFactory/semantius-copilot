@@ -25,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createAgentBundleFromDir, scanAgentsDir } from '../core/src/node.js';
 import { provisionAgentSkills } from '../core/src/provision.js';
 import { validateAgentBundle } from '../core/src/agent.js';
-import { parseModelsConfig, thinkingLevelMap } from '../core/src/models.js';
+import { modelIdForAlias, modelOptions, parseModelsConfig, thinkingLevelMap } from '../core/src/models.js';
 import { BundleValidationError } from '../core/src/bundle.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -199,6 +199,28 @@ try {
     ) && Object.entries(registry).filter(([, e]) => e.systemPrompt).length === 3,
   );
   check('registry: a plain openrouter entry accepted', !registryRejects({}));
+  // The browser sees aliases (slugs of the display name), never registry ids.
+  const adminOptions = modelOptions(registry, createAgentBundleFromDir(join(here, '..', 'agents', 'semantius-admin')).models);
+  check(
+    'registry: dropdown options carry aliases, never registry ids',
+    adminOptions.length > 0 && adminOptions.every((o) => !Object.hasOwn(registry, o.id) && !o.id.includes('/') && !o.id.includes('@')),
+    adminOptions.map((o) => o.id).join(' '),
+  );
+  check(
+    'registry: Muse Max option is aliased muse-spark-1-3-contributor-max',
+    adminOptions.some((o) => o.id === 'muse-spark-1-3-contributor-max' && o.name === 'Muse Spark 1.3 Contributor (Max)'),
+  );
+  check(
+    'registry: every alias resolves back to its registry id',
+    Object.keys(registry).every((id) => modelIdForAlias(registry, modelOptions(registry, [id])[0].id) === id),
+  );
+  check('registry: a registry id resolves to itself (server-side seeds)', modelIdForAlias(registry, 'z-ai/glm-5.3') === 'z-ai/glm-5.3');
+  check('registry: an unknown alias resolves to nothing', modelIdForAlias(registry, 'gpt-9') === undefined && modelIdForAlias(registry, 42) === undefined);
+  check(
+    'registry: two names with the same alias rejected',
+    variantParse({ 'a/b': baseEntry, 'c/d': { ...baseEntry, name: 'b!' } }) === 'rejected',
+  );
+  check('registry: a name without letters or digits rejected', registryRejects({ name: '(-)' }));
   const agentRejects = (bundlePatch) => {
     try {
       validateAgentBundle({ ...createAgentBundleFromDir(agentDir), ...bundlePatch });

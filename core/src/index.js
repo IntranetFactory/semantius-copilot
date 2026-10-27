@@ -16,7 +16,7 @@ export {
   applyModelLimits,
   AGENT_LIMITS,
 } from './agent.js';
-export { parseModelsConfig, modelOptions, thinkingLevelMap } from './models.js';
+export { parseModelsConfig, modelAlias, modelIdForAlias, modelOptions, thinkingLevelMap } from './models.js';
 export { makeTar, makeTarGz, toBase64 } from './tar.js';
 export { provisionAgentSkills, SKILLS_DIR } from './provision.js';
 export { provisionSemantiusEnv } from './sandbox-env.js';

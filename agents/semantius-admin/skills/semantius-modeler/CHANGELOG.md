@@ -8,6 +8,26 @@ Entries below are newest first.
 
 ---
 
+## Label column reaches the live table
+
+2026-10-27. The 4c ✨ New rule did not list `label_column` among the `create_entity` payload keys, and Stage 5 only checked that `label_column` was set, not that it named the spec's field. Rules: `references/stage-4-execute.md`, 4c "✨ New"; `references/deploy-script-template.md`, steps 0 and 3; `references/stage-5-verify.md`, check 5.
+
+1. **The 4c ✨ New rule names `label_column`** as a key of the `create_entity` payload, from the `**Label column:**` line. The platform stores it on create and auto-creates that field. Based entities and junctions without the line omit it.
+2. **Preflight lists `label_column`** among the `create_entity` keys.
+3. **Verify compares the value:** live `label_column` must equal the spec's for each owned table; a different value is a 🛑, re-pointed with `update_entity`.
+
+---
+
+## Fast run: the spec download links a top-level copy; clean writes are not errors
+
+2026-10-27. The download route serves flat names only, from the top level of `/workspace`, so the link to `semantius/specs/<system_slug>-semantic-spec.md` never resolved. Separately, a run called a file saved cleanly through a shell heredoc "a file write error". Rules: `SKILL.md`, "Closing Contract: clean and sticky" and "Narration restraint"; `references/stage-6-sample-data.md`; `../semantius-admin/references/fast-flow.md`, section 6.
+
+1. **Copy, then link:** after the Stage 5b stamp, in the response that completes the Verify task, the deployed spec is copied byte-for-byte with `cp` to `/workspace/<system_slug>-semantic-spec.md`; the closing block links that copy.
+2. **The link form is `[Download the <System Name> spec](/workspace/{sessionId}/<file name>)`,** with `{sessionId}` written literally (the client fills it in) and spaces and parentheses percent-encoded in the file name only. A file in a subfolder is never linked.
+3. **A write is an error only when a tool call failed.** A clean write is not narrated; a failed one is reported with the tool's error verbatim, and the run stops.
+
+---
+
 ## Fast run: the closing block links the deployed spec
 
 2026-10-27. A fast run names none of the files it writes, so after the deploy the user had no way to get the spec that was deployed. Rules: `SKILL.md`, "Closing Contract: clean and sticky"; `../semantius-admin/references/fast-flow.md`, sections 4.1 and 6.

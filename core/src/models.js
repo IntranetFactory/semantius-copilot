@@ -70,6 +70,22 @@ function withVariant(models, id, own, label) {
 }
 
 /**
+ * The id the browser sees for a model: a slug of its display name
+ * ("Muse Spark 1.3 Contributor (Max)" -> "muse-spark-1-3-contributor-max").
+ * The registry id names the upstream model, provider and snapshot, none of
+ * which a chat user should learn beyond the label the dropdown already shows,
+ * so GET /agents/:name/meta and GET /sessions carry this alias instead and the
+ * backend maps it back (modelIdForAlias). Unique across the registry
+ * (parseModelsConfig). Renaming a model changes its alias; sessions are
+ * unaffected — they persist the registry id and are re-aliased on read.
+ *
+ * @param {string} name
+ */
+export function modelAlias(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
  * Parse and validate agents_config.jsonc text. Throws BundleValidationError
  * on the first problem, naming the model id.
  *
@@ -89,6 +105,8 @@ export function parseModelsConfig(text) {
   }
   /** @type {ModelRegistry} */
   const registry = {};
+  /** @type {Map<string, string>} alias -> id */
+  const aliases = new Map();
   for (const [id, own] of Object.entries(models)) {
     const label = `agents_config.jsonc model "${id}"`;
     if (!isObject(own)) {
@@ -113,6 +131,14 @@ export function parseModelsConfig(text) {
     if (typeof entry.name !== 'string' || entry.name.length === 0) {
       throw new BundleValidationError(`${label}: "name" must be a non-empty string`);
     }
+    const alias = modelAlias(entry.name);
+    if (alias.length === 0) {
+      throw new BundleValidationError(`${label}: "name" must contain a letter or digit (it becomes the model's alias)`);
+    }
+    if (aliases.has(alias)) {
+      throw new BundleValidationError(`${label}: "name" slugs to "${alias}", the alias of "${aliases.get(alias)}" — names must differ`);
+    }
+    aliases.set(alias, id);
     if (!MODEL_PROVIDERS.includes(entry.provider)) {
       throw new BundleValidationError(`${label}: "provider" must be one of ${MODEL_PROVIDERS.join(', ')}`);
     }
@@ -187,13 +213,29 @@ export function thinkingLevelMap(efforts) {
 }
 
 /**
- * The dropdown options for an agent's `models`, in its order. Ids missing
- * from the registry are skipped (the deploy route rejects them up front).
+ * The dropdown options for an agent's `models`, in its order, keyed by alias
+ * (modelAlias) — never the registry id. Ids missing from the registry are
+ * skipped (the deploy route rejects them up front).
  *
  * @param {ModelRegistry} registry
  * @param {string[]} ids
  * @returns {{ id: string, name: string }[]}
  */
 export function modelOptions(registry, ids) {
-  return ids.filter((id) => registry[id]).map((id) => ({ id, name: registry[id].name }));
+  return ids.filter((id) => registry[id]).map((id) => ({ id: modelAlias(registry[id].name), name: registry[id].name }));
+}
+
+/**
+ * The registry id behind a browser-supplied model id: an alias (modelAlias),
+ * or — for server-side callers (GitHub channel, probes) — a registry id
+ * itself. Undefined when it is neither.
+ *
+ * @param {ModelRegistry} registry
+ * @param {unknown} value
+ * @returns {string | undefined}
+ */
+export function modelIdForAlias(registry, value) {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  if (Object.hasOwn(registry, value)) return value;
+  return Object.keys(registry).find((id) => modelAlias(registry[id].name) === value);
 }

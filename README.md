@@ -770,9 +770,16 @@ Three pieces:
 - **Per-agent `models`** (`agent.jsonc`, required): the registry ids the agent may run on;
   the first is the default. `PUT /agents/:name` answers 422 for an id the *deployed*
   registry doesn't know. `GET /agents/:name/meta` returns them as `models: [{id, name}]`,
-  and the chat composer shows a model dropdown when there is more than one. The pick
-  travels in the turn-1 seed (`modelId`), is persisted in the session's `agentMeta` and
-  mirrored to the session record (`model_id`, listed by `GET /sessions` as `modelId`), and
+  and the chat composer shows a model dropdown when there is more than one. That `id` is
+  an **alias, never the registry id**: a slug of the display name (`Muse Spark 1.3
+  Contributor (Max)` → `muse-spark-1-3-contributor-max`, `modelAlias` in
+  `core/src/models.js`), so the browser learns nothing about the model beyond its label
+  (no provider, snapshot or effort suffix). Names must therefore slug uniquely —
+  `parseModelsConfig` rejects a clash. The pick
+  travels in the turn-1 seed (`modelId`, the alias; `metaFromSeed` resolves it with
+  `modelIdForAlias`, which also accepts a plain registry id from server-side seeds), is
+  persisted in the session's `agentMeta` and mirrored to the session record (`model_id`,
+  the registry id; `GET /sessions` lists it re-aliased as `modelId`), and
   is **fixed for the session**: the dropdown is editable until the first message is sent
   (also on a session created by a draft upload) and afterwards shows the locked model,
   disabled. Mid-session switching is
@@ -1303,8 +1310,10 @@ conversation client, not an admin endpoint.
 Token/cost usage in the Raw JSON view: Flue v2 dropped the beta's per-message
 `metadata.usage` from the conversation read, so the agent re-attaches response metadata
 via `useResponseFinish`. Every response carries `session_state` (the running
-per-session totals, see "Per-session data channels"); the per-response `usage`/`model`
-fields remain openrouter-specifiers-only — which includes catalog-known model
+per-session totals, see "Per-session data channels") and `model`, the session model's
+**alias** (`modelAlias` — this metadata reaches the user's browser, so never the
+specifier or registry id; that is the session record's `model_id`). Per-response `usage`
+costs remain openrouter-specifiers-only — which includes catalog-known model
 overrides, since `llm.ts` keeps their `openrouter/...` specifier; the
 placeholder/custom catalogs register zero rates and would report $0.
 `cost.total` is OpenRouter's **billed** amount: the `@earendil-works/pi-ai` patch (see

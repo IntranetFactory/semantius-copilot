@@ -95,6 +95,7 @@ import {
   AGENT_DEF_KEY_PREFIX,
   SKILL_NAME_RE,
   skillCatalogFromBundle,
+  modelAlias,
   modelOptions,
   STREAM_PROTOCOL_HEADERS,
   COST_BASIS,
@@ -512,7 +513,8 @@ app.get('/agents', userTokenGuard(), async (c) => {
 });
 
 // One agent's live definition meta: existence, the welcome card, and the
-// turn-1 seed (instructions, skillCatalog) plus the model dropdown options — read from `agentdef:
+// turn-1 seed (instructions, skillCatalog) plus the model dropdown options (by
+// alias, never the registry id — modelAlias) — read from `agentdef:
 // <name>` on every call, so what the chat seeds a new session with can never
 // skew from the definition the session create snapshots. Skill FILES are
 // deliberately not returned — the UI needs the catalog, not the contents.
@@ -576,7 +578,11 @@ app.get('/sessions', userTokenGuard(), async (c) => {
       ...(typeof r.version === 'string' ? { version: r.version } : {}),
       ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
       ...(typeof r.title === 'string' ? { title: r.title } : {}),
-      ...(typeof r.model_id === 'string' ? { modelId: r.model_id } : {}),
+      // The alias, never the registry id (modelAlias); a model since dropped
+      // from the registry is omitted — the chat then shows the agent default.
+      ...(typeof r.model_id === 'string' && Object.hasOwn(MODELS, r.model_id)
+        ? { modelId: modelAlias(MODELS[r.model_id].name) }
+        : {}),
     }));
   return c.json({ sessions, user: verified.user });
 });

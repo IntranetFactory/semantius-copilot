@@ -38,8 +38,9 @@ export type AgentSeed = {
   version: string;
   baseImage: string;
   instructions: string;
-  /** The picked model — a registry id from the meta's `models`; the backend
-   * falls back to the agent's default when absent or not allowed. */
+  /** The picked model — an `id` from the meta's `models`: an opaque alias the
+   * backend maps to the real model, which the browser never learns. The
+   * backend falls back to the agent's default when absent or not allowed. */
   modelId?: string;
   /** Explicit skill catalog (name + description) so turn 1 mounts skills via useSkill(). */
   skillCatalog?: Array<{ name: string; description: string }>;
@@ -135,7 +136,8 @@ export type SessionListEntry = {
   createdAt?: string;
   /** LLM-generated session title (present once the backend produced one). */
   title?: string;
-  /** The model the session is locked to (present once its first turn ran). */
+  /** The model the session is locked to, as the same alias the meta's `models`
+   * use (present once its first turn ran). */
   modelId?: string;
 };
 
