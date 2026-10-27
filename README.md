@@ -852,13 +852,18 @@ call (`src/title.ts`) sends the same object, so a model pinned to e.g.
 title. Prefer this over the
 `:nitro`/`:floor` model-id suffixes: those are not Pi catalog ids, so they would resolve
 through the placeholder path (see above) and lose the model's metadata.
+`anthropic/*` registry models get `compat.cacheControlFormat: "anthropic"` (llm.ts
+`withAnthropicCaching`): OpenRouter caches Anthropic prompts only at explicit `cache_control`
+breakpoints, and pi-ai adds them only for provider id `openrouter`, which the per-model
+`model-<id>` providers are not — without it every turn bills the full prompt uncached.
 `scripts/openrouter-routing.test.mjs` (in `pnpm test`) covers validation, registry
-plumbing, and drives the installed pi-ai dist against a canned fetch to assert the request
+plumbing, the cache-breakpoint flag, and drives the installed pi-ai dist against a canned fetch to assert the request
 body's `provider` is the routing object byte-for-byte. The `deepseek/deepseek-v4.1-flash-1017`
-entry (`semantius-admin`'s default) runs with `{ "sort": "throughput", "max_price": { "completion":
-0.6 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"] }` — the fastest non-fp4
-host at or under $0.60/M output, the list rate (filters apply *before* the throughput
-ranking). `"unknown"` is load-bearing: it admits DeepSeek first-party, Cloudflare, Reka and
+entry runs with `{ "sort": "throughput", "max_price": { "completion":
+0.6 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"], "only": ["coreweave",
+"cloudflare", "relace", "ionstream"], "allow_fallbacks": false }` — the fastest allowlisted
+non-fp4 host at or under $0.60/M output, the list rate (filters apply *before* the throughput
+ranking; with fallbacks off, no allowlisted host available = the request fails). `"unknown"` is load-bearing: it admits DeepSeek first-party, Cloudflare, Reka and
 Relace; without it only InferenceNet and Morph qualify. The model is newer than the pi-ai
 catalog, so the entry pins `max_tokens: 384000` / `context_window: 1048576` explicitly
 (under every eligible host's output cap, lowest 393216); `agents_config.jsonc` records the

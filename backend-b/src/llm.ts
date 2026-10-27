@@ -169,6 +169,17 @@ function withReasoning<T extends object>(entry: T, model: ModelEntry): T {
   return { ...entry, reasoning: true, thinkingLevelMap: thinkingLevelMap(model.reasoningEfforts) };
 }
 
+/** Anthropic models on OpenRouter cache only at explicit `cache_control`
+ * breakpoints. pi-ai adds them (system prompt, last tool, last message) only
+ * when it detects provider id "openrouter" + an `anthropic/` model id; the
+ * dedicated `model-<id>` providers below never match, so every turn would
+ * bill the full prompt uncached. Sets the compat flag pi-ai would have
+ * detected (an explicit compat value wins over detection). */
+function withAnthropicCaching<T extends { compat?: object }>(entry: T, model: ModelEntry): T {
+  if (model.provider !== 'openrouter' || !model.model.startsWith('anthropic/')) return entry;
+  return { ...entry, compat: { ...(entry.compat ?? {}), cacheControlFormat: 'anthropic' as const } };
+}
+
 /** An agent's `web_tools` (OpenRouter server tools) onto an API
  * implementation: every request's body gets them appended to `tools`, after
  * the harness's own function tools, via pi-ai's `onPayload` hook (chained
@@ -362,23 +373,26 @@ export function modelSpecifierFor(modelId?: string | null, webTools?: Record<str
       auth,
       models: [
         withAppHeaders(
-          withReasoning(
-            withRouting(
-              applyModelLimits(
-                catalogEntry
-                  ? { ...catalogEntry, provider: id }
-                  : {
-                      id: model.model,
-                      name: model.model,
-                      api: 'openai-completions' as const,
-                      provider: id,
-                      baseUrl: OPENROUTER_BASE_URL,
-                      reasoning: false,
-                      input: ['text' as const],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 128000,
-                      maxTokens: 8192,
-                    },
+          withAnthropicCaching(
+            withReasoning(
+              withRouting(
+                applyModelLimits(
+                  catalogEntry
+                    ? { ...catalogEntry, provider: id }
+                    : {
+                        id: model.model,
+                        name: model.model,
+                        api: 'openai-completions' as const,
+                        provider: id,
+                        baseUrl: OPENROUTER_BASE_URL,
+                        reasoning: false,
+                        input: ['text' as const],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128000,
+                        maxTokens: 8192,
+                      },
+                  model,
+                ),
                 model,
               ),
               model,

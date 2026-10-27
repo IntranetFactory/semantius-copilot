@@ -13,7 +13,10 @@
  *     entry carrying `compat.openRouterRouting` yields a request body whose
  *     `provider` field is that object, byte-for-byte — driven through pi-ai's
  *     openai-completions stream() against a canned fetch, so this verifies
- *     the installed package (not a copy of its logic) still forwards.
+ *     the installed package (not a copy of its logic) still forwards;
+ *  4. Anthropic prompt caching: pi-ai sends `cache_control` breakpoints for a
+ *     dedicated-provider entry only with `compat.cacheControlFormat` set
+ *     (llm.ts withAnthropicCaching), never by detection.
  *
  * backend-b/src/llm.ts (modelSpecifierFor's withRouting) is Worker code
  * (`cloudflare:workers` import) and cannot be imported here; its contribution
@@ -136,6 +139,45 @@ console.log('\n== pi-ai forwarding (installed dist) ==');
     globalThis.fetch = realFetch;
   }
   check('no routing on the entry -> no `provider` field at all', withoutRouting[0] !== undefined && !('provider' in withoutRouting[0]));
+}
+
+// --- 4. Anthropic cache breakpoints on a dedicated provider ----------------
+// llm.ts withAnthropicCaching: pi-ai detects cacheControlFormat "anthropic"
+// only for provider id "openrouter", never for the `model-<id>` providers, so
+// llm.ts sets it explicitly. Both halves are checked against the installed dist.
+console.log('\n== anthropic cache_control (installed dist) ==');
+{
+  const piAiDir = realpathSync(fileURLToPath(new URL('../backend-b/node_modules/@earendil-works/pi-ai', import.meta.url)));
+  const { stream } = await import(pathToFileURL(join(piAiDir, 'dist', 'api', 'openai-completions.js')));
+  // The placeholder entry modelSpecifierFor builds for a catalog miss.
+  const placeholder = {
+    id: 'anthropic/claude-haiku-5.5', name: 'anthropic/claude-haiku-5.5', api: 'openai-completions',
+    provider: 'model-anthropic-claude-haiku-5.5', baseUrl: 'https://openrouter.ai/api/v1', reasoning: false,
+    input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192,
+  };
+  const bodyFor = async (model) => {
+    const bodies = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ id: 'x', choices: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const context = { systemPrompt: 's', messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }], tools: [] };
+      try {
+        await stream(model, context, { apiKey: 'test-key', stream: false, maxTokens: 16 }).result();
+      } catch {
+        /* see section 3 */
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    return bodies[0];
+  };
+  const hasCacheControl = (body) => JSON.stringify(body?.messages ?? []).includes('"cache_control"');
+  check('dedicated provider, no compat flag -> no cache_control (the gap)', !hasCacheControl(await bodyFor(placeholder)));
+  const fixed = await bodyFor({ ...placeholder, compat: { cacheControlFormat: 'anthropic' } });
+  check('compat.cacheControlFormat "anthropic" -> cache_control breakpoints sent', hasCacheControl(fixed), JSON.stringify(fixed?.messages));
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);

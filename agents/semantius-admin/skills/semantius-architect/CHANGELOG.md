@@ -8,6 +8,27 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## API object column keeps the vendor's API name unchanged
+
+2026-10-26. The <Vendor> API object column of the entity table kept showing wrong names. Stage 3 said to convert the vendor's names with `vendor-names.ts` with no exception for that column, the script needs singular input, so a plural API name (HubSpot `leads`) was changed before conversion, and the stage-3 examples themselves showed names not spelled the vendor's way (ServiceNow `Incident` for `incident`). Rules: `references/stage-3-entities.md`, the template vendor bullet, the template-mode note and the ambiguity traps; `references/stage-2-naming.md`, the naming rules table and "Converting a product's names".
+
+1. **The <Vendor> API object column is never converted.** Only the Technical name comes from `vendor-names.ts` (lowercase, snake_case, plural).
+2. **The cell and the §3 note copy the vendor's API name unchanged:** same casing, same singular or plural (ServiceNow `incident`, HubSpot `leads`, Salesforce `Opportunity`).
+3. **The singular given to the script is only its input;** it never goes in the cell.
+4. **The ambiguity-trap examples spell each vendor's objects the way its API does** (HubSpot `leads`/`contacts`/`deals`, Pipedrive `leads`/`persons`, Zendesk Sell `leads`/`contacts`, Zendesk `tickets`, ServiceNow `incident`/`problem`/`change_request`, Jira `issue`, MS Dynamics `opportunity`).
+
+## Entity table: technical name always, product column never dropped, no "Shown as"
+
+2026-10-25. A fast-flow go-ahead for a design following ServiceNow (16 entities) showed only Entity, What it holds and Shown as: the required ServiceNow API object column was missing, and no column showed the table names, so the user approved a design without seeing a single identifier. The "Shown as" column mostly repeated the entity's name ("Control Name" for Controls) or guessed ("Risk Number or Title"), and nothing reads it: it was chat-only, and the analyst picks the field that names each record on its own in its field stage. Rules: `references/stage-3-entities.md`, the template-mode note and "Present the list as a table"; SKILL.md, Writing Convention 8 (banned and required lists, Pre-emit check); `../semantius-admin/references/fast-flow.md`, section 3; `../semantius-admin/references/writing-conventions.md`, Convention 8.
+
+1. **Columns, in order:** Name, Technical name, <Vendor> API object (only when following a product), What it holds. The fast-flow go-ahead summary uses the same columns and order.
+2. **Technical name is always shown:** the table name in backticks, byte-for-byte the §3 `data_object`.
+3. **The <Vendor> API object column is never dropped when following a product.** An API object that can't be named reads "not confirmed", even when every cell does. The modern design has no such column.
+4. **Writing Convention 8 exception:** these two columns are the one place identifiers appear in chat. The Pre-emit check verifies the table's header and cells before sending.
+5. **No "Shown as" column.** A followed product's composite display name ("First Last") is still built by the analyst's display-name rule.
+
+---
+
 ## Product knowledge the model lacks is looked up on the web
 
 2026-10-25. Every vendor fallback asked the user or dropped the product as soon as training knowledge ran out (an unfamiliar regional vendor, a very new product, a niche category), and every skill banned `WebFetch` outright, so the web was never consulted. Rules: SKILL.md, "Reference material" and Step 0 "Catalog source"; `references/stage-1-capture.md`, "Products that fit" and the four-object test; `references/stage-2-naming.md`; `references/stage-3-entities.md`, the template-mode note; `../semantius-admin/SKILL.md`, core invariants.

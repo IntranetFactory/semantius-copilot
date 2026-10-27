@@ -68,10 +68,18 @@
       //  max_tokens.
       //  Other fields (only/ignore, require_parameters, zdr, …) pass straight
       //  through (https://openrouter.ai/docs/features/provider-routing).
+      //  - only + allow_fallbacks false: a hard allowlist, intersected with the
+      //    filters above; if none of these hosts can serve, the request fails
+      //    instead of falling back. Checked 2026-10-26: Cloudflare 0.10/0.60,
+      //    Relace 0.07/0.50, Ionstream 0.14/0.39 (all "unknown" quant, 943k out);
+      //    CoreWeave lists no endpoint for this model yet, so it is a no-op until
+      //    it does (and must then be non-fp4 to pass `quantizations`).
       "openrouter_routing": {
         "sort": "throughput",
         "max_price": { "completion": 0.6 },
-        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"],
+        "only": ["coreweave", "cloudflare", "relace", "ionstream"],
+        "allow_fallbacks": false
       }
     },
     "deepseek/deepseek-v4.1-flash-1017@max": {
@@ -115,6 +123,33 @@
         "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
       }
     },
+    "z-ai/glm-5.3": {
+      "name": "GLM 5.3",
+      "provider": "openrouter",
+      // The full GLM 5.3 (snapshot z-ai/glm-5.3-20260816), above Flash/FlashX and
+      // below Prime. Not in pi-ai 0.83.0's catalog. OpenRouter, checked
+      // 2026-10-26: list rate $1.40 / $4.40 per M tokens (Z.AI first-party),
+      // 49 endpoints, context 1048576 on most (Alibaba, Venice 1000000), output
+      // cap 128000–943718. max_tokens 131072 keeps Z.AI first-party routable, as
+      // on GLM 5.3 Flash; DigitalOcean (128000 cap) drops out.
+      // reasoning: mandatory, default effort "max", supported ["low","high","max"].
+      "max_tokens": 131072,
+      "context_window": 1048576,
+      // Flue's default "medium" clamps to "high" (as on GLM 5.3 Flash).
+      "reasoning_efforts": ["low", "high", "max"],
+      //  - max_price: USD per MILLION output tokens; 4.4 = the list rate. Drops
+      //    Morph (4.75), Mistral EU (4.84), Bedrock (5.28), the fast tiers
+      //    (Fireworks/BaseTen 6.60), ModelRun (6.60), Alibaba Prime (8.80).
+      //    Every remaining host charges ≤1.40 input.
+      //  - quantizations: same floor as DeepSeek/GLM Flash; drops the
+      //    fp4/nvfp4 hosts (Wafer, InferenceNet, Makora, DeepInfra, Decart,
+      //    Inceptron, Mistral, BaseTen fp4, Nebius, Crusoe). Leaves Z.AI, Together,
+      //    Fireworks, Cloudflare, Parasail, GMICloud, CoreWeave fp8 and ~15 more.
+      "openrouter_routing": {
+        "max_price": { "completion": 4.4 },
+        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+      }
+    },
     "openai/gpt-6-luna": {
       "name": "GPT-6 Luna",
       "provider": "openrouter",
@@ -152,6 +187,45 @@
       // cost more and take longer than at "medium".
       "name": "GPT-6 Luna (Extra High)"
     },
+    "anthropic/claude-haiku-5.5": {
+      "name": "Claude Haiku 5.5",
+      "provider": "openrouter",
+      // Via OpenRouter, not Anthropic direct. Not in pi-ai 0.83.0's catalog; the
+      // placeholder gets Anthropic cache_control breakpoints from
+      // withAnthropicCaching (llm.ts) — without them every turn bills uncached.
+      // OpenRouter, checked 2026-10-26 (snapshot anthropic/claude-haiku-5.5-20261007):
+      // context 1000000, max output 128000 on every host (Anthropic, Claude
+      // Platform on AWS, Bedrock, Vertex, Azure). $0.10 / $0.50 per M tokens
+      // up to 100K prompt tokens, $0.50 / $2.50 above — a fresh chat's ~127k
+      // baseline is already above, so nearly every turn bills the higher tier
+      // (cache reads $0.05). Regional endpoints (Vertex us/europe, Azure us,
+      // Bedrock us-east-1/eu-west-1) charge +10%.
+      // reasoning: optional (default on), default effort "medium", supported
+      // ["none","low","medium","high","xhigh","max"].
+      // No max_price: OpenRouter's long-context override would sit above any
+      // cap set at the base rate, and every host is first-party or a
+      // hyperscaler at ≤ list + 10%.
+      "max_tokens": 128000,
+      "context_window": 1000000,
+      // Flue's default "medium" = Haiku's own default. The @high/@xhigh/@max
+      // variants below are what semantius-admin offers; reasoning tokens bill as
+      // output ($2.50/M above 100K prompt tokens), so each step up costs more
+      // and takes longer.
+      "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "anthropic/claude-haiku-5.5@high": {
+      // claude-haiku-5.5 at thinking effort "high"; everything else comes from
+      // the base entry.
+      "name": "Claude Haiku 5.5 (High)"
+    },
+    "anthropic/claude-haiku-5.5@xhigh": {
+      // claude-haiku-5.5 at thinking effort "xhigh" (one below "max").
+      "name": "Claude Haiku 5.5 (Extra High)"
+    },
+    "anthropic/claude-haiku-5.5@max": {
+      // claude-haiku-5.5 at its highest thinking effort.
+      "name": "Claude Haiku 5.5 (Max)"
+    },
     "tencent/hy4-preview": {
       "name": "Tencent Hy4 Preview",
       "provider": "openrouter",
@@ -184,35 +258,36 @@
       "context_window": 1048576,
       "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]
     },
-    "xiaomi/mimo-v2.6-flash": {
-      "name": "MiMo V2.6 Flash",
-      "provider": "openrouter",
-      // Xiaomi, 309B MoE / 15B active, released 2026-09-21. Not in pi-ai 0.83.0's
-      // catalog. OpenRouter, checked 2026-10-24: list rate $0.14 / $0.28 per M
-      // tokens, context 1048576 (Io Net 1048320), output cap 131072 on most hosts
-      // (Cohere 384000, GMICloud 945000) — max_tokens 131072 keeps them all routable.
-      // reasoning: optional, NO effort levels (no supported_efforts, no
-      // reasoning_effort param). Probed 2026-10-24: it thinks by default with no
-      // `reasoning` param; effort "none" turns thinking off; "low" and "high"
-      // reason the same amount. So no reasoning_efforts and no "high" variant:
-      // the placeholder sends no `reasoning` param and the model thinks every turn.
-      "max_tokens": 131072,
-      "context_window": 1048576,
-      //  - max_price: USD per MILLION output tokens; 0.3 keeps every 0.18–0.28 host
-      //    and drops Venice (0.35). All hosts charge ≤0.14 input.
-      //  - quantizations: same floor as DeepSeek/GLM; drops Darkbloom (fp4) and
-      //    Relace (mxfp4). Leaves Xiaomi first-party, Novita, Makora, Io Net
-      //    (fp8), GMICloud (bf16), Cohere (unknown), DeepInfra (fp8).
-      "openrouter_routing": {
-        "max_price": { "completion": 0.3 },
-        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
-      }
-    },
     "meta/muse-spark-1.3-contributor@xhigh": {
       // muse-spark-1.3-contributor at thinking effort "xhigh" (its default is
       // "medium"). Reasoning tokens bill as output, so turns cost more and take
       // longer.
       "name": "Muse Spark 1.3 Contributor (Extra High)"
+    },
+    "xiaomi/mimo-v2.6-pro": {
+      "name": "MiMo V2.6 Pro",
+      "provider": "openrouter",
+      // Xiaomi, the Pro tier of MiMo V2.6 (snapshot xiaomi/mimo-v2.6-pro-20260921;
+      // the separate -ultraspeed slug is 4.35/8.70). Not in pi-ai 0.83.0's
+      // catalog. OpenRouter, checked 2026-10-26: list rate $0.435 / $0.87 per M
+      // tokens, 5 hosts, context 1048576 (GMICloud 1050000, StreamLake 1000000),
+      // output cap 131072 on Xiaomi and Novita (DeepInfra 943718, GMICloud 945000)
+      // — max_tokens 131072 keeps Xiaomi first-party routable.
+      // reasoning: optional, NO effort levels (no supported_efforts, no
+      // reasoning_effort param) — same shape as MiMo V2.6 Flash, which was probed
+      // 2026-10-24 to think by default with no `reasoning` param and to reason
+      // the same at every effort. So no reasoning_efforts: the model thinks every turn.
+      "max_tokens": 131072,
+      "context_window": 1048576,
+      //  - max_price: USD per MILLION output tokens; 0.87 = the list rate. Drops
+      //    StreamLake (1.044, also below the 131072 output cap). All hosts
+      //    charge ≤0.435 input.
+      //  - quantizations: same floor as DeepSeek/GLM; every host passes today
+      //    (Xiaomi, Novita, DeepInfra fp8; GMICloud bf16).
+      "openrouter_routing": {
+        "max_price": { "completion": 0.87 },
+        "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"]
+      }
     }
   }
 }
