@@ -8,6 +8,17 @@ Entries below are newest first.
 
 ---
 
+## Sample data: street names dealt, guarded and per country
+
+2026-10-28. A seeded suppliers table again had `Market Street` on every row, with only the house number varying. The script built the street from one literal name; `r.pick` listed street as a field where repeats are fine, "one shared street pool is fine" read as one street, and `assertSeedDistinct` on the full street passes because the house numbers differ. Rules: `references/stage-6-sample-data.md`, "Data has to read plausibly", the script pattern and "Records, not fields"; `references/deploy-lib.ts`; `references/deploy-script-template.md`, the helper table.
+
+1. **Street names are dealt** from a pool of at least 8 names with `r.deal(streets, n)`; street is no longer a `pick` example.
+2. **The street name is guarded without its house number:** the example passes the dealt names to `assertSeedDistinct`, and the guard list names the street.
+3. **The street follows the place's country:** each country has its own pool of street names and puts the house number where that country does (`1432 Market Street`, `Hauptstraße 12`, `12 rue Victor Hugo`). With no country field, every place is in the US, as before.
+4. **A house number kept in its own field goes there**, and the street field holds the name only.
+
+---
+
 ## Sample data: dealt enums and parents, unique names past the pool, totals from children
 
 2026-10-28. A review of the seeded-generator rules found that the example repeated account names above 12 rows (a 409 on a unique name), `tuples` looped forever on a pool with a repeated entry, contacts picked their account at random so fields taken from the parent rarely varied enough for `assertSeedDistinct`, enum values came out in a fixed cycle and two enums of the same length moved in step, `slugify` dropped letters such as ø and ł and turned non-Latin names into an empty string, and an invoice total did not match its lines. Rules: `references/stage-6-sample-data.md`, the script pattern, "Records, not fields", "Uniqueness" and the realistic-data list; `references/deploy-lib.ts`; `references/deploy-script-template.md`, the helper table.

@@ -608,12 +608,12 @@ export async function patchById(
  * the same rows and `seedEnsureMany` converges. Any edit to the script (a table's count, a pool, the
  * order of draws) can change that table's rows and the rows of every table that draws parents from it.
  * Never `Math.random()`.
- *   - `r.pick(pool)`         one random entry; repeats are fine (job title, street, email local part)
+ *   - `r.pick(pool)`         one random entry; repeats are fine (job title, email local part)
  *   - `r.int(min, max)`      an integer in [min, max] (house number, quantity, amount, day offset)
  *   - `r.chance(p)`          true with probability p (booleans with a realistic mix)
  *   - `r.deal(pool, n)`      n entries, every pool entry once before any repeats, shuffled: enum values
  *                            (each value appears once n >= the value count; repeat a value in the pool
- *                            to weight it), FK parents, places
+ *                            to weight it), FK parents, places, street names
  *   - `r.distinct(pool, n)`  n DIFFERENT entries; throws when the pool has fewer than n (names, labels)
  *   - `r.tuples(n, pools)`   n DISTINCT combinations, each part dealt (first + last name, two-word names);
  *                            throws when the pools cannot give n combinations
@@ -785,8 +785,9 @@ export function assertSeedCounts(
  * happens when a component comes from a too-small pool or from one literal.
  *
  * - `fields` names one or more columns of the rows just inserted (human name parts, company, city,
- *   label column). Empty strings and nulls are excluded from the count: an optional field may
- *   legitimately repeat.
+ *   street name, label column). A part that lives inside a combined value (a surname inside a full
+ *   name, a street name behind its house number) is passed as its own column. Empty strings and nulls
+ *   are excluded from the count: an optional field may legitimately repeat.
  * - `minDistinct` defaults to `min(rows.length, 8)`: on a 10-row table that demands 8 distinct values,
  *   which is enough to catch a constant column without punishing genuinely low-cardinality data
  *   (call it only on fields where variety IS expected).

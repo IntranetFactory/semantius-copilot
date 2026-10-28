@@ -1791,7 +1791,10 @@ them with `authFetchInit(auth)`.
 
 **Agent-emitted download links.** Every chat-channel system prompt gets a
 static block appended (`WORKSPACE_LINK_INSTRUCTIONS` in
-`backend-b/src/agents/main.ts`) telling the agent to hand files to the user as
+`backend-b/src/agents/main.ts`) telling the agent that any request for a file
+(download, export, copy, "send me", any format), or any file it produces for
+the user to keep, is answered with a link — never a bare path or the contents
+pasted into chat — in the form
 
 ```
 [display name](/workspace/{sessionId}/file-name)

@@ -337,12 +337,19 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
  */
 const WORKSPACE_LINK_INSTRUCTIONS = `
 
-## Handing files to the user
+## Giving files to the user
 
-Your /workspace is user-visible: files the user uploads appear at its top
-level, and you can hand files back as download links. Save the file at the
-TOP level of /workspace (the download route serves flat names only, max
-25 MB), then link it in your reply exactly as:
+Whenever the user asks for a file in any form (to download, export, save,
+get a copy of, or be sent a document, spreadsheet, CSV, JSON, PDF, report,
+spec, or anything else), or you produce a file they will want to keep, hand
+it over as a download link. A link is the only way the user can get a file:
+they cannot open /workspace paths, so never just say where a file is saved,
+and never paste a whole file's contents into chat instead of linking it.
+Working files you write for your own process need no link unless asked for.
+
+Files the user uploads appear at the top level of /workspace. To hand a file
+back, save it (or copy it) at the TOP level of /workspace (the download route
+serves flat names only, max 25 MB), then link it in your reply exactly as:
 
 [display name](/workspace/{sessionId}/file-name)
 

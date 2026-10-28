@@ -50,8 +50,9 @@ The count is one contract; readability is the other. The user reviews the seeded
 - human name components (a surname repeated across the whole table)
 - a label column whose values are all one word when the entity is a person, an address or an order
 - a company / city / product field that repeats where variety is implied
+- a street name repeated on every address
 
-`assertSeedDistinct(table, rows, fields)` (from `deploy-lib.ts`) is the mechanical form of this. Call it for every human-facing component you generated from a pool, right after `postMany` / `seedEnsureMany`. It sees columns only: when name parts exist only inside one combined field (`contact_name: "Jane Smith"`), the full names stay distinct even with one surname, so pass the parts instead: `assertSeedDistinct("contacts", people.map(([, ln]) => ({ last_name: ln })), ["last_name"])`. It demands `min(rows, 8)` distinct values by default, so a pool for a guarded field holds at least 8 entries. For a label column or a `unique_value` field, pass `rows.length` as `minDistinct`: every row must differ.
+`assertSeedDistinct(table, rows, fields)` (from `deploy-lib.ts`) is the mechanical form of this. Call it for every human-facing component you generated from a pool, right after `postMany` / `seedEnsureMany`. It sees columns only: when name parts exist only inside one combined field (`contact_name: "Jane Smith"`), the full names stay distinct even with one surname, so pass the parts instead: `assertSeedDistinct("contacts", people.map(([, ln]) => ({ last_name: ln })), ["last_name"])`. A street is the same case: `1432 Market Street` and `88 Market Street` are different strings, so the guard gets the street names without their house numbers (see the script pattern). It demands `min(rows, 8)` distinct values by default, so a pool for a guarded field holds at least 8 entries. For a label column or a `unique_value` field, pass `rows.length` as `minDistinct`: every row must differ.
 
 ### How sample data gets written (read this before any insert)
 
@@ -185,7 +186,7 @@ const target = (t: string) => perEntity[t]?.target ?? COUNT;
 
 // --- accounts ---
 // No country field on accounts or on anything they belong to → US places. A place carries everything that
-// must agree with its city; only the street and house number are free.
+// must agree with its city; the street name comes from the country's pool (here US), the house number is drawn.
 const places = [
   { city: "Springfield", state: "IL", postal: ["62701", "62703", "62704"], area: "217" },
   { city: "Riverside",   state: "CA", postal: ["92501", "92503", "92507"], area: "951" },
@@ -213,6 +214,7 @@ const n = target("accounts");
 const names = ra.tuples(n, [nameRoots, nameKinds]).map(([root, kind]) => `${root} ${kind}`);
 const states = ra.deal(accountStates, n);
 const accountPlaces = ra.deal(places, n);    // cities spread before any repeats
+const streetNames = ra.deal(streets, n);     // street names spread before any repeats
 const accountRows = [];
 for (let i = 0; i < n; i++) {
   const place = accountPlaces[i];
@@ -223,7 +225,7 @@ for (let i = 0; i < n; i++) {
     phone: `(${place.area}) 555-01${String(ra.int(0, 99)).padStart(2, "0")}`,   // 555-0100..0199 is reserved for fiction
     email: `${ra.pick(["info", "contact", "hello", "office"])}@${domain}`,
     website: `https://${domain}`,
-    street: `${ra.int(1, 2400)} ${ra.pick(streets)}`,
+    street: `${ra.int(1, 2400)} ${streetNames[i]}`,
     city: place.city,
     state: place.state,
     postal_code: ra.pick(place.postal),      // from THIS city's codes, never a base + index
@@ -233,6 +235,7 @@ const accounts = await postMany("/accounts", accountRows);   // ONE call; rows W
 counts.accounts = accounts.length;
 assertSeedDistinct("accounts", accountRows, ["account_name"], accountRows.length);   // label column: every row differs
 assertSeedDistinct("accounts", accountRows, ["city"]);
+assertSeedDistinct("accounts", streetNames.map((s) => ({ street_name: s })), ["street_name"]);   // the name, not the house number
 
 // --- contacts (FK → accounts) ---
 // A contact belongs to an account: its email domain comes from that account.
@@ -269,17 +272,17 @@ assertSeedCounts(counts, COUNT, perEntity, eligibleTables);
 The loop fixes only the *count*; it calls no LLM at runtime. Each row is one plausible record that you author through its pools and its loop body: start from a few drivers (a place, a company, a person, the enum state), derive every field that must agree with them, and draw the rest with the table's generator. Never pick fields that belong together independently.
 
 - **The generator: `const r = rng("<table>")`, one per table** (from `deploy-lib.ts`). The seed is fixed (42) and the table name gives each table its own sequence, so a re-run of the unchanged script writes the same rows. Any edit to the script (a table's count, a pool, the order of draws) can change that table's rows and the rows of every table that draws parents from it, so `seedEnsureMany` converges only on a re-run of the same script. Never `Math.random()`.
-  - `r.pick(pool)`: one random entry, repeats fine (job title, street, email local part).
+  - `r.pick(pool)`: one random entry, repeats fine (job title, email local part).
   - `r.int(min, max)`: house number, quantity, amount, day offset.
   - `r.chance(p)`: booleans with a realistic mix.
-  - `r.deal(pool, n)`: `n` entries, shuffled, every pool entry once before any repeats (enum values, FK parents, places).
+  - `r.deal(pool, n)`: `n` entries, shuffled, every pool entry once before any repeats (enum values, FK parents, places, street names).
   - `r.distinct(pool, n)`: `n` different entries; it throws when the pool has fewer than `n`.
   - `r.tuples(n, [poolA, poolB])`: `n` distinct combinations with both parts spread (first + last name, two-word names). It throws when the pools cannot give `n`; add pool entries.
 - **Every enum is dealt: `r.deal(values, n)`**, so every §5 value appears once there are at least as many rows as values, in shuffled order, and two enums of the same length never move in step. Repeat a value in the pool to weight the mix (`["active", "active", "active", "on_hold", "churned"]`). Fields that depend on the state are derived from it (example below).
 - **FK parents are dealt too: `r.deal(parentRows, n)`**, so every parent gets a child before any gets a second, and fields a child takes from its parent (company, city) stay as varied as the parents.
 - **No base + index in anything a person reads.** A house number, postal code, phone, suite, amount or date is never `100 + i`, `10000 + i`, `555-01${i}` or `days(-7 * i)`. Draw it (`r.int(1, 2400)`, the place's postal list, `555-01` + `r.int(0, 99)`). The row index shows only in code-like fields, through `uniq` (`account_code`, `sku`, `invoice_number`).
-- **Addresses come from a place.** A place carries everything that must agree with its city: city, state or region, country, its postal codes, and the phone area code. Pick the place, take the postal code from its own list, the region and country from the place, and build the phone on its area code. Only the street and house number are free (`${r.int(1, 2400)} ${r.pick(streets)}`); one shared street pool is fine.
-  - **US or international.** When neither the entity nor any record it belongs to has a country field, every place is in the US (five-digit ZIP, two-letter state). When there is a country field, the places span several countries, each in its own real format (Germany: `10115 Berlin`, Berlin; UK: `London EC1A 1BB`; France: `75008 Paris`), and the country written is a value the field allows: its §5 enum value, or a real id read from the countries table.
+- **Addresses come from a place.** A place carries everything that must agree with its city: city, state or region, country, its postal codes, and the phone area code. Pick the place, take the postal code from its own list, the region and country from the place, and build the phone on its area code. The street name comes from a pool of at least 8 names for the place's country, dealt over the rows (`r.deal(streets, n)`) so the names spread before any repeats; one pool serves every city of that country. The house number is drawn (`r.int(1, 2400)`). When the model keeps the house number in its own field, it goes there and the street field holds the name only.
+  - **US or international.** When neither the entity nor any record it belongs to has a country field, every place is in the US (five-digit ZIP, two-letter state). When there is a country field, the places span several countries, each in its own real format (Germany: `10115 Berlin`, Berlin; UK: `London EC1A 1BB`; France: `75008 Paris`), and the country written is a value the field allows: its §5 enum value, or a real id read from the countries table. The street follows the country too: each country has its own pool of street names, and the house number stands where that country puts it (US: `1432 Market Street`; UK: `12 High Street`; Germany: `Hauptstraße 12`; Netherlands: `Kerkstraat 5`; France: `12 rue Victor Hugo`). Deal each country's pool over that country's rows, and guard the street names across the whole table.
   - **A record that belongs to another takes its parent's place.** A contact under an account uses the account's city, country and phone area code, so a contact of a German account never gets a US ZIP.
   - **Phones use the ranges set aside for fiction** where a country has one: US and Canada `555-0100` to `555-0199` behind the place's area code; UK mobile `07700 900000` to `07700 900999`, London `020 7946 0000` to `020 7946 0999`; Australia `(02) 5550 xxxx`, `(03) 5550 xxxx`, `(07) 5550 xxxx`, `(08) 5550 xxxx`. A place in any other country leaves the phone empty (`""`): a made-up number in a real format can belong to a real person.
 - **Companies, people and emails belong together.** Company names are invented, never real brands: a sample account called Walmart with made-up revenue and contacts reads as a claim about a real company. The name gives the domain, `exampleDomain(name)` → `beaconfoods.example.com`; subdomains of `example.com` are reserved and never receive mail. The company's website and generic email (`info@`, `contact@`) use that domain, and a person's email is `${slugify(first)}.${slugify(last)}@<their company's domain>`. A person with no company uses `mail.example.com`. `slugify` throws on a name with no Latin letters (`李伟`, `Иван Петров`), so a non-Latin name carries a Latin form for its email (`{ first: "伟", last: "李", latin: ["wei", "li"] }`). (Sample `users` keep `.invalid`; see "Scope" below.)
