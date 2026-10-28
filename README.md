@@ -1397,10 +1397,20 @@ rows, `purpose: "title"`), in the same write as the title. A session's full LLM 
 best-effort posture as the title: a rare interleave with another record writer can drop
 a title row, and it is not retried.
 
-**Auditing a session against OpenRouter:** collect `llm_requests` from every response
+**Auditing a session against OpenRouter:** `pnpm llm-audit <sessionId> [--rows]`
+(`scripts/llm-audit.mjs`; API_TOKEN + LLM_API_KEY from `backend-b/.dev.vars`) does all of
+the following and looks every generation id up via OpenRouter's
+`GET /api/v1/generation?id=…` (stats appear ~a minute after the request). By hand:
+collect `llm_requests` from every response
 (Raw JSON → `conversation`) plus `sessionIndex.title_usage.requests`; every `id` should
 appear in OpenRouter's activity log with the same cost, and the rows' sum should equal
-`session_state.cost_total + title_usage.cost_total`. Expected differences: a stream cut
+`session_state.cost_total + title_usage.cost_total` — audit against the NEWEST response's
+`metadata.session_state` (Durable Object, authoritative), not the KV mirror: the mirror
+is a whole-record read-modify-write shared with other writers (the chat gate's JWT
+refresh, title, backup), and KV serves reads up to ~60 s stale, so a writer can put an
+older copy back over a newer `session_state` — seen 2026-10-28 (mirror stuck one
+response behind after a fresh-token probe; healed only by the next response). Expected
+differences: a stream cut
 off before its final usage chunk (user abort, network) is billed by OpenRouter but has no
 cost on our side — it shows as a generation id in OpenRouter's log with no matching row;
 an `unobserved` row has cost but no id. `llm_requests` also reaches the chat client (all
