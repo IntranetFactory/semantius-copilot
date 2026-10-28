@@ -24,7 +24,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { parseModelsConfig } from '../core/src/models.js';
+import { modelOptions, parseModelsConfig } from '../core/src/models.js';
 import { dropToolCallText, nothingShownThisTurn, withoutToolCallText, SUBSTANTIAL_CHARS } from '../core/src/tool-call-text.js';
 
 let failures = 0;
@@ -63,10 +63,35 @@ console.log('== drop_tool_call_text validation (model registry) ==');
   check('an @ variant inherits it', variants['m@max'].dropToolCallText === true);
 
   const real = parseModelsConfig(readFileSync(new URL('../backend-b/agents_config.jsonc', import.meta.url), 'utf8'));
-  const muse = Object.keys(real).filter((id) => id.startsWith('meta/muse-spark'));
-  check('every Muse entry in agents_config.jsonc has it', muse.length > 0 && muse.every((id) => real[id].dropToolCallText === true), muse.join(', '));
-  const others = Object.keys(real).filter((id) => !id.startsWith('meta/muse-spark') && real[id].dropToolCallText);
-  check('no other model has it', others.length === 0, others.join(', '));
+  // Switched off on Muse 2026-10-28: removing the notes from the model's own
+  // history made it end on text instead of calling AskUserQuestion (README).
+  const enabled = Object.keys(real).filter((id) => real[id].dropToolCallText);
+  check('no model in agents_config.jsonc has it (switched off, see README)', enabled.length === 0, enabled.join(', '));
+}
+
+// --- 1b. fold_tool_call_text: the display-only replacement ---------------
+console.log('\n== fold_tool_call_text (model registry -> model options) ==');
+{
+  const registry = (value, provider = 'openrouter') =>
+    parseModelsConfig(JSON.stringify({ models: { m: { name: 'M', provider, fold_tool_call_text: value } } }));
+  check('true is accepted and carried as foldToolCallText', registry(true).m.foldToolCallText === true);
+  check('false is accepted and leaves no entry field', !('foldToolCallText' in registry(false).m));
+  check('a string is rejected', rejects(() => registry('true')));
+  check('display-only, so an openai model may set it', registry(true, 'openai').m.foldToolCallText === true);
+  check(
+    'the model option carries the flag, the plain option does not',
+    JSON.stringify(modelOptions({ ...registry(true), n: { name: 'N', provider: 'openrouter', model: 'n' } }, ['m', 'n'])) ===
+      JSON.stringify([{ id: 'm', name: 'M', foldToolCallText: true }, { id: 'n', name: 'N' }]),
+  );
+
+  const real = parseModelsConfig(readFileSync(new URL('../backend-b/agents_config.jsonc', import.meta.url), 'utf8'));
+  const folded = Object.keys(real).filter((id) => real[id].foldToolCallText);
+  check(
+    'in agents_config.jsonc: exactly the Muse entries (base + @ variants)',
+    folded.length > 0 && folded.every((id) => id.startsWith('meta/muse-spark')) &&
+      Object.keys(real).filter((id) => id.startsWith('meta/muse-spark')).every((id) => real[id].foldToolCallText),
+    folded.join(', '),
+  );
 }
 
 // --- 2. the event filter -------------------------------------------------

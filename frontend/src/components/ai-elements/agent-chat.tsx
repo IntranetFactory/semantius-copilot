@@ -229,6 +229,10 @@ export function AgentChat({
   // so reloads and the key-flip remount re-derive the same panel.
   const tasks = useMemo(() => foldTasks(agent.messages), [agent.messages]);
 
+  // Whether this session's model has its status notes folded (toSegments) —
+  // a flag on the server's model option, looked up by the alias in use.
+  const foldNotes = meta?.models?.find((model) => model.id === modelId)?.foldToolCallText === true;
+
   // The message hosting the transcript's most recent tool-call group: that
   // group names its last call once settled (ToolCallGroup `latest`, "Ran bash
   // Downloading the blueprint  and 3 more") while older groups keep the bare
@@ -238,11 +242,11 @@ export function AgentChat({
   const latestToolGroupMessageId = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index];
-      const segments = toSegments(message.parts, supersededQuestionCalls(message.parts, questionAnswers));
+      const segments = toSegments(message.parts, supersededQuestionCalls(message.parts, questionAnswers), foldNotes);
       if (segments.some((segment) => segment.kind === 'tools')) return message.id;
     }
     return undefined;
-  }, [messages, questionAnswers]);
+  }, [messages, questionAnswers, foldNotes]);
 
   // Failed / stopped runs, derived from settlements + the visible transcript
   // (run-outcome.ts). Durable across reloads and the key-flip remount, unlike
@@ -522,6 +526,7 @@ export function AgentChat({
                         message={message}
                         questions={questionCtx}
                         hostsLatestToolGroup={message.id === latestToolGroupMessageId}
+                        foldNotes={foldNotes}
                       />
                       {notice ? renderNotice(notice) : null}
                     </Fragment>
@@ -735,18 +740,56 @@ function supersededQuestionCalls(parts: AgentPart[], answers: ReadonlyMap<string
  * viewport with chrome. Only parts that render something inline (text, files,
  * question cards) break a run; reasoning (consolidated separately) and other
  * invisible parts pass through without splitting it. A superseded question
- * card (see supersededQuestionCalls) counts as an ordinary tool call. */
+ * card (see supersededQuestionCalls) counts as an ordinary tool call.
+ *
+ * With `foldNotes` (the model option's server-set `foldToolCallText`), status
+ * notes join the tool run too, as its `notes`: the run's group shows the
+ * newest one as its caption. Muse writes one before nearly every tool call
+ * ("Building an ATS — drafting the design and plan."), and hiding them here
+ * rather than on the server is the point: the conversation the model reads
+ * back keeps them — without them Muse stopped calling AskUserQuestion (README
+ * "Dropping text next to tool calls"). A note is a short single-line text
+ * whose next visible part is such a tool call, never the message's first text
+ * (the one acknowledgement) and never text before a question card. Decided
+ * from the parts alone, so a reload folds exactly what the live stream did; a
+ * note still streaming has no tool call after it yet and shows until one
+ * arrives. */
 type Segment =
-  | { kind: 'tools'; key: string; parts: ToolRunPart[] }
+  | { kind: 'tools'; key: string; parts: ToolRunPart[]; notes: string[] }
   | { kind: 'part'; key: string; part: AgentPart };
 
-function toSegments(parts: AgentPart[], superseded: ReadonlySet<string>): Segment[] {
+/** Text this long, or spanning lines, is content (a plan, a table), never a status note. */
+const NOTE_MAX_CHARS = 200;
+
+function toSegments(parts: AgentPart[], superseded: ReadonlySet<string>, foldNotes = false): Segment[] {
+  const isToolRun = (part: AgentPart): part is ToolRunPart =>
+    part.type === 'dynamic-tool' && (!isQuestionCard(part) || superseded.has(part.toolCallId));
+  const firstText = parts.findIndex((part) => part.type === 'text' && part.text.trim().length > 0);
+  const noteAt = (index: number): string | undefined => {
+    const part = parts[index];
+    if (!foldNotes || index === firstText || part.type !== 'text') return undefined;
+    const text = part.text.trim();
+    if (text.length === 0 || text.length >= NOTE_MAX_CHARS || text.includes('\n')) return undefined;
+    const next = parts.slice(index + 1).find((p) => p.type === 'text' || p.type === 'file' || p.type === 'dynamic-tool');
+    // By name, not isQuestionCard: a question whose input is still streaming
+    // does not parse yet, and its text must not fold and then come back.
+    const beforeQuestion = next?.type === 'dynamic-tool' && next.toolName === ASK_USER_TOOL_NAME && !superseded.has(next.toolCallId);
+    return next && isToolRun(next) && !beforeQuestion ? text : undefined;
+  };
   const segments: Segment[] = [];
+  const toolRun = (index: number): Extract<Segment, { kind: 'tools' }> => {
+    const previous = segments.at(-1);
+    if (previous?.kind === 'tools') return previous;
+    const run: Extract<Segment, { kind: 'tools' }> = { kind: 'tools', key: `tools-${index}`, parts: [], notes: [] };
+    segments.push(run);
+    return run;
+  };
   for (const [index, part] of parts.entries()) {
-    if (part.type === 'dynamic-tool' && (!isQuestionCard(part) || superseded.has(part.toolCallId))) {
-      const previous = segments.at(-1);
-      if (previous?.kind === 'tools') previous.parts.push(part);
-      else segments.push({ kind: 'tools', key: `tools-${index}`, parts: [part] });
+    const note = noteAt(index);
+    if (isToolRun(part)) {
+      toolRun(index).parts.push(part);
+    } else if (note !== undefined) {
+      toolRun(index).notes.push(note);
     } else if (part.type === 'text' || part.type === 'file' || isQuestionCard(part)) {
       segments.push({ kind: 'part', key: `part-${index}`, part });
     }
@@ -758,6 +801,7 @@ function MessageView({
   message,
   questions,
   hostsLatestToolGroup,
+  foldNotes,
 }: {
   message: AgentMessage;
   questions: QuestionCtx;
@@ -765,6 +809,8 @@ function MessageView({
    * parent's latestToolGroupMessageId) — its LAST tools segment renders with
    * ToolCallGroup `latest`. */
   hostsLatestToolGroup: boolean;
+  /** Fold status notes into the tool-call groups (toSegments). */
+  foldNotes: boolean;
 }) {
   // Consolidate all reasoning parts into one block (a model may emit several) so
   // there's a single "Thinking…" affordance rather than one per part.
@@ -775,7 +821,7 @@ function MessageView({
   const lastPart = message.parts.at(-1);
   const isReasoningStreaming = lastPart?.type === 'reasoning' && lastPart.state === 'streaming';
 
-  const segments = toSegments(message.parts, supersededQuestionCalls(message.parts, questions.answers));
+  const segments = toSegments(message.parts, supersededQuestionCalls(message.parts, questions.answers), foldNotes);
   const latestToolsKey = hostsLatestToolGroup
     ? segments.filter((segment) => segment.kind === 'tools').at(-1)?.key
     : undefined;
@@ -791,7 +837,12 @@ function MessageView({
         ) : null}
         {segments.map((segment) =>
           segment.kind === 'tools' ? (
-            <ToolCallGroup key={segment.key} parts={segment.parts} latest={segment.key === latestToolsKey} />
+            <ToolCallGroup
+              key={segment.key}
+              parts={segment.parts}
+              latest={segment.key === latestToolsKey}
+              caption={segment.notes.at(-1)}
+            />
           ) : (
             <PartView key={segment.key} part={segment.part} messageId={message.id} questions={questions} />
           ),

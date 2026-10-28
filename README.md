@@ -948,7 +948,36 @@ after the last tool call, and Flue throws on an end for a block it never saw sta
 failed the whole run and lost the question card (fixed 2026-10-28; `TaskUpdate` +
 `AskUserQuestion` in one batch triggered it). Reasoning and tool-call events pass through live. Content indexes keep their
 gaps: Flue orders blocks by index on replay and only requires them unique. Set on the
-Muse entries only. `scripts/tool-call-text.test.mjs` (in `pnpm test`) covers validation,
+Muse entries only — **switched off since 2026-10-28** (`false` in agents_config.jsonc),
+because dropping the notes from the *model's own history* made Muse stop calling
+`AskUserQuestion`. Root-caused from the Langfuse chat generations (input messages +
+`finish_reason`): with the filter on, every earlier step of the turn replays to Muse as a
+bare tool call, so text only ever appears in its history as a final answer, and when it
+writes the plan or the design summary it ends the response there, `finish_reason: "stop"`,
+no tool call (session `…8f98aa28…` 19:32:30, the 1,999-char go-ahead summary; session
+`tests-user3-d4b5864f…` 2026-10-27 23:35:23, the plan cut off after its first paragraph
+although the reasoning had just drafted the question). With the filter off, the same step
+replays 24 `text + call` steps and the response ends `text(353) + AskUserQuestion`,
+`finish_reason: "tool_call"` (session `…52db3a30…` 20:00:29). Nothing was lost in the
+stream; the model never sent the call. Hiding the notes must therefore stay display-only
+(the chat renderer), never remove them from the conversation the model reads back.
+
+**Its replacement: `fold_tool_call_text` (display only).** A registry entry with
+`"fold_tool_call_text": true` (boolean, any provider, inherited by `@` variants; set on
+Muse) is sent to the browser as `foldToolCallText: true` on that model's option in
+`GET /agents/:name/meta` (`modelOptions`), so the client folds by a server flag and never
+by model name. The chat looks the flag up by the session's model alias and
+`toSegments` (`frontend/src/components/ai-elements/agent-chat.tsx`) folds each status
+note into the tool-call group: a non-empty, single-line text under 200 characters whose
+next visible part is a tool call, never the message's first text (the acknowledgement) and
+never text before an `AskUserQuestion` call (matched by name, so a question whose input is
+still streaming cannot fold and unfold its text). Notes no longer split the run, so a
+Muse step sequence reads as one group, captioned with its newest note in the summary slot
+("Ran TaskUpdate  Building an ATS — drafting the design…  and 41 more"). Decided from the
+stored parts alone: a reload folds exactly what the live stream did, and a note still
+streaming shows until its tool call arrives. Nothing is removed from the conversation. On
+session `…52db3a30…` (81 parts) this renders as the first acknowledgement, one group
+(42 calls, 36 notes folded), the plan, the question card. `scripts/tool-call-text.test.mjs` (in `pnpm test`) covers validation,
 the event filter, `nothingShownThisTurn`, and the wrapper around the installed pi-ai dist
 against canned SSE streams.
 

@@ -195,6 +195,11 @@ export type ToolCallGroupProps = {
    * last call instead of a bare count — what the agent did LAST is the one
    * thing worth a glance without a click. */
   latest?: boolean;
+  /** The model's own words for the run: the newest status note folded into
+   * it (agent-chat.tsx toSegments). Shown in the summary slot in place of the
+   * input-derived summary — it says what the agent is doing in plain
+   * language, which is exactly what that slot is for. */
+  caption?: string;
   className?: string;
 };
 
@@ -210,7 +215,7 @@ export type ToolCallGroupProps = {
  * ReasoningTrigger so tool activity and "Thought for…" read as one family of
  * affordances.
  */
-export const ToolCallGroup = ({ parts, latest, className }: ToolCallGroupProps) => {
+export const ToolCallGroup = ({ parts, latest, caption, className }: ToolCallGroupProps) => {
   const active = parts.find((part) => !isSettled(part.state));
   const errorCount = parts.filter(
     (part) => part.state === "output-error"
@@ -242,7 +247,9 @@ export const ToolCallGroup = ({ parts, latest, className }: ToolCallGroupProps) 
   // workspace…" — read from the partial input as it streams), and a lone
   // settled call keeps its summary so the common one-call case stays
   // informative without a click.
-  const summary = active
+  const summary = caption
+    ? caption
+    : active
     ? summarizeInput(active.input)
     : latestSettled
       ? summarizeInput(latestSettled.input)

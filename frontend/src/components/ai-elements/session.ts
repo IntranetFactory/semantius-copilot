@@ -52,7 +52,10 @@ export type AgentSeed = {
  * and the agent's model options (the first is the default). */
 export type AgentMeta = Omit<AgentSeed, 'modelId'> & {
   welcome?: AgentWelcome;
-  models?: Array<{ id: string; name: string }>;
+  /** `foldToolCallText`: the chat folds this model's status notes into the
+   * tool-call group (agent-chat.tsx toSegments) — set by the server's model
+   * registry, so the client never decides by model name. */
+  models?: Array<{ id: string; name: string; foldToolCallText?: boolean }>;
 };
 
 /**

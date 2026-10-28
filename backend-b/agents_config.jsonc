@@ -329,7 +329,15 @@
       // are dropped from the stream (core tool-call-text.js); kept: the first line
       // of a turn, multi-line or 200+ char text, text next to AskUserQuestion, and
       // responses without a tool call. Inherited by the variants.
-      "drop_tool_call_text": true,
+      // Switched off 2026-10-28: with the notes gone from its own history Muse
+      // ends on plain text instead of calling AskUserQuestion (README "Dropping
+      // text next to tool calls"). Do not switch back on as it stands.
+      "drop_tool_call_text": false,
+      // Instead, the chat folds those notes into the tool-call group, display
+      // only: the conversation Muse reads back keeps them (agent-chat.tsx
+      // toSegments). Sent to the browser as a flag on the model option, never
+      // as the model's name. Inherited by the variants.
+      "fold_tool_call_text": true,
       // Appended to the agent's system prompt whenever a session runs Muse (the
       // @xhigh and @max variants inherit it): Muse narrates status before, between and
       // after tool calls, and repeats it after aborts/retries.

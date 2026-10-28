@@ -24,6 +24,9 @@
  *   The registry may give it as an array of strings, joined here with newlines
  * @property {boolean} [dropToolCallText] remove the text of every response that carries a
  *   tool call (tool-call-text.js); openrouter only, inherited by `@` variants
+ * @property {boolean} [foldToolCallText] the chat folds short status notes next to tool
+ *   calls into the tool-call group (display only: the conversation keeps them); sent to
+ *   the browser as the model option's `foldToolCallText` (modelOptions), inherited by `@` variants
  *
  * @typedef {Record<string, ModelEntry>} ModelRegistry  model id -> entry
  */
@@ -126,6 +129,7 @@ export function parseModelsConfig(text) {
       'thinking_level',
       'system_prompt',
       'drop_tool_call_text',
+      'fold_tool_call_text',
     ];
     for (const key of Object.keys(entry)) {
       if (!allowed.includes(key)) {
@@ -185,6 +189,11 @@ export function parseModelsConfig(text) {
     if (dropText !== undefined && typeof dropText !== 'boolean') {
       throw new BundleValidationError(`${label}: "drop_tool_call_text" must be true or false`);
     }
+    // Display-only (the browser folds; nothing reaches the provider), so any provider.
+    const foldText = entry.fold_tool_call_text;
+    if (foldText !== undefined && typeof foldText !== 'boolean') {
+      throw new BundleValidationError(`${label}: "fold_tool_call_text" must be true or false`);
+    }
     // An openai model must be an exact pi-ai catalog id: its limits and
     // reasoning come from the catalog, so it always resolves through the
     // stock provider (Responses API) and never needs a dedicated one.
@@ -209,6 +218,7 @@ export function parseModelsConfig(text) {
       ...(level !== undefined ? { thinkingLevel: level } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt: systemPrompt.trim() } : {}),
       ...(dropText === true ? { dropToolCallText: true } : {}),
+      ...(foldText === true ? { foldToolCallText: true } : {}),
     };
   }
   return registry;
@@ -234,14 +244,22 @@ export function thinkingLevelMap(efforts) {
 /**
  * The dropdown options for an agent's `models`, in its order, keyed by alias
  * (modelAlias) — never the registry id. Ids missing from the registry are
- * skipped (the deploy route rejects them up front).
+ * skipped (the deploy route rejects them up front). `foldToolCallText` is the
+ * registry's `fold_tool_call_text` as a display flag, so the chat folds status
+ * notes for that model without ever knowing which model it is.
  *
  * @param {ModelRegistry} registry
  * @param {string[]} ids
- * @returns {{ id: string, name: string }[]}
+ * @returns {{ id: string, name: string, foldToolCallText?: true }[]}
  */
 export function modelOptions(registry, ids) {
-  return ids.filter((id) => registry[id]).map((id) => ({ id: modelAlias(registry[id].name), name: registry[id].name }));
+  return ids
+    .filter((id) => registry[id])
+    .map((id) => ({
+      id: modelAlias(registry[id].name),
+      name: registry[id].name,
+      ...(registry[id].foldToolCallText ? { foldToolCallText: true } : {}),
+    }));
 }
 
 /**
