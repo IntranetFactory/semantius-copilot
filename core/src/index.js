@@ -17,6 +17,15 @@ export {
   AGENT_LIMITS,
 } from './agent.js';
 export { parseModelsConfig, modelAlias, modelIdForAlias, modelOptions, thinkingLevelMap } from './models.js';
+export { dropToolCallText, nothingShownThisTurn, withoutToolCallText, SUBSTANTIAL_CHARS } from './tool-call-text.js';
+export {
+  llmRequestFromTurn,
+  llmRequestFromCompletion,
+  reconcileWithResponseUsage,
+  addLlmRequests,
+  ZERO_LLM_TOTALS,
+  roundUsd,
+} from './llm-usage.js';
 export { makeTar, makeTarGz, toBase64 } from './tar.js';
 export { provisionAgentSkills, SKILLS_DIR } from './provision.js';
 export { provisionSemantiusEnv } from './sandbox-env.js';

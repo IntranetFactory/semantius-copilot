@@ -126,7 +126,8 @@ export function App() {
 // per-session Worker figure could only be an estimate. The backend
 // (GET /admin/costs) reports what is measured — see core/src/cost.js.
 //
-// The LLM column is `session_state.cost_total` off THE session record — the
+// The LLM column is `session_state.cost_total` + `title_usage.cost_total` off THE
+// session record (agent/compaction turns + title side calls) — the
 // session's LIFETIME total, against a container figure that is today-only. Two
 // windows, two columns, no combined column: adding them would produce a number
 // that means nothing.
@@ -147,7 +148,7 @@ type CostRow = CostSums & {
   agentName?: string;
   version?: string;
   createdAt?: string;
-  /** Session LIFETIME LLM spend (session_state.cost_total) — a different window to the rest. */
+  /** Session LIFETIME LLM spend (session_state + title_usage cost_total) — a different window to the rest. */
   llmCost?: number;
   /** Current R2 backup archive size (session_backup.size_bytes). */
   backupSizeBytes?: number;
@@ -317,7 +318,8 @@ function CostsView({ apiKey }: { apiKey: string }) {
       {costs?.basis ? (
         <p className="status">
           {costs.basis} The money columns cover DIFFERENT periods — container cost is today&rsquo;s UTC
-          day, LLM cost is the session&rsquo;s running lifetime total (<code>session_state.cost_total</code>),
+          day, LLM cost is the session&rsquo;s running lifetime total (<code>session_state.cost_total</code> +{' '}
+          <code>title_usage.cost_total</code>),
           and Backup $/mo is a storage run-rate estimate for the session&rsquo;s current R2 archive
           (<code>session_backup</code>) — so they are shown side by side and never added together.
           {costs.backupBasis ? ` ${costs.backupBasis}` : ''}

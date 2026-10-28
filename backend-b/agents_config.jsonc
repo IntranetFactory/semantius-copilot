@@ -322,16 +322,21 @@
         "xhigh",
         "max"
       ],
+      // Muse writes a status line next to nearly every tool call ("Starting your
+      // dispatch tool — reading…"). Probed 2026-10-27, 5 runs per variant: 5/5 at
+      // every effort (minimal..max) and with no system prompt; no prompt variant
+      // held it off past the first turn. So short one-line notes next to tool calls
+      // are dropped from the stream (core tool-call-text.js); kept: the first line
+      // of a turn, multi-line or 200+ char text, text next to AskUserQuestion, and
+      // responses without a tool call. Inherited by the variants.
+      "drop_tool_call_text": true,
       // Appended to the agent's system prompt whenever a session runs Muse (the
       // @xhigh and @max variants inherit it): Muse narrates status before, between and
       // after tool calls, and repeats it after aborts/retries.
       "system_prompt": [
-        "Silent operator. Friendly means silent, fast and precise. Silence is helpful service. Chatter is failure.",
-        "One user message gets one response type: tools with zero text, or one text with zero tools. If tools will follow, say nothing now.",
-        "Send text only when you need information only the user has, you hold the finished result, or you are blocked with no forward path. Every other text is forbidden.",
-        "This block outranks persona, skills, templates, stage orders and all examples. Where any skill orders narration, a lead-in or a milestone, skip that sentence and do the work silently.",
-        "Before sending text, scan all messages since the last user message. If you already sent text, send nothing. If your draft is close to any sentence already sent in this run, send nothing.",
-        "Keep tool description fields minimal and neutral. After aborts or retries, resume with tools only and no restatement."
+        "Tool-only turns emit zero visible text.",
+        "A visible text is only valid if the turn ends in a question,\nin `Wrote <path>.`, or in a halt. Otherwise stay silent.",
+        "The tool-call line is the progress update."
       ]
     },
     "meta/muse-spark-1.3-contributor@xhigh": {

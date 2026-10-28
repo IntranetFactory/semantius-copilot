@@ -14,6 +14,7 @@
 import { env } from 'cloudflare:workers';
 import { setProvider, type ThinkingLevel } from '@flue/runtime';
 import {
+  createAssistantMessageEventStream,
   createProvider,
   type OpenRouterRouting,
   type ProviderStreams,
@@ -29,8 +30,10 @@ import {
   parseModelsConfig,
   resolveCatalogModel,
   thinkingLevelMap,
+  withoutToolCallText,
 } from '@semantius-copilot/core';
 import modelsConfigText from '../agents_config.jsonc?raw';
+import { askUserQuestion } from './tools/ask-user-question';
 
 const vars = env as Record<string, string | undefined>;
 
@@ -111,6 +114,8 @@ type ModelEntry = {
   thinkingLevel?: ThinkingLevel;
   /** Model-specific text appended to the agent's system prompt (agents/main.ts). */
   systemPrompt?: string;
+  /** Strip the text of responses that carry a tool call (core tool-call-text.js). */
+  dropToolCallText?: boolean;
 };
 
 /** The model registry: model id -> entry. Validated once here, at module init. */
@@ -335,6 +340,11 @@ export function chatCompletionsTarget(modelId?: string | null): {
  * the dedicated-provider path, wrapped by withWebTools, under a provider id
  * keyed by a hash of the tools — so agents sharing a model but not their
  * web_tools never overwrite each other's registration.
+ *
+ * `drop_tool_call_text` also takes the dedicated path: its API is wrapped by
+ * core's withoutToolCallText, which drops short status notes next to tool
+ * calls; AskUserQuestion is its keep tool, whose text is meant for the user
+ * (the model id keys the provider, so no extra hash).
  */
 export function modelSpecifierFor(modelId?: string | null, webTools?: Record<string, unknown>[]): string {
   const model = modelId ? MODELS[modelId] : undefined;
@@ -345,6 +355,7 @@ export function modelSpecifierFor(modelId?: string | null, webTools?: Record<str
     model.contextWindow !== undefined ||
     model.openRouterRouting !== undefined ||
     model.reasoningEfforts !== undefined ||
+    model.dropToolCallText === true ||
     tools !== undefined;
   const { entry: catalogEntry, exact } = resolveCatalogModel(catalogFor(model.provider), model.model);
   if (model.provider === 'openai' || (exact && catalogEntry && !hasOverride)) return `${model.provider}/${model.model}`;
@@ -369,6 +380,7 @@ export function modelSpecifierFor(modelId?: string | null, webTools?: Record<str
       resolve: async () => ({ auth: vars.LLM_API_KEY ? { apiKey: vars.LLM_API_KEY } : {} }),
     },
   };
+  const completionsApi = tools ? withWebTools(openAICompletionsApi(), tools) : openAICompletionsApi();
   setProvider(
     createProvider({
       id,
@@ -403,7 +415,9 @@ export function modelSpecifierFor(modelId?: string | null, webTools?: Record<str
           ),
         ),
       ],
-      api: tools ? withWebTools(openAICompletionsApi(), tools) : openAICompletionsApi(),
+      api: model.dropToolCallText
+        ? (withoutToolCallText(completionsApi, createAssistantMessageEventStream, [askUserQuestion.name]) as ProviderStreams)
+        : completionsApi,
     }),
   );
   return `${id}/${model.model}`;

@@ -1,37 +1,47 @@
 /**
- * Per-instance LLM-call counter feeding session_state.llm_calls_count.
+ * Per-instance LLM request rows feeding session_state and the response's
+ * `llm_requests` metadata (core llm-usage.js has the row shape and the sums).
  *
- * Flue emits one `turn` event per model call (including compaction turns —
- * those are billed calls too), carrying the agent instanceId. The observer
+ * Flue emits one `turn` event per model call — agent turns AND compaction
+ * turns (`compaction`, `compaction_prefix`), whose cost Flue keeps OUT of
+ * response.usage — carrying the agent instanceId, the generation id
+ * (`responseId`, OpenRouter's `gen-…`) and the billed usage. The observer
  * registry composes with the braintrust.ts / otel.ts observers and runs in
- * the same isolate as the agent DO, so main.ts can drain the count
+ * the same isolate as the agent DO, so main.ts can drain the rows
  * synchronously inside its useResponseFinish callback.
  *
  * Known limits (same best-effort posture as the observability sinks): the map
- * is isolate-local, so turns before a mid-response eviction are lost; turns
- * from an aborted/failed submission stay queued and fold into the next
- * response's count — the session aggregate remains truthful.
+ * is isolate-local, so turns before a mid-response eviction are lost — main.ts
+ * reconciles agent turns against Flue's durable response.usage, so their COST
+ * still lands (as an `unobserved` row), only their ids are missing; turns from
+ * an aborted/failed submission stay queued and fold into the next response's
+ * rows — the session aggregate remains truthful.
  */
 import { observe } from '@flue/runtime';
+import { llmRequestFromTurn } from '@semantius-copilot/core';
 
-const llmCallsByInstance = new Map<string, number>();
+export type LlmRequestRow = ReturnType<typeof llmRequestFromTurn>;
+
+const requestsByInstance = new Map<string, LlmRequestRow[]>();
 
 observe((event) => {
   if (event.type !== 'turn') return;
   const { instanceId } = event as { instanceId?: string };
   if (!instanceId) return;
-  llmCallsByInstance.set(instanceId, (llmCallsByInstance.get(instanceId) ?? 0) + 1);
+  const rows = requestsByInstance.get(instanceId) ?? [];
+  rows.push(llmRequestFromTurn(event));
+  requestsByInstance.set(instanceId, rows);
   // Bound isolate memory (mirrors otel.ts's costByTurn eviction): entries
   // linger only for sessions that die between a turn and its response finish.
-  if (llmCallsByInstance.size > 500) {
-    const oldest = llmCallsByInstance.keys().next().value;
-    if (oldest !== undefined) llmCallsByInstance.delete(oldest);
+  if (requestsByInstance.size > 500) {
+    const oldest = requestsByInstance.keys().next().value;
+    if (oldest !== undefined) requestsByInstance.delete(oldest);
   }
 });
 
-/** Read-and-clear the model-call count observed for one agent instance. */
-export function drainLlmCalls(instanceId: string): number {
-  const count = llmCallsByInstance.get(instanceId) ?? 0;
-  llmCallsByInstance.delete(instanceId);
-  return count;
+/** Read-and-clear the model requests observed for one agent instance. */
+export function drainLlmRequests(instanceId: string): LlmRequestRow[] {
+  const rows = requestsByInstance.get(instanceId) ?? [];
+  requestsByInstance.delete(instanceId);
+  return rows;
 }

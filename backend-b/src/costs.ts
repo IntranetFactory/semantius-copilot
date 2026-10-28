@@ -28,6 +28,7 @@ import {
   CF_GRAPHQL_URL,
   SESSION_LABEL,
   readSession,
+  roundUsd,
   sessionIdForContainer,
 } from '@semantius-copilot/core';
 
@@ -60,7 +61,7 @@ export type ContainerCosts = ReturnType<typeof foldContainerCostResponse> & {
     agentName?: string;
     version?: string;
     createdAt?: string;
-    /** session_state.cost_total — the session's LIFETIME LLM spend, not today's. */
+    /** session_state.cost_total + title_usage.cost_total — LIFETIME LLM spend, not today's. */
     llmCost?: number;
     /** session_backup.size_bytes — the session's current R2 backup archive. */
     backupSizeBytes?: number;
@@ -191,8 +192,17 @@ export async function fetchContainerCosts(
           | null;
       }
     }
+    // Agent + compaction turns (session_state) plus the title side calls,
+    // which run outside the agent and are kept on the record (title.ts).
     const state = record?.session_state as { cost_total?: unknown } | undefined;
-    const llmCost = typeof state?.cost_total === 'number' ? state.cost_total : undefined;
+    const titleUsage = record?.title_usage as { cost_total?: unknown } | undefined;
+    const llmCost =
+      typeof state?.cost_total === 'number' || typeof titleUsage?.cost_total === 'number'
+        ? roundUsd(
+            (typeof state?.cost_total === 'number' ? state.cost_total : 0) +
+              (typeof titleUsage?.cost_total === 'number' ? titleUsage.cost_total : 0),
+          )
+        : undefined;
     if (llmCost !== undefined) llmTotal += llmCost;
     // The R2 backup figures ride the same record read (session_backup is
     // written by the turn-end persist, backend-b/src/backups.ts). A $/month

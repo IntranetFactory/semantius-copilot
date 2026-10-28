@@ -759,7 +759,9 @@ Three pieces:
   text appended to the agent's system prompt in every session running that model, after the
   static workspace/task paragraphs and before the per-session payload/data so the cached
   prefix stays stable (`src/agents/main.ts`); `@` variants inherit it. Use it for behaviour
-  fixes one model needs, e.g. Muse Spark's no-narration rule. An openai entry
+  fixes one model needs. An openrouter entry may set `drop_tool_call_text: true` to drop
+  short status notes next to tool calls (Muse Spark's narration, which no prompt reliably
+  stops; see "Dropping text next to tool calls" below). An openai entry
   takes no other overrides (rejected at parse) and must be an exact Pi catalog id (anything else
   gets a deploy-time `modelWarning`, and its turns fail). Keep `max_tokens` well below
   `context_window` (≤ ~75% of the window), never the host's raw output cap. OpenRouter
@@ -890,6 +892,48 @@ covers the request's `max_tokens` (a price sort over `{baidu (131k out), novita}
 from Novita) — pi-ai requests the catalog entry's `maxTokens`, so sub-300k hosts are
 skipped per request; a single-host `only` pinned to an incapable host is still tried and
 fails mid-stream.
+
+### Dropping text next to tool calls (per-model `drop_tool_call_text`)
+
+Muse Spark writes a status line next to nearly every tool call ("Starting your dispatch
+tool — reading the architect skill…"), em-dashes included, whatever the skills say about
+narration. Probed 2026-10-27 against OpenRouter, 5 runs per variant, same first turn: 5/5 with
+no system prompt, at every reasoning effort (`minimal` with ~6 reasoning tokens through
+`max`; reasoning cannot be turned off — "Reasoning is mandatory for this endpoint"), and
+under two of three system-prompt variants; the best variant held it to 2/5 on turn 1 but
+not across a real session. It is the model's trained behavior, not something a prompt
+causes or reliably stops, and no OpenRouter parameter or Flue option controls it.
+
+So an openrouter registry entry may set `"drop_tool_call_text": true` (boolean; inherited
+by `@` variants; rejected on openai entries). The model then resolves through its
+dedicated `model-<id>` provider with the API wrapped by `withoutToolCallText`
+(`core/src/tool-call-text.js`, wired in `backend-b/src/llm.ts` `modelSpecifierFor`), which
+drops **short status notes next to tool calls** and keeps everything else. In a response
+that calls a tool, text survives when it is:
+
+- **substantial**: multi-line, or at least 200 characters (`SUBSTANTIAL_CHARS`): a plan, a
+  table, a summary. It streams from the moment it qualifies;
+- **the first line of a turn**: nothing has been shown since the user's last message
+  (`nothingShownThisTurn`, read from the conversation the call carries; dropped notes never
+  reach it, so they do not count). One acknowledgement per turn;
+- **next to a question card**: the response calls `AskUserQuestion` (passed by llm.ts as the
+  keep tool), so its text is written for the user, e.g. the guidance before a first
+  question or the table a confirmation question asks about.
+
+A response with no tool call (final answer, question in plain text) keeps all its text.
+A dropped note produces no text events, and the final message (the stream's result)
+loses that text block, so Flue never records it, the chat never shows it, and the model
+never reads it back. In the session that motivated this (2026-10-27), all 17 texts Muse
+wrote next to tool calls were one-line notes of 58–146 characters, mostly repeats
+("Switching to quick setup — …" three times); only the first would now show. Short text
+is held until its kind is known (Chat Completions sends a response's content before its
+tool calls, so at `toolcall_start` it is complete; pi-ai still emits its `text_end` after
+that), so on these models a short final answer appears in one piece instead of
+streaming. Reasoning and tool-call events pass through live. Content indexes keep their
+gaps: Flue orders blocks by index on replay and only requires them unique. Set on the
+Muse entries only. `scripts/tool-call-text.test.mjs` (in `pnpm test`) covers validation,
+the event filter, `nothingShownThisTurn`, and the wrapper around the installed pi-ai dist
+against canned SSE streams.
 
 ## Welcome card (per-agent `welcome`)
 
@@ -1325,6 +1369,43 @@ OpenRouter reports only the total — so components may not sum exactly to the t
 THE session record carries the mirrored `session_state` (and `payload`/`session_data`),
 so the sessions collection shows all of it without opening the conversation.
 
+**Per-request LLM rows (`llm_requests`) — the audit trail against OpenRouter.** A session
+makes dozens of model requests; OpenRouter bills and logs each one under its generation id
+(`gen-…`). Every response's metadata carries `llm_requests`: one row per request that
+response made — `{ at, id, purpose, model, input_tokens, output_tokens, cache_read_tokens,
+cache_write_tokens, total_tokens, cost, ms, error?, server_tool_use? }` — durable in the
+agent Durable Object's conversation and visible in the Raw JSON view under
+`conversation.messages[].metadata`. `id` is the stream chunk id pi-ai keeps as
+`responseId`, i.e. the generation id OpenRouter's activity log shows, so each row matches
+exactly one log line. Rows come from Flue `turn` events (`backend-b/src/usage.ts`;
+shaping and sums in `core/src/llm-usage.js`), so they include **compaction** calls
+(`compaction`, `compaction_prefix`) — which Flue keeps OUT of `response.usage` although
+they are billed — and failed calls (zero cost, `error` set). `session_state`'s LLM totals
+are sums over these rows, so **sum of every response's `llm_requests[].cost` ===
+`session_state.cost_total`**, and `cost_by_purpose` splits that total. Guard against the
+isolate-local observer losing turns (Durable Object restart mid-response): agent rows are
+reconciled against Flue's durable `response.usage`, and any shortfall is added as one
+`purpose: "unobserved"` row (cost and tokens, no id, not counted as a call) so the total
+never understates. Before 2026-10-28 `cost_total` was `response.usage` only — compaction
+missing — and is carried forward unchanged (attributed to `agent` in `cost_by_purpose`).
+
+**Title calls (`title_usage`).** The sidebar-title side call (`title.ts`) runs outside Flue,
+so the agent never sees it; it requests the same usage accounting and records each billed
+call on THE session record as `title_usage` (same totals shape plus its own `requests[]`
+rows, `purpose: "title"`), in the same write as the title. A session's full LLM spend is
+`session_state.cost_total + title_usage.cost_total` (the Costs tab's LLM column). Same
+best-effort posture as the title: a rare interleave with another record writer can drop
+a title row, and it is not retried.
+
+**Auditing a session against OpenRouter:** collect `llm_requests` from every response
+(Raw JSON → `conversation`) plus `sessionIndex.title_usage.requests`; every `id` should
+appear in OpenRouter's activity log with the same cost, and the rows' sum should equal
+`session_state.cost_total + title_usage.cost_total`. Expected differences: a stream cut
+off before its final usage chunk (user abort, network) is billed by OpenRouter but has no
+cost on our side — it shows as a generation id in OpenRouter's log with no matching row;
+an `unobserved` row has cost but no id. `llm_requests` also reaches the chat client (all
+response metadata does, like `usage` and `session_state` already).
+
 ## Container costs (the Costs tab)
 
 The admin console's **Costs** tab shows today's Cloudflare **container** spend broken down
@@ -1380,8 +1461,9 @@ NA/EU rate, which is the cheapest, so that one line can understate. Analytics la
 minutes behind live traffic.
 
 **Three money columns, three different windows, never summed.** `Container $ (today)` is the
-UTC-day figure above; `LLM $ (session)` is `session_state.cost_total` off THE session record
-— the session's running LIFETIME total; `Backup $/mo` (with `Backup MB` beside it) is the R2
+UTC-day figure above; `LLM $ (session)` is `session_state.cost_total + title_usage.cost_total`
+off THE session record — the session's running LIFETIME total (agent, compaction and title
+calls; see "Per-request LLM rows"); `Backup $/mo` (with `Backup MB` beside it) is the R2
 storage RUN RATE for the session's current workspace archive, off the same record's
 `session_backup` node (see "Workspace backup & restore"). They sit side by side because
 adding a day figure to a lifetime figure to a monthly rate produces a number that means
@@ -1713,13 +1795,17 @@ task tools); both now return `{ output: … }`.
 
 **`session_state` — infra-written runtime aggregation.** Running totals per session:
 `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
-`total_tokens`, `cost_total` (OpenRouter billed USD, micro-dollar rounded),
-`tool_calls_count`, `llm_calls_count`. Accumulated in the agent's unconditional
-`useResponseFinish`: tokens/cost from `response.usage`, tool calls from
-`response.toolCalls.length`, and LLM calls drained from `backend-b/src/usage.ts` — an
-isolate-global `observe()` counter of Flue `turn` events (one per model call,
-compaction included; isolate-local, so a mid-response eviction undercounts and an
-aborted submission's turns fold into the next response). The authoritative copy lives
+`total_tokens`, `cost_total` (OpenRouter billed USD, nano-dollar rounded),
+`cost_by_purpose` (`cost_total` split by request purpose — agent, compaction,
+compaction_prefix, unobserved — always summing to it), `tool_calls_count`,
+`llm_calls_count`. Accumulated in the agent's unconditional `useResponseFinish`: the
+LLM fields are sums over the response's `llm_requests` rows (see "Per-request LLM rows"
+— one row per Flue `turn` event, compaction included, drained from the isolate-global
+`observe()` collector in `backend-b/src/usage.ts`; isolate-local, so a mid-response
+eviction loses rows — their cost comes back as an `unobserved` row reconciled against
+`response.usage` — and an aborted submission's rows fold into the next response), tool
+calls from `response.toolCalls.length`. Title side calls are NOT in here — they run
+outside the agent and land in the record's `title_usage`. The authoritative copy lives
 in `usePersistentState('sessionState')` (the DO record stream); each response also
 (a) attaches `session_state` to the response metadata (visible via `?view=history`
 and the Raw JSON view) and (b) fire-and-forget merges state/data/payload into THE

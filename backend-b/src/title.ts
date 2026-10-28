@@ -15,9 +15,21 @@
  * Timing: first title after response 1 (every session gets one), refined
  * once at response >= 4 when there is real context. `title_responses`
  * records which response count produced the stored title.
+ *
+ * Cost: every billed title call lands in the record's `title_usage` (totals +
+ * per-request rows with the OpenRouter generation id) in the same write as
+ * the title. Like the title itself it is a best-effort KV write — a rare
+ * interleave with another record writer can drop it, and unlike the title it
+ * is not retried. The session's full LLM spend is session_state.cost_total +
+ * title_usage.cost_total.
  */
 import { observe, type LlmMessage } from '@flue/runtime';
-import { mergeExistingSessionRecord, readSession } from '@semantius-copilot/core';
+import {
+  addLlmRequests,
+  llmRequestFromCompletion,
+  mergeExistingSessionRecord,
+  readSession,
+} from '@semantius-copilot/core';
 import { chatCompletionsTarget, OPENROUTER_APP_HEADERS } from './llm';
 
 const TITLE_REFINE_AT = 4;
@@ -88,15 +100,19 @@ function sanitizeTitle(raw: unknown): string | null {
   return title.length > 0 ? title : null;
 }
 
-async function generateTitle(transcript: string, modelId: string | undefined): Promise<string | null> {
+type TitleCall = { title: string | null; request: ReturnType<typeof llmRequestFromCompletion> | null };
+
+async function generateTitle(transcript: string, modelId: string | undefined): Promise<TitleCall> {
   const target = chatCompletionsTarget(modelId);
-  if (!target) return null;
+  if (!target) return { title: null, request: null };
+  const openRouter = target.baseUrl.includes('openrouter.ai');
+  const startedAt = Date.now();
   const res = await fetch(`${target.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${target.apiKey}`,
-      ...(target.baseUrl.includes('openrouter.ai') ? OPENROUTER_APP_HEADERS : {}),
+      ...(openRouter ? OPENROUTER_APP_HEADERS : {}),
     },
     body: JSON.stringify({
       model: target.model,
@@ -122,17 +138,42 @@ async function generateTitle(transcript: string, modelId: string | undefined): P
           : {
               max_tokens: 100,
               temperature: 0.3,
-              ...(target.baseUrl.includes('openrouter.ai') ? { reasoning: { enabled: false } } : {}),
+              ...(openRouter ? { reasoning: { enabled: false } } : {}),
             }),
+      // Billed cost inline (usage.cost), same accounting the pi-ai patch
+      // requests for model turns — the title call is billed like any other.
+      ...(openRouter ? { usage: { include: true } } : {}),
       // The model's openrouter_routing, verbatim — same provider preferences
       // as its model turns (a model pinned to ZDR/no-data-collection hosts
       // must not leak the transcript to another host for a title).
       ...(target.routing ? { provider: target.routing } : {}),
     }),
   });
-  if (!res.ok) return null;
-  const data = (await res.json()) as { choices?: { message?: { content?: unknown } }[] };
-  return sanitizeTitle(data.choices?.[0]?.message?.content);
+  // A non-2xx is not billed; a 2xx is, even when the reply makes no title.
+  if (!res.ok) return { title: null, request: null };
+  const data = (await res.json()) as Parameters<typeof llmRequestFromCompletion>[0] & {
+    choices?: { message?: { content?: unknown } }[];
+  };
+  return {
+    title: sanitizeTitle(data.choices?.[0]?.message?.content),
+    request: llmRequestFromCompletion(data, { model: target.model, ms: Date.now() - startedAt }),
+  };
+}
+
+/** Title calls are few (first pass + one refine, plus retries); bound anyway. */
+const TITLE_REQUESTS_MAX = 50;
+
+/**
+ * Fold one title call into the record's `title_usage`: the same totals shape
+ * as session_state's LLM slice (addLlmRequests) plus the rows themselves —
+ * the title call runs outside Flue, so the agent Durable Object never sees
+ * it and the KV record is its only home.
+ */
+function addTitleRequest(existing: Record<string, unknown>, request: NonNullable<TitleCall['request']>) {
+  const prev = (existing.title_usage ?? {}) as Record<string, unknown> & { requests?: unknown };
+  const { requests: prevRequests, ...prevTotals } = prev;
+  const requests = [...(Array.isArray(prevRequests) ? prevRequests : []), request].slice(-TITLE_REQUESTS_MAX);
+  return { ...addLlmRequests(prevTotals, [request]), requests };
 }
 
 /**
@@ -160,8 +201,13 @@ export function maybeGenerateTitle(
     // Needed when: no title yet (first pass, retried until it lands), or the
     // conversation reached the refine threshold and the stored title predates it.
     if (hasTitle && (refined || responsesCount < TITLE_REFINE_AT)) return;
-    const title = await generateTitle(transcript, modelId);
-    if (!title) return;
-    await mergeExistingSessionRecord(store, id, { title, title_responses: responsesCount });
+    const { title, request } = await generateTitle(transcript, modelId);
+    if (!title && !request) return;
+    // One write for the title and its cost: computed from the record as read
+    // at merge time, so an overlapping title call's row is not dropped.
+    await mergeExistingSessionRecord(store, id, (existing) => ({
+      ...(title ? { title, title_responses: responsesCount } : {}),
+      ...(request ? { title_usage: addTitleRequest(existing, request) } : {}),
+    }));
   })().catch(() => {});
 }

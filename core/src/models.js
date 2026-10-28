@@ -22,6 +22,8 @@
  * @property {string} [systemPrompt] model-specific text appended to the agent's
  *   system prompt in sessions running this model (main.ts); inherited by `@` variants.
  *   The registry may give it as an array of strings, joined here with newlines
+ * @property {boolean} [dropToolCallText] remove the text of every response that carries a
+ *   tool call (tool-call-text.js); openrouter only, inherited by `@` variants
  *
  * @typedef {Record<string, ModelEntry>} ModelRegistry  model id -> entry
  */
@@ -123,6 +125,7 @@ export function parseModelsConfig(text) {
       'reasoning_efforts',
       'thinking_level',
       'system_prompt',
+      'drop_tool_call_text',
     ];
     for (const key of Object.keys(entry)) {
       if (!allowed.includes(key)) {
@@ -178,15 +181,21 @@ export function parseModelsConfig(text) {
         `${label}: "system_prompt" must be a non-empty string (or array of strings) of at most ${MAX_SYSTEM_PROMPT_CHARS} characters`,
       );
     }
+    const dropText = entry.drop_tool_call_text;
+    if (dropText !== undefined && typeof dropText !== 'boolean') {
+      throw new BundleValidationError(`${label}: "drop_tool_call_text" must be true or false`);
+    }
     // An openai model must be an exact pi-ai catalog id: its limits and
     // reasoning come from the catalog, so it always resolves through the
     // stock provider (Responses API) and never needs a dedicated one.
     if (
       entry.provider !== 'openrouter' &&
-      ['max_tokens', 'context_window', 'openrouter_routing', 'reasoning_efforts'].some((k) => entry[k] !== undefined)
+      ['max_tokens', 'context_window', 'openrouter_routing', 'reasoning_efforts', 'drop_tool_call_text'].some(
+        (k) => entry[k] !== undefined,
+      )
     ) {
       throw new BundleValidationError(
-        `${label}: max_tokens, context_window, openrouter_routing and reasoning_efforts are openrouter-only`,
+        `${label}: max_tokens, context_window, openrouter_routing, reasoning_efforts and drop_tool_call_text are openrouter-only`,
       );
     }
     registry[id] = {
@@ -199,6 +208,7 @@ export function parseModelsConfig(text) {
       ...(efforts !== undefined ? { reasoningEfforts: efforts } : {}),
       ...(level !== undefined ? { thinkingLevel: level } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt: systemPrompt.trim() } : {}),
+      ...(dropText === true ? { dropToolCallText: true } : {}),
     };
   }
   return registry;

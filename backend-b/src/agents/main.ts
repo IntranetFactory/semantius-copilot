@@ -48,6 +48,7 @@ import {
 } from '@flue/runtime';
 import { cloudflareSandbox } from '@flue/runtime/cloudflare';
 import {
+  addLlmRequests,
   AGENT_DEF_KEY_PREFIX,
   ensureEgressPolicy,
   mergeSessionRecord,
@@ -56,6 +57,7 @@ import {
   provisionAgentSkills,
   provisionSemantiusEnv,
   readSession,
+  reconcileWithResponseUsage,
   resolveSandboxBinding,
   sandboxNameForSession,
   skillCatalogFromBundle,
@@ -79,7 +81,7 @@ import { askUserQuestion } from '../tools/ask-user-question';
 import { taskTools, TASKS_FILE } from '../tools/tasks';
 import { MODELS, modelSpecifierFor, webToolsAllowed } from '../llm';
 import { drainTitleTranscript, maybeGenerateTitle } from '../title';
-import { drainLlmCalls } from '../usage';
+import { drainLlmRequests } from '../usage';
 
 type Env = {
   Sandbox: DurableObjectNamespace;
@@ -201,7 +203,9 @@ function payloadFromSeed(seed: AgentSeed | undefined): string | null {
  * Per-session runtime aggregation (session_state): token/cost/call counters
  * accumulated across every response at the useResponseFinish seam. Durable in
  * the instance's record stream (usePersistentState) — the KV session-index
- * mirror and the response metadata are projections of this.
+ * mirror and the response metadata are projections of this. The LLM fields
+ * are sums over the per-request rows each response carries as
+ * `llm_requests` (core llm-usage.js), so sum(rows.cost) === cost_total.
  */
 type SessionState = {
   input_tokens: number;
@@ -210,6 +214,8 @@ type SessionState = {
   cache_write_tokens: number;
   total_tokens: number;
   cost_total: number;
+  /** cost_total split by request purpose (agent, compaction, …); sums to it. */
+  cost_by_purpose?: Record<string, number>;
   tool_calls_count: number;
   llm_calls_count: number;
   responses_count: number;
@@ -363,12 +369,18 @@ export function Main({ id }: AgentProps) {
   // mirror is fire-and-forget (best-effort like the observability sinks —
   // healed at the next response finish if lost).
   //
-  // session_state and the per-response `usage`/`model` attach on EVERY
-  // response. cost.total is OpenRouter's BILLED amount whenever it reports one
-  // (the pi-ai patch requests usage accounting and prefers the inline
-  // usage.cost), else pi-ai's catalog estimate (OpenAI). Per-component costs
-  // are always catalog-rate computations — zero for a catalog-miss placeholder
-  // model — so components may not sum to the total.
+  // session_state, the per-response `usage`/`model` and `llm_requests` attach
+  // on EVERY response. `llm_requests` is one row per model request this
+  // response made (generation id, purpose, tokens, cost — usage.ts), the
+  // durable per-request record an audit matches against OpenRouter's log;
+  // session_state's LLM totals are sums over those rows. Rows, not
+  // response.usage, because Flue keeps compaction turns out of response.usage
+  // although they are billed; response.usage still guards the agent turns
+  // (reconcileWithResponseUsage). cost is OpenRouter's BILLED amount whenever
+  // it reports one (the pi-ai patch requests usage accounting and prefers the
+  // inline usage.cost), else pi-ai's catalog estimate (OpenAI). `usage` keeps
+  // Flue's own per-component figures — catalog-rate computations, zero for a
+  // catalog-miss placeholder model — so components may not sum to the total.
   // Agent-writable session memory, hoisted above the finish hook so the KV
   // mirror below ships what THIS response's tool calls stored (persistent
   // state writes only become readable next render — agentDataNow tracks them
@@ -384,22 +396,15 @@ export function Main({ id }: AgentProps) {
   const [, setSessionState] = usePersistentState<SessionState>('sessionState', ZERO_SESSION_STATE);
   useResponseFinish(({ response }) => {
     const { usage } = response;
-    const llmCalls = drainLlmCalls(id);
+    const llmRequests = reconcileWithResponseUsage(drainLlmRequests(id), usage);
     let next = ZERO_SESSION_STATE;
     // Not on Flue's PromptUsage type — added by the Flue patch when present.
     const serverToolUse = (usage as { serverToolUse?: unknown }).serverToolUse;
     setSessionState(
       (prev) =>
         (next = {
-          input_tokens: prev.input_tokens + usage.input,
-          output_tokens: prev.output_tokens + usage.output,
-          cache_read_tokens: prev.cache_read_tokens + usage.cacheRead,
-          cache_write_tokens: prev.cache_write_tokens + usage.cacheWrite,
-          total_tokens: prev.total_tokens + usage.totalTokens,
-          // Round to micro-dollars: stops float noise accumulating over turns.
-          cost_total: Math.round((prev.cost_total + usage.cost.total) * 1e6) / 1e6,
+          ...addLlmRequests(prev, llmRequests),
           tool_calls_count: prev.tool_calls_count + response.toolCalls.length,
-          llm_calls_count: prev.llm_calls_count + llmCalls,
           // ?? 0: sessions persisted before this field existed.
           responses_count: (prev.responses_count ?? 0) + 1,
           ...(prev.server_tool_use || serverToolUse
@@ -433,6 +438,7 @@ export function Main({ id }: AgentProps) {
     return {
       session_state: next,
       usage,
+      llm_requests: llmRequests,
       ...(modelEntry ? { model: modelAlias(modelEntry.name) } : {}),
     };
   });

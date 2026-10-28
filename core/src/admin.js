@@ -244,13 +244,16 @@ export async function mergeSessionRecord(kv, id, patch) {
  *
  * @param {{ get(k: string): Promise<string | null>, put(k: string, v: string, o?: object): Promise<void> }} kv
  * @param {string} id
- * @param {Record<string, unknown>} patch
+ * @param {Record<string, unknown> | ((existing: Record<string, unknown>) => Record<string, unknown>)} patch
+ *   fields to set, or a function computing them from the record just read —
+ *   for accumulating fields (title_usage), so the sum starts from the freshest
+ *   value rather than one read before a slow call
  * @returns {Promise<Record<string, unknown> | null>} the merged record, or null if there was none
  */
 export async function mergeExistingSessionRecord(kv, id, patch) {
   const existing = await readSession(kv, id);
   if (!existing) return null;
-  const merged = { id, ...existing, ...patch };
+  const merged = { id, ...existing, ...(typeof patch === 'function' ? patch(existing) : patch) };
   await putSessionIndex(kv, id, merged);
   return merged;
 }
