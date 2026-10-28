@@ -1,5 +1,5 @@
 diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
-index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8818158cb 100644
+index c21819049689124caf8ce3440c9d4e12902285c2..a07895d7b362093b69429ac0b7fda4d94c7e593f 100644
 --- a/dist/api/openai-completions.js
 +++ b/dist/api/openai-completions.js
 @@ -4,7 +4,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
@@ -76,7 +76,7 @@ index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8
      if (compat.supportsStore) {
          params.store = false;
      }
-@@ -1060,10 +1084,41 @@ function convertTools(tools, compat) {
+@@ -1060,10 +1084,51 @@ function convertTools(tools, compat) {
          };
      });
  }
@@ -101,6 +101,18 @@ index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8
 +    let promptTokens = rawUsage.prompt_tokens || 0;
 +    let cacheReadTokens = rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
 +    let cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
++    // PATCH (semantius-copilot): the provider's own counts, verbatim and before
++    // the context-size rewrite below — what OpenRouter bills and logs. The
++    // token fields of `usage` mean "conversation size" to pi-ai and Flue;
++    // `usage.reported` means "what the provider reported" and is what
++    // semantius-copilot's per-request accounting records.
++    const reportedUsage = {
++        prompt_tokens: promptTokens,
++        completion_tokens: rawUsage.completion_tokens || 0,
++        cache_read_tokens: cacheReadTokens,
++        cache_write_tokens: cacheWriteTokens,
++        reasoning_tokens: rawUsage.completion_tokens_details?.reasoning_tokens || 0,
++    };
 +    // PATCH (semantius-copilot): with OpenRouter server tools OpenRouter runs the
 +    // search/fetch loop itself and reports usage SUMMED over its internal model
 +    // calls, each re-sending our context plus the fetched pages. That number is
@@ -109,12 +121,10 @@ index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8
 +    // fetches then "overflow" a 1M window (incident 2026-10-25, deepseek). When
 +    // the tools were used (server_tool_use > 0) or the report exceeds what we
 +    // sent, the token fields are replaced by the size of what we sent; the
-+    // reported counts move into serverToolUse and the billed cost.total stays.
++    // reported counts stay in usage.reported and the billed cost.total stays.
 +    const serverToolUse = rawUsage.server_tool_use && typeof rawUsage.server_tool_use === "object" ? { ...rawUsage.server_tool_use } : undefined;
 +    const usedServerTools = serverToolUse !== undefined && Object.values(serverToolUse).some((v) => typeof v === "number" && v > 0);
 +    if (sentTokens !== undefined && (usedServerTools || promptTokens > sentTokens)) {
-+        const reported = { reported_prompt_tokens: promptTokens, reported_completion_tokens: rawUsage.completion_tokens || 0 };
-+        rawUsage = { ...rawUsage, server_tool_use: { ...serverToolUse, ...reported } };
 +        promptTokens = Math.min(promptTokens, sentTokens);
 +        cacheReadTokens = 0;
 +        cacheWriteTokens = 0;
@@ -122,7 +132,7 @@ index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8
      // Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
      // tokens (hits). OpenAI does not document or emit cache_write_tokens, but
      // OpenRouter-compatible providers can include it as a separate write count.
-@@ -1085,6 +1140,20 @@ function parseChunkUsage(rawUsage, model) {
+@@ -1085,6 +1150,20 @@ function parseChunkUsage(rawUsage, model) {
          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
      };
      calculateCost(model, usage);
@@ -135,11 +145,11 @@ index c21819049689124caf8ce3440c9d4e12902285c2..8a11c4ec7f0ede5fd034e35797a4ddf8
 +    }
 +    // PATCH (semantius-copilot): carry OpenRouter's server-tool counters
 +    // (usage.server_tool_use, e.g. { web_search_requests: 2 } from the agent's
-+    // web_tools, plus reported_* above when rewritten); the Flue patch sums
-+    // them across turns.
-+    if (rawUsage.server_tool_use && typeof rawUsage.server_tool_use === "object") {
-+        usage.serverToolUse = rawUsage.server_tool_use;
++    // web_tools); the Flue patch sums them across turns.
++    if (serverToolUse) {
++        usage.serverToolUse = serverToolUse;
 +    }
++    usage.reported = reportedUsage;
      return usage;
  }
  function mapStopReason(reason) {

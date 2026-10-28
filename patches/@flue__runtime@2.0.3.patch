@@ -11,31 +11,35 @@ index 3fa342b27631ffcf2a05f0f8dcf571fc2236e2cd..f2c9ac131815962fc149cad8cbbb6b19
  	}
  	return merged;
 diff --git a/dist/dispatch-nU3cIlT-.mjs b/dist/dispatch-nU3cIlT-.mjs
-index c661b214b2c1e0e33c5fe696e23f44e3ac96a474..132c2a975697adae0f345c6c94e8e5e81eb72acc 100644
+index c661b214b2c1e0e33c5fe696e23f44e3ac96a474..967e7a0aae317aee9c6d75309df615494fe90664 100644
 --- a/dist/dispatch-nU3cIlT-.mjs
 +++ b/dist/dispatch-nU3cIlT-.mjs
-@@ -1023,6 +1023,7 @@ function emptyUsage() {
+@@ -1023,6 +1023,8 @@ function emptyUsage() {
  * sub-object. Returns a fresh object; neither argument is mutated.
  */
  function addUsage(a, b) {
 +	const serverToolUse = addServerToolUse(a.serverToolUse, b.serverToolUse);
++	const reported = addServerToolUse(a.reported, b.reported);
  	return {
  		input: a.input + b.input,
  		output: a.output + b.output,
-@@ -1035,10 +1036,24 @@ function addUsage(a, b) {
+@@ -1035,10 +1037,27 @@ function addUsage(a, b) {
  			cacheRead: a.cost.cacheRead + b.cost.cacheRead,
  			cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
  			total: a.cost.total + b.cost.total
 -		}
 +		},
-+		...serverToolUse ? { serverToolUse } : {}
++		...serverToolUse ? { serverToolUse } : {},
++		...reported ? { reported } : {}
  	};
  }
  /**
 +* PATCH (semantius-copilot): OpenRouter server-tool counters (pi-ai patch:
 +* usage.serverToolUse = the provider's usage.server_tool_use, e.g.
 +* { web_search_requests: 2 }). Numeric fields are summed key-wise; anything
-+* else keeps the latest value. Absent on both sides -> undefined.
++* else keeps the latest value. Absent on both sides -> undefined. Also sums
++* usage.reported (pi-ai patch: the provider's own token counts, before the
++* context-size rewrite) the same key-wise way.
 +*/
 +function addServerToolUse(a, b) {
 +	if (!a) return b;
@@ -48,13 +52,14 @@ index c661b214b2c1e0e33c5fe696e23f44e3ac96a474..132c2a975697adae0f345c6c94e8e5e8
  * Convert pi-ai's `Usage` into Flue's public `PromptUsage`. The shapes are
  * structurally identical today, but going through this normalizer keeps
  * Flue's public types decoupled from pi-ai's so future divergence in
-@@ -1059,7 +1074,8 @@ function fromProviderUsage(usage) {
+@@ -1059,7 +1078,9 @@ function fromProviderUsage(usage) {
  			cacheRead: usage.cost.cacheRead,
  			cacheWrite: usage.cost.cacheWrite,
  			total: usage.cost.total
 -		}
 +		},
-+		...usage.serverToolUse && typeof usage.serverToolUse === "object" ? { serverToolUse: usage.serverToolUse } : {}
++		...usage.serverToolUse && typeof usage.serverToolUse === "object" ? { serverToolUse: usage.serverToolUse } : {},
++		...usage.reported && typeof usage.reported === "object" ? { reported: usage.reported } : {}
  	};
  }
  //#endregion

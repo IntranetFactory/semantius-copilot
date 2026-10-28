@@ -27,6 +27,7 @@
  * alias key) and must deliver through the comment tool.
  */
 import { getSandbox } from '@cloudflare/sandbox';
+import { Type } from '@earendil-works/pi-ai';
 import { env } from 'cloudflare:workers';
 import {
   type AgentProps,
@@ -102,11 +103,45 @@ const DEFAULT_INSTRUCTIONS =
 const BASH_TIMEOUT_FLOOR_SECONDS = 1200;
 
 /**
- * The framework's standard six-tool set (SandboxFactory.tools), with bash
- * wrapped so the floor is applied BEFORE Flue converts the parameter — it
- * feeds both kill paths (Flue's own timer and the container-side kill), so
- * clamping any later (e.g. at Sandbox.exec) would leave Flue's timer on the
- * model's raw guess.
+ * The optional `description` argument every sandbox tool declares: the label
+ * the chat shows on the call's tool row (tool.tsx `summarizeInput`) instead of
+ * a raw command or path. Claude sends one on `bash` unprompted; other models
+ * only when the schema offers it — Muse filled it 0/5 without the parameter,
+ * 5/5 with it (probe 2026-10-28, README "Reusable chat surface"). Flue's own schemas
+ * declare none.
+ */
+const CALL_DESCRIPTION = Type.Optional(
+  Type.String({
+    description:
+      "A short plain-language label for this call, shown to the user in place of the call's arguments " +
+      "(e.g. 'Checking the workspace setup'). Write it for someone who does not read code.",
+  }),
+);
+
+/** `tool` with CALL_DESCRIPTION added to its parameters; the label is removed before the call runs. */
+function withCallDescription<
+  T extends {
+    parameters: { properties: object };
+    execute: (toolCallId: string, params: any, ...rest: any[]) => unknown;
+  },
+>(tool: T): T {
+  return {
+    ...tool,
+    parameters: {
+      ...tool.parameters,
+      properties: { ...tool.parameters.properties, description: CALL_DESCRIPTION },
+    },
+    execute: (toolCallId: string, { description: _description, ...params }: any, ...rest: any[]) =>
+      tool.execute(toolCallId, params, ...rest),
+  } as T;
+}
+
+/**
+ * The framework's standard six-tool set (SandboxFactory.tools), each taking a
+ * CALL_DESCRIPTION, with bash wrapped so the floor is applied BEFORE Flue
+ * converts the parameter — it feeds both kill paths (Flue's own timer and the
+ * container-side kill), so clamping any later (e.g. at Sandbox.exec) would
+ * leave Flue's timer on the model's raw guess.
  */
 function sandboxToolsWithBashFloor(sandbox: Sandbox) {
   const bash = createBashTool(sandbox);
@@ -120,16 +155,16 @@ function sandboxToolsWithBashFloor(sandbox: Sandbox) {
       onUpdate,
     );
   return [
-    createReadTool(sandbox),
-    createWriteTool(sandbox),
-    createEditTool(sandbox),
-    {
+    withCallDescription(createReadTool(sandbox)),
+    withCallDescription(createWriteTool(sandbox)),
+    withCallDescription(createEditTool(sandbox)),
+    withCallDescription({
       ...bash,
       description: `${bash.description} Timeout values below ${BASH_TIMEOUT_FLOOR_SECONDS} seconds are raised to the ${BASH_TIMEOUT_FLOOR_SECONDS}-second minimum.`,
       execute,
-    },
-    createGrepTool(sandbox),
-    createGlobTool(sandbox),
+    }),
+    withCallDescription(createGrepTool(sandbox)),
+    withCallDescription(createGlobTool(sandbox)),
   ];
 }
 
@@ -369,11 +404,13 @@ export function Main({ id }: AgentProps) {
   // mirror is fire-and-forget (best-effort like the observability sinks —
   // healed at the next response finish if lost).
   //
-  // session_state, the per-response `usage`/`model` and `llm_requests` attach
-  // on EVERY response. `llm_requests` is one row per model request this
-  // response made (generation id, purpose, tokens, cost — usage.ts), the
-  // durable per-request record an audit matches against OpenRouter's log;
-  // session_state's LLM totals are sums over those rows. Rows, not
+  // session_state and the per-response `usage`/`model` attach on EVERY
+  // response. The itemized per-request list is NOT here: every call is
+  // written as it happens to the session's request ledger (KV
+  // `requests:<id>`, usage.ts / core request-ledger.js), the one list an
+  // audit matches against OpenRouter's log. session_state's LLM totals are
+  // the Durable Object's own cross-check, summed over this response's
+  // observed calls (usage.ts drainLlmRequests). Rows, not
   // response.usage, because Flue keeps compaction turns out of response.usage
   // although they are billed; response.usage still guards the agent turns
   // (reconcileWithResponseUsage). cost is OpenRouter's BILLED amount whenever
@@ -438,7 +475,6 @@ export function Main({ id }: AgentProps) {
     return {
       session_state: next,
       usage,
-      llm_requests: llmRequests,
       ...(modelEntry ? { model: modelAlias(modelEntry.name) } : {}),
     };
   });

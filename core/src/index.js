@@ -21,11 +21,23 @@ export { dropToolCallText, nothingShownThisTurn, withoutToolCallText, SUBSTANTIA
 export {
   llmRequestFromTurn,
   llmRequestFromCompletion,
+  pendingRequestEntry,
+  requestEntryFromTurn,
   reconcileWithResponseUsage,
   addLlmRequests,
   ZERO_LLM_TOTALS,
   roundUsd,
 } from './llm-usage.js';
+export {
+  REQUESTS_KEY_PREFIX,
+  REQUESTS_TTL_SECONDS,
+  requestsKey,
+  parseLedger,
+  mergeLedgers,
+  summarizeRequests,
+  ledgerEntries,
+  createRequestLedger,
+} from './request-ledger.js';
 export { makeTar, makeTarGz, toBase64 } from './tar.js';
 export { provisionAgentSkills, SKILLS_DIR } from './provision.js';
 export { provisionSemantiusEnv } from './sandbox-env.js';

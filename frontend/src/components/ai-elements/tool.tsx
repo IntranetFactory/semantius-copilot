@@ -156,11 +156,11 @@ const toolName = (part: ToolPart) =>
  *    the bare "3" the string rules would pick.
  * 2. `subject` (TaskCreate) — the title, never the long `description` body.
  * 3. `description` — the plain-language line the model sends ALONGSIDE a
- *    technical payload. Claude adds one to every `bash` call on its own
- *    ("Checking the workspace and downloading the blueprint" next to a
- *    600-char shell one-liner — the field Claude Code's Bash tool taught it;
- *    Flue's schema tolerates the extra key), so it is what the collapsed row
- *    should say. The command itself stays in the row's Parameters panel.
+ *    technical payload ("Checking the workspace and downloading the
+ *    blueprint" next to a 600-char shell one-liner). backend-b declares it as
+ *    an optional argument on every sandbox tool (main.ts
+ *    `withCallDescription`), so it is what the collapsed row should say. The
+ *    command itself stays in the row's Parameters panel.
  * 4. The first non-empty string value (a file path, a pattern, a command when
  *    the model sent no description).
  *
@@ -230,8 +230,8 @@ export const ToolCallGroup = ({ parts, latest, className }: ToolCallGroupProps) 
   // The settled latest group names its LAST call: "Running bash  Downloading
   // the blueprint" becomes "Ran bash  Downloading the blueprint  and 3 more"
   // the moment the run moves on, so the line still says where the agent got
-  // to. The tool name stays in the line (as on the live line) because only
-  // `bash` carries a plain-language description — a path, a `Q:` subject or
+  // to. The tool name stays in the line (as on the live line) because not every
+  // call carries a plain-language description — a path, a `Q:` subject or
   // `#3 → completed` on its own would not read as a sentence. A failure keeps
   // the failure label below: the count + red icon must not be traded for a
   // summary.

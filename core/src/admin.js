@@ -15,10 +15,11 @@
  *
  * @typedef {Object} KvLike
  * @property {(options?: { cursor?: string, prefix?: string }) => Promise<{ keys: Array<{ name: string, expiration?: number, metadata?: unknown }>, list_complete: boolean, cursor?: string }>} list
- * @property {(key: string) => Promise<string | null>} get
+ * @property {(key: string, options?: { cacheTtl?: number }) => Promise<string | null>} get
  */
 import { backupKeys, listBackups } from './backup.js';
 import { backupStorageMonthlyUsd } from './cost.js';
+import { parseLedger, requestsKey, summarizeRequests } from './request-ledger.js';
 
 /** The stable prefixes this app writes, with human labels for the browser. */
 export const KV_GROUPS = {
@@ -28,6 +29,8 @@ export const KV_GROUPS = {
   container: 'Container pointer (containerId -> session id; the only containerId-keyed entry)',
   authjwt:
     'Exchanged Semantius JWT for one better-auth session cookie, keyed by the cookie\'s SHA-256 (never the cookie itself). 1 h TTL; see verifySemantiusCookie',
+  requests:
+    'Request ledger: every billed LLM call of one session, keyed by OpenRouter generation id (core request-ledger.js). 35-day TTL, outlives the session record',
 };
 
 export const SESSION_KEY_PREFIX = 'session:';
@@ -382,8 +385,27 @@ export async function readCollectionRecord(collectionId, recordId, deps) {
     return entry ? { kind: 'kv', ...entry } : null;
   }
   if (collectionId === 'sessions') {
-    const session = await readSession(deps.kv, recordId);
-    return session ? { kind: 'session', id: recordId, session } : null;
+    // The session's request ledger (its own KV key, request-ledger.js) shown
+    // as part of the session: every billed LLM call, and the totals over them.
+    // cacheTtl 30 (KV's minimum): this edge read lags the agent's writes by at
+    // most ~30 s instead of the default 60. The ledger outlives the 24 h
+    // session record (35 days, for billing), so it is served on its own once
+    // the record has expired or been deleted.
+    const [session, ledgerRaw] = await Promise.all([
+      readSession(deps.kv, recordId),
+      deps.kv.get(requestsKey(recordId), { cacheTtl: 30 }),
+    ]);
+    if (!session && ledgerRaw === null) return null;
+    const requests = parseLedger(ledgerRaw);
+    return {
+      kind: 'session',
+      id: recordId,
+      session: {
+        ...(session ?? { id: recordId, session_record: 'expired or deleted; only the request ledger remains' }),
+        requests_total: summarizeRequests(requests),
+        requests,
+      },
+    };
   }
   if (collectionId === 'backups') {
     if (!deps.r2) return null;

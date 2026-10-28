@@ -187,11 +187,19 @@ doesn't flip the line above it back). A group with a failed call keeps "N tool c
 failed" + red icon and auto-opens, latest or not.
 The text on a row/line is `summarizeInput`: `#id → status` for task ops, else the call's
 `subject` (TaskCreate), else its `description`, else its first string argument (a path, a
-pattern). `description` is what makes a `bash` row read as plain language rather than a
-600-character shell one-liner: Claude sends one with every `bash` call on its own — the field
-Claude Code's Bash tool taught it; Flue's `bash` schema declares only `command`/`timeout` but
-tolerates the extra key — and the row prefers it, keeping the command itself one click away
-in the Parameters panel (a call without a description falls back to the command).
+pattern). `description` is what makes a row read as plain language rather than a
+600-character shell one-liner or a long path. Flue's own tool schemas declare none, so
+`sandboxToolsWithBashFloor` (`backend-b/src/agents/main.ts`) adds an optional
+`description` ("a short plain-language label for this call…") to all six sandbox tools
+(`read`, `write`, `edit`, `bash`, `grep`, `glob`) and removes it before the call runs. Claude
+sent one on `bash` unprompted even without it (the field Claude Code's Bash tool taught it);
+other models only fill it when the schema offers it. Probe 2026-10-28, Muse Spark at
+`xhigh`, 5 runs each: 0/5 calls labelled without the parameter, 5/5 with it ("Listing
+workspace contents", "Checking available skills"). The label does not replace Muse's status
+text (still written 5/5, see "Dropping text next to tool calls"): it is one neutral label
+per call, the status text one sentence per response. The row prefers the label, keeping the
+command itself one click away in the Parameters panel (a call without one falls back to its
+first string argument).
 
 ## Layout
 
@@ -293,9 +301,14 @@ assistant usage as the conversation size, so a few fetches "overflowed" deepseek
 (`Context overflow: the conversation (~1203631 tokens …)`). The pi-ai patch
 (`estimateSentTokens` / `parseChunkUsage`) therefore replaces the token fields of a request
 that carried `openrouter:*` tools with the chars/4 size of what we actually sent, whenever
-`server_tool_use` reports use or the reported prompt exceeds that size; OpenRouter's numbers
-move to `serverToolUse.reported_prompt_tokens` / `reported_completion_tokens`, and
-`cost.total` stays the billed amount. A session that already stored an inflated usage stays
+`server_tool_use` reports use or the reported prompt exceeds that size, and `cost.total`
+stays the billed amount. That estimate is ONLY for context size: OpenRouter's own counts
+(prompt, completion, cache read/write, reasoning) are always kept verbatim on
+`usage.reported` (pi-ai patch; the Flue patch carries it through `fromProviderUsage` and
+sums it in `addUsage`), and per-request accounting (the request ledger, `session_state`)
+records those. The rewrite fires on nearly every call of a model whose tokenizer chars/4
+undercounts (Muse: 98k estimate vs 192k reported, 2026-10-28) even when no search ran — so
+before 2026-10-28 such rows carried the estimate. A session that already stored an inflated usage stays
 stuck (its last assistant message is the estimate's anchor) — start a new one.
 
 **Deploying an agent** (`pnpm deploy:agent`, scripts/deploy-agent.mjs):
@@ -1369,57 +1382,86 @@ OpenRouter reports only the total — so components may not sum exactly to the t
 THE session record carries the mirrored `session_state` (and `payload`/`session_data`),
 so the sessions collection shows all of it without opening the conversation.
 
-**Per-request LLM rows (`llm_requests`) — the audit trail against OpenRouter.** A session
-makes dozens of model requests; OpenRouter bills and logs each one under its generation id
-(`gen-…`). Every response's metadata carries `llm_requests`: one row per request that
-response made — `{ at, id, purpose, model, input_tokens, output_tokens, cache_read_tokens,
-cache_write_tokens, total_tokens, cost, ms, error?, server_tool_use? }` — durable in the
-agent Durable Object's conversation and visible in the Raw JSON view under
-`conversation.messages[].metadata`. `id` is the stream chunk id pi-ai keeps as
-`responseId`, i.e. the generation id OpenRouter's activity log shows, so each row matches
-exactly one log line. Rows come from Flue `turn` events (`backend-b/src/usage.ts`;
-shaping and sums in `core/src/llm-usage.js`), so they include **compaction** calls
-(`compaction`, `compaction_prefix`) — which Flue keeps OUT of `response.usage` although
-they are billed — and failed calls (zero cost, `error` set). `session_state`'s LLM totals
-are sums over these rows, so **sum of every response's `llm_requests[].cost` ===
-`session_state.cost_total`**, and `cost_by_purpose` splits that total. Guard against the
-isolate-local observer losing turns (Durable Object restart mid-response): agent rows are
-reconciled against Flue's durable `response.usage`, and any shortfall is added as one
-`purpose: "unobserved"` row (cost and tokens, no id, not counted as a call) so the total
-never understates. Before 2026-10-28 `cost_total` was `response.usage` only — compaction
-missing — and is carried forward unchanged (attributed to `agent` in `cost_by_purpose`).
+**The request ledger (`requests`) — every billed LLM call of a session, in ONE object.**
+OpenRouter bills and logs each model call under its generation id (`gen-…`). Every call a
+session makes — agent turns, compaction turns (`compaction`, `compaction_prefix`, which
+Flue keeps out of `response.usage` although they are billed) and the sidebar-title side
+call — is one entry of ONE object per session in the existing KV namespace:
 
-**Title calls (`title_usage`).** The sidebar-title side call (`title.ts`) runs outside Flue,
-so the agent never sees it; it requests the same usage accounting and records each billed
-call on THE session record as `title_usage` (same totals shape plus its own `requests[]`
-rows, `purpose: "title"`), in the same write as the title. A session's full LLM spend is
-`session_state.cost_total + title_usage.cost_total` (the Costs tab's LLM column). Same
-best-effort posture as the title: a rare interleave with another record writer can drop
-a title row, and it is not retried.
+```
+KV requests:<sessionId> = {
+  "gen-…": { id, at, purpose, model, input_tokens, output_tokens, cache_read_tokens,
+             cache_write_tokens, total_tokens, reasoning_tokens, cost, ms,
+             turn_id?, error?, cost_unknown?, server_tool_use? },
+  "turn_…:…": { at, purpose, model, turn_id, pending: true },   // a call in flight
+  …
+}
+```
+
+The admin session read (`/admin/collections/sessions/record`, the data browser's Raw JSON
+`sessionIndex`) attaches it as `requests`, plus `requests_total` — cost, tokens, counts
+(`requests_count`, `pending_count`, `cost_unknown_count`, `error_count`), `cost_by_purpose`
+and the time window — summed from it (`core/src/request-ledger.js` `summarizeRequests`). The
+Costs tab's LLM column and `pnpm llm-audit` read the same object. Tokens are OpenRouter's
+own counts (`usage.reported`, never the context-size estimate — see "Server-tool usage is
+not context size"); cost is OpenRouter's billed `usage.cost`.
+
+**Written as calls happen, not at the end of a response** (`backend-b/src/usage.ts`, from
+Flue's per-call events): `turn_request` writes a `pending` entry; `turn` replaces it with
+the completed entry keyed by its generation id (idempotent — the same call written twice
+is one entry; a call that failed before OpenRouter assigned an id keeps its placeholder
+key; a failure with neither a seen start nor an id never sent anything and gets no
+entry). Entries are timed by the call's START, as OpenRouter's log is. `title.ts` does
+the same around its fetch. All of it runs in the session's agent
+Durable Object isolate, so the key has one writer — unlike THE session record, which
+several writers read-modify-write (chat gate, backups, container snapshot, title) and
+which was seen to lose a newer `session_state` to a stale copy. The writer
+(`createRequestLedger`) is built for KV's limits; each point is a way a plain
+"read, add, put" per call loses entries:
+- **1 write/s per key** (KV answers 429): entries collect in memory and the whole object
+  is put at most every 1.1 s; a failed put is retried with backoff, then every 30 s for
+  ~30 min (then again at the next call), and nothing leaves memory until a put
+  containing it succeeded; an unexpected error never leaves the writer dead (the next call restarts it).
+- **Reads that may lag a write**: each put re-reads the stored object and merges by key;
+  the isolate keeps everything it has seen; after each put it reads back and puts again if
+  any entry is missing (bounded) — so a racing second writer (deploy overlap) is repaired.
+- **A call cut off by a restart/deploy**: its `pending` entry stays, with time, model and
+  purpose — match it to OpenRouter's activity log.
+- **A stream cut before its final usage chunk** (billed, no cost reported): the entry has
+  a generation id, zero tokens and `cost_unknown: true`; `llm-audit` shows OpenRouter's
+  figure for it. A failed call WITHOUT a generation id is a plain `error` entry with
+  `error_message` — almost always a request OpenRouter rejected (429, 4xx, 5xx before
+  streaming; not billed). `llm-audit` lists those; check the activity log if one matters.
+- The flush promise is returned from the `observe()` callback, so Flue hands it to the
+  platform's `waitUntil`.
+Tested against a fake KV that rejects same-key writes within the limit, serves stale
+reads and fails puts at random (`scripts/request-ledger.test.mjs`). The one case not
+fully covered: a restarted isolate whose FIRST read is stale AND two writers at once —
+reads in the writing location see the write immediately per Cloudflare, so this is
+beyond KV's normal behavior; `llm-audit`'s cross-check against the Durable Object's own
+`session_state` total flags any entry lost that way.
+
+Retention: 35 days, refreshed by every put — longer than the 24 h session record, and
+deliberately NOT deleted with the session (a deleted session's calls were still billed).
+In KV within ~1 s of a call; the admin read and the Costs tab read it with KV's minimum
+`cacheTtl` (30 s), so they show it within ~30 s (seen live 2026-10-28 at the default
+60 s: the view stepped in ~60 s jumps). The admin read keeps serving the ledger after
+the session record expired or was deleted (`session_record: "expired or deleted"`).
+Sessions before 2026-10-28 have no ledger (their spend is in `session_state` and the old
+`title_usage` field, which the Costs tab still falls back to).
 
 **Auditing a session against OpenRouter:** `pnpm llm-audit <sessionId> [--rows]`
-(`scripts/llm-audit.mjs`; API_TOKEN + LLM_API_KEY from `backend-b/.dev.vars`) does all of
-the following and looks every generation id up via OpenRouter's
-`GET /api/v1/generation?id=…` (stats appear ~a minute after the request). By hand:
-collect `llm_requests` from every response
-(Raw JSON → `conversation`) plus `sessionIndex.title_usage.requests`; every `id` should
-appear in OpenRouter's activity log with the same cost, and the rows' sum should equal
-`session_state.cost_total + title_usage.cost_total` — audit against the NEWEST response's
-`metadata.session_state` (Durable Object, authoritative), not the KV mirror: the mirror
-is a whole-record read-modify-write shared with other writers (the chat gate's JWT
-refresh, title, backup), and KV serves reads up to ~60 s stale, so a writer can put an
-older copy back over a newer `session_state` — seen 2026-10-28 (mirror stuck one
-response behind after a fresh-token probe; healed only by the next response). Expected
-differences: a stream cut
-off before its final usage chunk (user abort, network) is billed by OpenRouter but has no
-cost on our side — it shows as a generation id in OpenRouter's log with no matching row;
-an `unobserved` row has cost but no id. OpenRouter's generation lookup can also return an
-EMPTY record for a billed call (no tokens, no finish reason, `total_cost: 0`): seen
-2026-10-28 for all 35 agent calls of a `meta/muse-spark-1.3-contributor` session whose
-streams each reported a billed `usage.cost`, while a small direct call to the same model
-looked up fine minutes later. `llm-audit` reports these separately rather than as a cost
-mismatch; for them only OpenRouter's activity log (dashboard) can confirm the charge. `llm_requests` also reaches the chat client (all
-response metadata does, like `usage` and `session_state` already).
+(`scripts/llm-audit.mjs`; API_TOKEN + LLM_API_KEY from `backend-b/.dev.vars`) reads the
+ledger as the admin page shows it and checks: `requests_total` is the sum of the
+requests; nothing is pending or `cost_unknown`; the ledger's agent+compaction calls equal
+the agent Durable Object's own `session_state.cost_total` (an independent count — a
+shortfall means a lost entry); and every generation id, looked up via OpenRouter's
+`GET /api/v1/generation?id=…` (stats appear ~a minute after the call), has the same billed
+cost and native token counts. OpenRouter's lookup can return an EMPTY record for a
+billed call (no tokens, no finish reason, `total_cost: 0`): seen 2026-10-28 for 48 agent
+calls of a `meta/muse-spark-1.3-contributor` session made 11:50–12:12 UTC, which the
+activity dashboard showed with their costs; `llm-audit` reports such records separately
+and only the dashboard can confirm them.
 
 ## Container costs (the Costs tab)
 
@@ -1476,9 +1518,9 @@ NA/EU rate, which is the cheapest, so that one line can understate. Analytics la
 minutes behind live traffic.
 
 **Three money columns, three different windows, never summed.** `Container $ (today)` is the
-UTC-day figure above; `LLM $ (session)` is `session_state.cost_total + title_usage.cost_total`
-off THE session record — the session's running LIFETIME total (agent, compaction and title
-calls; see "Per-request LLM rows"); `Backup $/mo` (with `Backup MB` beside it) is the R2
+UTC-day figure above; `LLM $ (session)` is the sum of the session's request ledger (KV
+`requests:<id>`) — the session's running LIFETIME total (agent, compaction and title
+calls; see "The request ledger"); `Backup $/mo` (with `Backup MB` beside it) is the R2
 storage RUN RATE for the session's current workspace archive, off the same record's
 `session_backup` node (see "Workspace backup & restore"). They sit side by side because
 adding a day figure to a lifetime figure to a monthly rate produces a number that means
@@ -1813,14 +1855,16 @@ task tools); both now return `{ output: … }`.
 `total_tokens`, `cost_total` (OpenRouter billed USD, nano-dollar rounded),
 `cost_by_purpose` (`cost_total` split by request purpose — agent, compaction,
 compaction_prefix, unobserved — always summing to it), `tool_calls_count`,
-`llm_calls_count`. Accumulated in the agent's unconditional `useResponseFinish`: the
-LLM fields are sums over the response's `llm_requests` rows (see "Per-request LLM rows"
-— one row per Flue `turn` event, compaction included, drained from the isolate-global
+`llm_calls_count`. The Durable Object's own count, an independent cross-check of the
+request ledger (see "The request ledger") — the ledger is the itemized list, and the
+full spend including title calls is `requests_total`. Accumulated in the agent's
+unconditional `useResponseFinish`: the LLM fields are sums over the response's observed
+calls (one per Flue `turn` event, compaction included, drained from the isolate-global
 `observe()` collector in `backend-b/src/usage.ts`; isolate-local, so a mid-response
 eviction loses rows — their cost comes back as an `unobserved` row reconciled against
 `response.usage` — and an aborted submission's rows fold into the next response), tool
-calls from `response.toolCalls.length`. Title side calls are NOT in here — they run
-outside the agent and land in the record's `title_usage`. The authoritative copy lives
+calls from `response.toolCalls.length`. Title side calls are NOT in here — they are in
+the request ledger only. The authoritative copy lives
 in `usePersistentState('sessionState')` (the DO record stream); each response also
 (a) attaches `session_state` to the response metadata (visible via `?view=history`
 and the Raw JSON view) and (b) fire-and-forget merges state/data/payload into THE

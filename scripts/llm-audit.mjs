@@ -2,18 +2,17 @@
 /**
  * Audit ONE session's LLM spend against OpenRouter (pnpm llm-audit <sessionId>).
  *
- * Reads what the deployed backend recorded — every response's `llm_requests`
- * rows from the agent conversation (admin read) plus `title_usage.requests`
- * and the totals from THE session record — and checks two things:
+ * Reads the session's request ledger exactly as the admin page shows it
+ * (`sessionIndex.requests` — KV `requests:<id>` — and `requests_total`) and
+ * checks two things:
  *
- *  1. Internal consistency: the rows sum to the stored totals
- *     (session_state.cost_total, title_usage.cost_total), and the request
- *     count matches llm_calls_count. A difference is either pre-tracking
- *     spend (sessions older than 2026-10-28 carried their old, compaction-less
- *     total forward) or a lost row — the report says which side is bigger.
- *  2. Against OpenRouter: each row's generation id is looked up via
- *     GET /api/v1/generation?id=… and its billed `total_cost` compared to the
- *     row's cost. Rows without an id (`unobserved`, failed calls) are listed.
+ *  1. Internal consistency: the total is the sum of the requests; no request
+ *     is left pending or without a cost; the ledger's agent+compaction calls
+ *     sum to the agent Durable Object's own session_state.cost_total (an
+ *     independent count — a shortfall means the ledger lost an entry).
+ *  2. Against OpenRouter: each request's generation id is looked up via
+ *     GET /api/v1/generation?id=… and its billed `total_cost` and native token
+ *     counts compared to ours.
  *
  * What this CANNOT see: a request OpenRouter billed that we never got a row
  * for (stream cut before its final usage chunk). Those only show in
@@ -69,29 +68,23 @@ const sum = (rows, key) => round(rows.reduce((acc, r) => acc + (typeof r[key] ==
 
 // --- What we recorded ------------------------------------------------------
 
-const recordRes = await admin(`/admin/collections/kv/record?id=${encodeURIComponent(`session:${sessionId}`)}`);
-const record = recordRes.json ?? recordRes;
-const conversation = await admin(`/admin/agents/main/${encodeURIComponent(sessionId)}?view=history`);
+// THE session as the admin page shows it: the session record plus
+// `requests` (the request ledger, KV `requests:<id>`) and `requests_total`.
+const recordRes = await admin(`/admin/collections/sessions/record?id=${encodeURIComponent(sessionId)}`);
+const record = recordRes.session ?? {};
+const ledger = record.requests && typeof record.requests === 'object' ? record.requests : {};
+const rows = Object.entries(ledger)
+  .map(([key, entry]) => ({ key, ...entry }))
+  .sort((a, b) => String(a.at ?? '').localeCompare(String(b.at ?? '')));
 
+// The agent Durable Object's own running totals (agent + compaction calls,
+// newest response's metadata) — an independent cross-check of the ledger.
+const conversation = await admin(`/admin/agents/main/${encodeURIComponent(sessionId)}?view=history`).catch(() => ({}));
 const responses = (conversation.messages ?? []).filter((m) => m.role === 'assistant' && m.metadata);
-const agentRows = responses.flatMap((m, i) =>
-  (Array.isArray(m.metadata.llm_requests) ? m.metadata.llm_requests : []).map((r) => ({ ...r, response: i + 1 })),
-);
-const untracked = responses.filter((m) => !Array.isArray(m.metadata.llm_requests)).length;
-const titleRows = Array.isArray(record.title_usage?.requests) ? record.title_usage.requests : [];
-const rows = [...agentRows, ...titleRows.map((r) => ({ ...r, response: 'title' }))];
-
-// The authoritative running totals are the newest response's
-// metadata.session_state (written in the Durable Object with the rows); THE
-// session record holds a best-effort mirror that KV may serve stale for up to
-// ~60 s after a response. Audit against the former, report the mirror's lag.
-const latestState = [...responses].reverse().find((m) => m.metadata.session_state)?.metadata.session_state;
-const state = latestState ?? record.session_state ?? {};
-const titleUsage = record.title_usage ?? {};
+const state = [...responses].reverse().find((m) => m.metadata.session_state)?.metadata.session_state ?? {};
 
 console.log(`session ${sessionId}`);
-console.log(`  responses: ${responses.length} (${untracked} before per-request tracking)`);
-console.log(`  rows: ${agentRows.length} agent-side + ${titleRows.length} title = ${rows.length}`);
+console.log(`  requests: ${rows.length} (${rows.filter((r) => r.purpose === 'title').length} title)`);
 console.log('');
 
 // --- 1. Internal consistency ----------------------------------------------
@@ -102,53 +95,56 @@ function line(ok, label, detail) {
   console.log(`${ok ? 'OK  ' : 'DIFF'}  ${label}${detail ? ` — ${detail}` : ''}`);
 }
 
-const agentSum = sum(agentRows, 'cost');
-const stateCost = typeof state.cost_total === 'number' ? state.cost_total : 0;
-const agentGap = round(stateCost - agentSum);
-line(
-  Math.abs(agentGap) < 1e-8,
-  `session_state.cost_total ${usd(stateCost)} (${latestState ? 'Durable Object' : 'KV mirror'}) vs sum(llm_requests.cost) ${usd(agentSum)}`,
-  Math.abs(agentGap) < 1e-8
-    ? ''
-    : agentGap > 0
-      ? `total is ${usd(agentGap)} higher — pre-tracking spend carried forward${untracked ? ` (${untracked} untracked responses)` : ''}, or rows lost`
-      : `rows are ${usd(-agentGap)} higher — a row was recorded twice, or the total lost a write`,
-);
-const callRows = agentRows.filter((r) => r.purpose !== 'unobserved').length;
-line(
-  untracked > 0 || state.llm_calls_count === callRows,
-  `llm_calls_count ${state.llm_calls_count ?? '—'} vs agent-side request rows ${callRows}`,
-  untracked > 0 ? 'not comparable: count includes pre-tracking calls' : '',
-);
-const titleSum = sum(titleRows, 'cost');
-line(
-  Math.abs(round((titleUsage.cost_total ?? 0) - titleSum)) < 1e-8,
-  `title_usage.cost_total ${usd(titleUsage.cost_total)} vs sum(title requests) ${usd(titleSum)}`,
-);
-const mirror = record.session_state ?? {};
-line(
-  mirror.cost_total === state.cost_total && mirror.responses_count === state.responses_count,
-  `KV mirror (session record) matches the Durable Object's session_state`,
-  mirror.cost_total === state.cost_total && mirror.responses_count === state.responses_count
-    ? ''
-    : `mirror at response ${mirror.responses_count ?? '—'} ${usd(mirror.cost_total)}, DO at response ${state.responses_count} ${usd(state.cost_total)} — KV lag (≤ ~60 s) or a lost mirror write, healed at the next response`,
-);
-const byPurpose = state.cost_by_purpose ?? {};
-const purposeSum = round(Object.values(byPurpose).reduce((a, b) => a + b, 0));
-line(Math.abs(round(purposeSum - stateCost)) < 1e-8, `cost_by_purpose sums to cost_total`, JSON.stringify(byPurpose));
+const total = record.requests_total ?? {};
+line(Math.abs(round((total.cost_total ?? 0) - sum(rows, 'cost'))) < 1e-8, `requests_total.cost_total ${usd(total.cost_total)} = sum of requests ${usd(sum(rows, 'cost'))}`);
 
-const recordedTotal = round(stateCost + (titleUsage.cost_total ?? 0));
-console.log(`\n  recorded LLM total (session_state + title_usage): ${usd(recordedTotal)}`);
+const pending = rows.filter((r) => r.pending);
+line(
+  pending.length === 0,
+  `no pending requests`,
+  pending.length
+    ? `${pending.length} still pending — a call in flight now, or one interrupted (restart/deploy): ${pending.map((r) => `${r.purpose} ${r.model ?? ''} at ${r.at}`).join('; ')}`
+    : '',
+);
+const unknown = rows.filter((r) => r.cost_unknown);
+line(
+  unknown.length === 0,
+  `no requests with unknown cost`,
+  unknown.length ? `${unknown.length} ended without a usage report (OpenRouter's figure below): ${unknown.map((r) => r.id ?? r.key).join(', ')}` : '',
+);
+
+// Agent + compaction calls in the ledger vs the Durable Object's totals. The
+// DO counts each response's calls (an `unobserved` gap included), so the two
+// agree unless the ledger lost an entry — or the ledger also holds calls of a
+// response still running.
+const agentSide = rows.filter((r) => r.purpose !== 'title');
+const settled = new Set((conversation.settlements ?? []).map((st) => st.submissionId));
+const responseOpen = (conversation.messages ?? []).some((m) => m.submissionId && !settled.has(m.submissionId));
+if (typeof state.cost_total === 'number') {
+  const gap = round(state.cost_total - sum(agentSide, 'cost'));
+  line(
+    Math.abs(gap) < 1e-8 || responseOpen,
+    `ledger agent+compaction ${usd(sum(agentSide, 'cost'))} vs Durable Object session_state.cost_total ${usd(state.cost_total)}`,
+    Math.abs(gap) < 1e-8
+      ? ''
+      : responseOpen
+        ? 'not comparable yet: a response is still running'
+        : gap > 0
+          ? `ledger is ${usd(gap)} short — entries missing from the ledger (or spend from before the ledger existed, 2026-10-28)`
+          : `ledger is ${usd(-gap)} higher — calls the DO did not count`,
+  );
+}
+
 const perPurpose = {};
 for (const r of rows) perPurpose[r.purpose] = round((perPurpose[r.purpose] ?? 0) + (r.cost ?? 0));
-console.log(`  rows by purpose: ${JSON.stringify(perPurpose)}`);
-const noId = rows.filter((r) => !r.id);
+console.log(`
+  recorded LLM total: ${usd(total.cost_total)}  by purpose: ${JSON.stringify(perPurpose)}`);
+if (total.first_at) console.log(`  window: ${total.first_at} .. ${total.last_at}`);
+const noId = rows.filter((r) => !r.id && !r.pending);
 if (noId.length) {
-  console.log(`  rows without a generation id: ${noId.length} (${noId.map((r) => `${r.purpose}${r.error ? `/error:${r.error}` : ''} ${usd(r.cost)}`).join(', ')})`);
+  console.log(`  failed requests without a generation id (OpenRouter rejected them; normally not billed): ${noId.length}`);
+  for (const r of noId) console.log(`        ${r.at} ${r.purpose} ${r.model ?? ''} ${r.error_message ?? r.error ?? ''}`);
 }
-const firstAt = rows.map((r) => r.at).sort()[0];
-const lastAt = rows.map((r) => r.at).sort().at(-1);
-if (firstAt) console.log(`  window: ${firstAt} .. ${lastAt}`);
 
 // --- 2. Against OpenRouter -------------------------------------------------
 
@@ -163,6 +159,7 @@ if (!skipOpenRouter) {
   const mismatches = [];
   const missing = [];
   const noStats = [];
+  const tokenMismatches = [];
   const ids = rows.filter((r) => r.id);
   for (const row of ids) {
     let data;
@@ -192,6 +189,14 @@ if (!skipOpenRouter) {
     billedSum += billed;
     if (Math.abs(billed - (row.cost ?? 0)) < 1e-9) matched += 1;
     else mismatches.push({ row, billed });
+    // Tokens against OpenRouter's NATIVE counts (the provider's tokenizer, the
+    // billing basis) — `tokens_prompt` is OpenRouter's normalized count and
+    // never matches. Rows from before usage.reported may carry the
+    // context-size estimate instead (README "Server-tool usage").
+    const ourPrompt = (row.input_tokens ?? 0) + (row.cache_read_tokens ?? 0) + (row.cache_write_tokens ?? 0);
+    if (ourPrompt !== data.native_tokens_prompt || row.output_tokens !== data.native_tokens_completion) {
+      tokenMismatches.push({ row, ourPrompt, data });
+    }
     if (printRows) {
       console.log(
         `  ${row.id}  ${String(row.purpose).padEnd(17)} ours ${usd(row.cost)}  openrouter ${usd(billed)}  ${data.model ?? ''}`,
@@ -201,6 +206,15 @@ if (!skipOpenRouter) {
   billedSum = round(billedSum);
   const withStats = ids.length - missing.length - noStats.length;
   line(mismatches.length === 0, `${matched}/${withStats} rows with OpenRouter stats match its billed cost exactly`);
+  line(
+    tokenMismatches.length === 0,
+    `${withStats - tokenMismatches.length}/${withStats} rows match OpenRouter's native prompt/completion tokens`,
+  );
+  for (const { row, ourPrompt, data } of tokenMismatches) {
+    console.log(
+      `        ${row.id} (${row.purpose}): ours ${ourPrompt}/${row.output_tokens}, openrouter ${data.native_tokens_prompt}/${data.native_tokens_completion}`,
+    );
+  }
   line(
     noStats.length === 0,
     `${withStats}/${ids.length - missing.length} found generations have stats on OpenRouter`,

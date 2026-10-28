@@ -16,21 +16,16 @@
  * once at response >= 4 when there is real context. `title_responses`
  * records which response count produced the stored title.
  *
- * Cost: every billed title call lands in the record's `title_usage` (totals +
- * per-request rows with the OpenRouter generation id) in the same write as
- * the title. Like the title itself it is a best-effort KV write — a rare
- * interleave with another record writer can drop it, and unlike the title it
- * is not retried. The session's full LLM spend is session_state.cost_total +
- * title_usage.cost_total.
+ * Cost: every title call goes into the session's request ledger (KV
+ * `requests:<id>`, usage.ts requestLedger) like any model call — a `pending`
+ * entry before the fetch, replaced by the billed entry (keyed by its gen id)
+ * or by an error entry. The title call runs in the agent DO's isolate (fired
+ * from useResponseFinish), so the ledger keeps its single writer.
  */
 import { observe, type LlmMessage } from '@flue/runtime';
-import {
-  addLlmRequests,
-  llmRequestFromCompletion,
-  mergeExistingSessionRecord,
-  readSession,
-} from '@semantius-copilot/core';
+import { llmRequestFromCompletion, mergeExistingSessionRecord, readSession } from '@semantius-copilot/core';
 import { chatCompletionsTarget, OPENROUTER_APP_HEADERS } from './llm';
+import { requestLedger } from './usage';
 
 const TITLE_REFINE_AT = 4;
 const MESSAGE_MAX_CHARS = 500;
@@ -100,80 +95,92 @@ function sanitizeTitle(raw: unknown): string | null {
   return title.length > 0 ? title : null;
 }
 
-type TitleCall = { title: string | null; request: ReturnType<typeof llmRequestFromCompletion> | null };
-
-async function generateTitle(transcript: string, modelId: string | undefined): Promise<TitleCall> {
+async function generateTitle(sessionId: string, transcript: string, modelId: string | undefined): Promise<string | null> {
   const target = chatCompletionsTarget(modelId);
-  if (!target) return { title: null, request: null };
+  if (!target) return null;
   const openRouter = target.baseUrl.includes('openrouter.ai');
   const startedAt = Date.now();
-  const res = await fetch(`${target.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${target.apiKey}`,
-      ...(openRouter ? OPENROUTER_APP_HEADERS : {}),
-    },
-    body: JSON.stringify({
-      model: target.model,
-      messages: [
-        { role: 'system', content: TITLE_SYSTEM_PROMPT },
-        { role: 'user', content: transcript },
-      ],
-      // Reasoning models spend the token budget on chain-of-thought and
-      // return `content: null` once the cap is hit (observed with
-      // tencent/hy3: finish_reason "length", 30/30 tokens in `reasoning`).
-      // So per provider:
-      //  - openai (reasoning models): `max_completion_tokens` + the lowest
-      //    `reasoning_effort` — they reject `max_tokens` and `temperature`;
-      //  - openrouter, mandatory reasoning (entry has reasoning_efforts, e.g.
-      //    GLM 5.3): its first listed effort, with room for the reasoning;
-      //  - openrouter otherwise: reasoning off via OpenRouter's unified param;
-      //  - env default on another endpoint: plain body (a generic
-      //    OpenAI-compatible endpoint may reject unknown fields).
-      ...(target.provider === 'openai'
-        ? { max_completion_tokens: 1000, reasoning_effort: 'low' }
-        : target.reasoningEfforts
-          ? { max_tokens: 1000, reasoning: { effort: target.reasoningEfforts[0] } }
-          : {
-              max_tokens: 100,
-              temperature: 0.3,
-              ...(openRouter ? { reasoning: { enabled: false } } : {}),
-            }),
-      // Billed cost inline (usage.cost), same accounting the pi-ai patch
-      // requests for model turns — the title call is billed like any other.
-      ...(openRouter ? { usage: { include: true } } : {}),
-      // The model's openrouter_routing, verbatim — same provider preferences
-      // as its model turns (a model pinned to ZDR/no-data-collection hosts
-      // must not leak the transcript to another host for a title).
-      ...(target.routing ? { provider: target.routing } : {}),
-    }),
-  });
+  // Ledger placeholder BEFORE the call: if the isolate dies or the fetch
+  // fails mid-way, the entry stays and says so.
+  const placeholderKey = `title:${new Date(startedAt).toISOString()}:${crypto.randomUUID().slice(0, 8)}`;
+  const base = { at: new Date(startedAt).toISOString(), purpose: 'title', model: target.model };
+  void requestLedger.record(sessionId, placeholderKey, { ...base, pending: true });
+  const settle = (fields: Record<string, unknown>) =>
+    void requestLedger.record(sessionId, placeholderKey, {
+      ...base,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 0,
+      cost: 0,
+      ms: Date.now() - startedAt,
+      ...fields,
+    });
+  let res: Response;
+  try {
+    res = await fetch(`${target.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${target.apiKey}`,
+        ...(openRouter ? OPENROUTER_APP_HEADERS : {}),
+      },
+      body: JSON.stringify({
+        model: target.model,
+        messages: [
+          { role: 'system', content: TITLE_SYSTEM_PROMPT },
+          { role: 'user', content: transcript },
+        ],
+        // Reasoning models spend the token budget on chain-of-thought and
+        // return `content: null` once the cap is hit (observed with
+        // tencent/hy3: finish_reason "length", 30/30 tokens in `reasoning`).
+        // So per provider:
+        //  - openai (reasoning models): `max_completion_tokens` + the lowest
+        //    `reasoning_effort` — they reject `max_tokens` and `temperature`;
+        //  - openrouter, mandatory reasoning (entry has reasoning_efforts, e.g.
+        //    GLM 5.3): its first listed effort, with room for the reasoning;
+        //  - openrouter otherwise: reasoning off via OpenRouter's unified param;
+        //  - env default on another endpoint: plain body (a generic
+        //    OpenAI-compatible endpoint may reject unknown fields).
+        ...(target.provider === 'openai'
+          ? { max_completion_tokens: 1000, reasoning_effort: 'low' }
+          : target.reasoningEfforts
+            ? { max_tokens: 1000, reasoning: { effort: target.reasoningEfforts[0] } }
+            : {
+                max_tokens: 100,
+                temperature: 0.3,
+                ...(openRouter ? { reasoning: { enabled: false } } : {}),
+              }),
+        // Billed cost inline (usage.cost), same accounting the pi-ai patch
+        // requests for model turns — the title call is billed like any other.
+        ...(openRouter ? { usage: { include: true } } : {}),
+        // The model's openrouter_routing, verbatim — same provider preferences
+        // as its model turns (a model pinned to ZDR/no-data-collection hosts
+        // must not leak the transcript to another host for a title).
+        ...(target.routing ? { provider: target.routing } : {}),
+      }),
+    });
+  } catch (err) {
+    // Whether OpenRouter billed a call the network lost is unknowable here.
+    settle({ error: `fetch failed: ${err instanceof Error ? err.message : String(err)}`, cost_unknown: true });
+    return null;
+  }
   // A non-2xx is not billed; a 2xx is, even when the reply makes no title.
-  if (!res.ok) return { title: null, request: null };
-  const data = (await res.json()) as Parameters<typeof llmRequestFromCompletion>[0] & {
-    choices?: { message?: { content?: unknown } }[];
-  };
-  return {
-    title: sanitizeTitle(data.choices?.[0]?.message?.content),
-    request: llmRequestFromCompletion(data, { model: target.model, ms: Date.now() - startedAt }),
-  };
-}
-
-/** Title calls are few (first pass + one refine, plus retries); bound anyway. */
-const TITLE_REQUESTS_MAX = 50;
-
-/**
- * Fold one title call into the record's `title_usage`: the same totals shape
- * as session_state's LLM slice (addLlmRequests) plus the rows themselves —
- * the title call runs outside Flue, so the agent Durable Object never sees
- * it and the KV record is its only home.
- */
-function addTitleRequest(existing: Record<string, unknown>, request: NonNullable<TitleCall['request']>) {
-  const prev = (existing.title_usage ?? {}) as Record<string, unknown> & { requests?: unknown };
-  const { requests: prevRequests, ...prevTotals } = prev;
-  const requests = [...(Array.isArray(prevRequests) ? prevRequests : []), request].slice(-TITLE_REQUESTS_MAX);
-  return { ...addLlmRequests(prevTotals, [request]), requests };
+  if (!res.ok) {
+    settle({ error: `http ${res.status}` });
+    return null;
+  }
+  let data: Parameters<typeof llmRequestFromCompletion>[0] & { choices?: { message?: { content?: unknown } }[] };
+  try {
+    data = await res.json();
+  } catch (err) {
+    settle({ error: `unreadable response: ${err instanceof Error ? err.message : String(err)}`, cost_unknown: true });
+    return null;
+  }
+  const entry = llmRequestFromCompletion(data, { model: target.model, ms: Date.now() - startedAt, at: new Date(startedAt) });
+  void requestLedger.record(sessionId, entry.id ?? placeholderKey, entry, placeholderKey);
+  return sanitizeTitle(data.choices?.[0]?.message?.content);
 }
 
 /**
@@ -201,13 +208,8 @@ export function maybeGenerateTitle(
     // Needed when: no title yet (first pass, retried until it lands), or the
     // conversation reached the refine threshold and the stored title predates it.
     if (hasTitle && (refined || responsesCount < TITLE_REFINE_AT)) return;
-    const { title, request } = await generateTitle(transcript, modelId);
-    if (!title && !request) return;
-    // One write for the title and its cost: computed from the record as read
-    // at merge time, so an overlapping title call's row is not dropped.
-    await mergeExistingSessionRecord(store, id, (existing) => ({
-      ...(title ? { title, title_responses: responsesCount } : {}),
-      ...(request ? { title_usage: addTitleRequest(existing, request) } : {}),
-    }));
+    const title = await generateTitle(id, transcript, modelId);
+    if (!title) return;
+    await mergeExistingSessionRecord(store, id, { title, title_responses: responsesCount });
   })().catch(() => {});
 }

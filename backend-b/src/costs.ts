@@ -27,9 +27,12 @@ import {
   foldContainerCostResponse,
   CF_GRAPHQL_URL,
   SESSION_LABEL,
+  parseLedger,
   readSession,
+  requestsKey,
   roundUsd,
   sessionIdForContainer,
+  summarizeRequests,
 } from '@semantius-copilot/core';
 
 export type CostEnv = {
@@ -61,7 +64,7 @@ export type ContainerCosts = ReturnType<typeof foldContainerCostResponse> & {
     agentName?: string;
     version?: string;
     createdAt?: string;
-    /** session_state.cost_total + title_usage.cost_total — LIFETIME LLM spend, not today's. */
+    /** Sum of the session's request ledger (KV `requests:<id>`) — LIFETIME LLM spend, not today's. */
     llmCost?: number;
     /** session_backup.size_bytes — the session's current R2 backup archive. */
     backupSizeBytes?: number;
@@ -192,17 +195,21 @@ export async function fetchContainerCosts(
           | null;
       }
     }
-    // Agent + compaction turns (session_state) plus the title side calls,
-    // which run outside the agent and are kept on the record (title.ts).
+    // Every billed call (agent, compaction, title) from the session's request
+    // ledger. Sessions from before the ledger (2026-10-28) fall back to their
+    // stored totals: session_state plus the old title_usage field.
+    const ledgerRaw = await env.STORE.get(requestsKey(sessionId), { cacheTtl: 30 }).catch(() => null);
     const state = record?.session_state as { cost_total?: unknown } | undefined;
     const titleUsage = record?.title_usage as { cost_total?: unknown } | undefined;
     const llmCost =
-      typeof state?.cost_total === 'number' || typeof titleUsage?.cost_total === 'number'
-        ? roundUsd(
-            (typeof state?.cost_total === 'number' ? state.cost_total : 0) +
-              (typeof titleUsage?.cost_total === 'number' ? titleUsage.cost_total : 0),
-          )
-        : undefined;
+      ledgerRaw !== null
+        ? summarizeRequests(parseLedger(ledgerRaw)).cost_total
+        : typeof state?.cost_total === 'number' || typeof titleUsage?.cost_total === 'number'
+          ? roundUsd(
+              (typeof state?.cost_total === 'number' ? state.cost_total : 0) +
+                (typeof titleUsage?.cost_total === 'number' ? titleUsage.cost_total : 0),
+            )
+          : undefined;
     if (llmCost !== undefined) llmTotal += llmCost;
     // The R2 backup figures ride the same record read (session_backup is
     // written by the turn-end persist, backend-b/src/backups.ts). A $/month

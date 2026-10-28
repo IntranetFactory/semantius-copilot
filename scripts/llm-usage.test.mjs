@@ -89,6 +89,33 @@ const turn = (purpose, id, u, extra = {}) => ({
   );
   const web = llmRequestFromTurn(turn('agent', 'gen-3', usage(10, 5, 0, 0.02, { serverToolUse: { web_search_requests: 2 } })), AT);
   check('turn -> row: server_tool_use carried', j(web.server_tool_use) === j({ web_search_requests: 2 }));
+  // The pi-ai patch's context-size rewrite: top-level tokens are a chars/4
+  // estimate (98310), usage.reported is what OpenRouter billed (the real
+  // muse-spark row of 2026-10-28) — the row must carry the report.
+  const rewritten = llmRequestFromTurn(
+    turn('agent', 'gen-r', {
+      ...usage(98310, 2483, 0, 0.00908071468),
+      reported: { prompt_tokens: 192516, completion_tokens: 2483, cache_read_tokens: 1000, cache_write_tokens: 0, reasoning_tokens: 2100 },
+    }),
+    AT,
+  );
+  check(
+    'turn -> row: tokens from usage.reported, not the context-size estimate',
+    rewritten.input_tokens === 191516 &&
+      rewritten.cache_read_tokens === 1000 &&
+      rewritten.output_tokens === 2483 &&
+      rewritten.total_tokens === 194999 &&
+      rewritten.reasoning_tokens === 2100 &&
+      rewritten.cost === 0.00908071468,
+    j(rewritten),
+  );
+  check(
+    'reconcile: compares reported counts on both sides (no false token gap)',
+    reconcileWithResponseUsage([rewritten], {
+      ...usage(98310, 2483, 0, 0.00908071468),
+      reported: { prompt_tokens: 192516, completion_tokens: 2483, cache_read_tokens: 1000, cache_write_tokens: 0 },
+    }, AT).length === 1,
+  );
   const requestedOnly = llmRequestFromTurn({ ...turn('agent', 'gen-4', usage(1, 1, 0, 0)), response: { responseId: 'gen-4', usage: usage(1, 1, 0, 0) } }, AT);
   check('turn -> row: falls back to the requested model', requestedOnly.model === 'z-ai/glm-5.3');
 }
@@ -111,6 +138,7 @@ const turn = (purpose, id, u, extra = {}) => ({
       row.cache_read_tokens === 100 &&
       row.output_tokens === 12 &&
       row.total_tokens === 412 &&
+      row.reasoning_tokens === 0 &&
       row.cost === 0.00031 &&
       row.ms === 813 &&
       !('unpriced' in row),
