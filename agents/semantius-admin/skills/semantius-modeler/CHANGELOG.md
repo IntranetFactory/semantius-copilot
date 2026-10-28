@@ -8,6 +8,34 @@ Entries below are newest first.
 
 ---
 
+## Sample data: dealt enums and parents, unique names past the pool, totals from children
+
+2026-10-28. A review of the seeded-generator rules found that the example repeated account names above 12 rows (a 409 on a unique name), `tuples` looped forever on a pool with a repeated entry, contacts picked their account at random so fields taken from the parent rarely varied enough for `assertSeedDistinct`, enum values came out in a fixed cycle and two enums of the same length moved in step, `slugify` dropped letters such as ø and ł and turned non-Latin names into an empty string, and an invoice total did not match its lines. Rules: `references/stage-6-sample-data.md`, the script pattern, "Records, not fields", "Uniqueness" and the realistic-data list; `references/deploy-lib.ts`; `references/deploy-script-template.md`, the helper table.
+
+1. **Every enum is dealt with `r.deal(values, n)`**, shuffled, every value once before any repeats; a repeated value weights the mix. The index-cycling `pick(values, i)` is removed from `deploy-lib.ts`.
+2. **FK parents are dealt with `r.deal(parentRows, n)`**, so every parent gets a child before any gets a second.
+3. **The example builds account names with `r.tuples`** from two pools (144 names). New `r.distinct(pool, n)` throws when a pool has fewer than `n` different entries. A label column or `unique_value` field is checked with `assertSeedDistinct(..., rows.length)`.
+4. **`r.tuples` removes repeated pool entries** before checking the pool sizes, and falls back to walking the combinations in order near exhaustion, so it always ends.
+5. **`slugify` transliterates ø, æ, œ, ß, ł, đ, ð, þ and ı** and throws when no Latin letter is left; a non-Latin name carries a Latin form for its email.
+6. **A parent's totals come from its children:** build the children first, sum them into the parent, insert the parents, then the children with ids matched by the parent's natural key. New invoice / invoice-lines example.
+7. **A place outside the US, Canada, the UK and Australia leaves the phone empty**, since those are the countries with a range reserved for fiction.
+8. **Re-runs converge only for the unchanged script:** editing a count, a pool or the order of draws can change that table's rows and its children's.
+9. **The UK address example reads `London EC1A 1BB`.**
+
+---
+
+## Sample data: whole records from a seeded generator
+
+2026-10-28. A seeded accounts table read like a counter: every row on Market Street, house numbers 100 to 109, postal codes 10000 to 10009 that matched none of the cities, phones 555-0101 to 555-0110. Each field came from its own index formula, and the Stage 6 example itself showed `${pick(streets, i)} ${100 + i}`. Rules: `references/stage-6-sample-data.md`, the script pattern, "Records, not fields" and "Uniqueness"; `references/deploy-lib.ts`; `references/deploy-script-template.md`, the helper table.
+
+1. **New `rng(table)` in `deploy-lib.ts`:** one fixed-seed (42) generator per table with `pick`, `int`, `chance`, `deal` (every entry once before any repeats) and `tuples` (distinct combinations, each part dealt; throws when the pools are too small). The same script writes the same rows on every run, so `seedEnsureMany` keys stay stable. `combine` is removed; `pick(values, i)` stays for the §5 enum driver; `uniq` stays for code-like fields.
+2. **New `slugify` and `exampleDomain`:** an invented company's email and web domain is `<name>.example.com`, which is reserved and never receives mail. A person's email is `first.last@<their company's domain>`. Company names are invented, never real brands.
+3. **Addresses come from a place:** city, state or region, country, the city's own postal codes and the phone area code travel together. With no country field on the entity or on any record it belongs to, places are in the US; with one, they span several countries in each country's format, and the country written is a value the field allows. A record that belongs to another takes its parent's place.
+4. **No base + index in a value a person reads** (house number, postal code, phone, amount, date). Phones use the ranges reserved for fiction (US and Canada 555-0100 to 555-0199, UK 07700 900xxx and 020 7946 0xxx, Australia (0X) 5550 xxxx).
+5. **The script pattern seeds accounts and contacts** instead of campaigns and leads, showing places, dealt names, `tuples` for people and emails from the account's domain. A pool for a field checked by `assertSeedDistinct` holds at least 8 entries.
+
+---
+
 ## Entity icon goes to `entities.icon_name`
 
 2026-10-27. The platform renamed `entities.icon_url` to `icon_name`; the analyst's §3 line is now `**Icon:**`. Rules: `references/stage-1-parse.md`, the §3 entity lines and the mapping table; `references/stage-4-execute.md`, 4c; `references/deploy-script-template.md`, the schema preflight.

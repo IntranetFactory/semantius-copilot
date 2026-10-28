@@ -162,6 +162,7 @@ if (!skipOpenRouter) {
   let matched = 0;
   const mismatches = [];
   const missing = [];
+  const noStats = [];
   const ids = rows.filter((r) => r.id);
   for (const row of ids) {
     let data;
@@ -178,6 +179,15 @@ if (!skipOpenRouter) {
       missing.push(row);
       continue;
     }
+    // An EMPTY record — no tokens, no finish reason, no provider response —
+    // is OpenRouter missing the stats, not a $0 bill: seen 2026-10-28 for
+    // every agent call of a meta/muse-spark-1.3-contributor session, whose
+    // streams reported a billed usage.cost, while a small direct call to the
+    // same model looked up fine. Counted apart so it is not read as a refund.
+    if (!data.tokens_prompt && !data.tokens_completion && !data.finish_reason && !data.total_cost) {
+      noStats.push(row);
+      continue;
+    }
     const billed = Number(data.total_cost ?? 0);
     billedSum += billed;
     if (Math.abs(billed - (row.cost ?? 0)) < 1e-9) matched += 1;
@@ -189,14 +199,22 @@ if (!skipOpenRouter) {
     }
   }
   billedSum = round(billedSum);
-  line(mismatches.length === 0, `${matched}/${ids.length} rows match OpenRouter's billed cost exactly`);
+  const withStats = ids.length - missing.length - noStats.length;
+  line(mismatches.length === 0, `${matched}/${withStats} rows with OpenRouter stats match its billed cost exactly`);
+  line(
+    noStats.length === 0,
+    `${withStats}/${ids.length - missing.length} found generations have stats on OpenRouter`,
+    noStats.length
+      ? `${noStats.length} empty records (no tokens/finish/cost; our rows hold ${usd(sum(noStats, 'cost'))}) — check OpenRouter's activity log for the window`
+      : '',
+  );
   for (const { row, billed } of mismatches) {
     console.log(`        ${row.id} (${row.purpose}): ours ${usd(row.cost)}, openrouter ${usd(billed)}`);
   }
   line(missing.length === 0, `${ids.length - missing.length}/${ids.length} generation ids found on OpenRouter`);
   for (const row of missing) console.log(`        not found: ${row.id} (${row.purpose}, ${row.at})`);
-  const idRowsSum = sum(ids, 'cost');
-  console.log(`\n  OpenRouter billed for these ids: ${usd(billedSum)}  (our rows with ids: ${usd(idRowsSum)})`);
+  const statRows = ids.filter((r) => !missing.includes(r) && !noStats.includes(r));
+  console.log(`\n  OpenRouter billed for the ids it has stats for: ${usd(billedSum)}  (our rows for the same ids: ${usd(sum(statRows, 'cost'))})`);
 }
 
 console.log(`\n${problems === 0 ? 'CONSISTENT' : `${problems} DIFFERENCE(S)`}`);

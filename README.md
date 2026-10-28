@@ -1413,7 +1413,12 @@ response behind after a fresh-token probe; healed only by the next response). Ex
 differences: a stream cut
 off before its final usage chunk (user abort, network) is billed by OpenRouter but has no
 cost on our side — it shows as a generation id in OpenRouter's log with no matching row;
-an `unobserved` row has cost but no id. `llm_requests` also reaches the chat client (all
+an `unobserved` row has cost but no id. OpenRouter's generation lookup can also return an
+EMPTY record for a billed call (no tokens, no finish reason, `total_cost: 0`): seen
+2026-10-28 for all 35 agent calls of a `meta/muse-spark-1.3-contributor` session whose
+streams each reported a billed `usage.cost`, while a small direct call to the same model
+looked up fine minutes later. `llm-audit` reports these separately rather than as a cost
+mismatch; for them only OpenRouter's activity log (dashboard) can confirm the charge. `llm_requests` also reaches the chat client (all
 response metadata does, like `usage` and `session_state` already).
 
 ## Container costs (the Costs tab)
