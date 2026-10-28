@@ -942,7 +942,11 @@ wrote next to tool calls were one-line notes of 58–146 characters, mostly repe
 is held until its kind is known (Chat Completions sends a response's content before its
 tool calls, so at `toolcall_start` it is complete; pi-ai still emits its `text_end` after
 that), so on these models a short final answer appears in one piece instead of
-streaming. Reasoning and tool-call events pass through live. Content indexes keep their
+streaming. A note dropped at an earlier tool call stays silent even when a later
+`AskUserQuestion` in the same response turns on keep-all: pi-ai emits every `text_end`
+after the last tool call, and Flue throws on an end for a block it never saw start, which
+failed the whole run and lost the question card (fixed 2026-10-28; `TaskUpdate` +
+`AskUserQuestion` in one batch triggered it). Reasoning and tool-call events pass through live. Content indexes keep their
 gaps: Flue orders blocks by index on replay and only requires them unique. Set on the
 Muse entries only. `scripts/tool-call-text.test.mjs` (in `pnpm test`) covers validation,
 the event filter, `nothingShownThisTurn`, and the wrapper around the installed pi-ai dist

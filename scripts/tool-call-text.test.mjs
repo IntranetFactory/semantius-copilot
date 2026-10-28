@@ -129,8 +129,11 @@ const NOTE = 'Switching to quick setup — checking your current setup.';
   check('…and the final message keeps it', blockTypes(asked.at(-1)) === 'text,toolCall');
 
   const mixedMessage = [{ type: 'text', text: NOTE }, { type: 'toolCall', name: 'TaskUpdate' }, { type: 'toolCall', name: 'AskUserQuestion' }];
-  const mixed = await filter([{ type: 'start' }, ...text(0, NOTE), ...call(1, 'TaskUpdate', mixedMessage), ...call(2, 'AskUserQuestion', mixedMessage), done(mixedMessage)], { keepTextWith: ['AskUserQuestion'] });
+  // pi-ai's order: the text's text_end comes after both tool calls start.
+  const [textStart, textDelta, textEnd] = text(0, NOTE);
+  const mixed = await filter([{ type: 'start' }, textStart, textDelta, ...call(1, 'TaskUpdate', mixedMessage), ...call(2, 'AskUserQuestion', mixedMessage), textEnd, done(mixedMessage)], { keepTextWith: ['AskUserQuestion'] });
   check('a note settled at an earlier tool call stays dropped, even if a question follows', blockTypes(mixed.at(-1)) === 'toolCall,toolCall', blockTypes(mixed.at(-1)));
+  check('…and none of its events leak out after the question (Flue throws on an unstarted block)', !mixed.some((e) => e.type.startsWith('text_')), types(mixed));
 
   // nothingShownThisTurn: the per-call keepFirstLine.
   const user = { role: 'user', content: 'hi' };
@@ -206,6 +209,19 @@ console.log('\n== pi-ai wrapper (installed dist) ==');
     tool_calls: [{ id: 'call_2', type: 'function', function: { name: 'AskUserQuestion', arguments: '{"questions":[]}' } }],
   });
   check('AskUserQuestion response: its text reaches the consumer', question.events.some((e) => e.type === 'text_delta') && resultTypes(question) === 'text,toolCall', resultTypes(question));
+
+  // TaskUpdate + AskUserQuestion in one response (seen 2026-08-18): the note
+  // is dropped at TaskUpdate; its text_end, which pi-ai emits after both
+  // calls, must not reach Flue once the question turns on keep-all.
+  const batch = await run({
+    content: 'Marking the step done, then one question.',
+    tool_calls: [
+      { id: 'call_3', type: 'function', function: { name: 'TaskUpdate', arguments: '{}' } },
+      { id: 'call_4', type: 'function', function: { name: 'AskUserQuestion', arguments: '{"questions":[]}' } },
+    ],
+  });
+  check('TaskUpdate + AskUserQuestion: no text event for the dropped note', !batch.events.some((e) => e.type.startsWith('text_')), types(batch.events));
+  check('…both calls reach the consumer and result()', batch.events.filter((e) => e.type === 'toolcall_end').length === 2 && resultTypes(batch) === 'toolCall,toolCall', resultTypes(batch));
 
   const answer = await run({ content: 'Here is the summary.' });
   check('text-only response: text events reach the consumer', answer.events.some((e) => e.type === 'text_delta'), types(answer.events));

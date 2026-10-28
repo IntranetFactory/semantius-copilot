@@ -85,7 +85,11 @@ export async function* dropToolCallText(events, { keepTextWith = [], keepFirstLi
       let block = blocks.get(event.contentIndex);
       if (!block) blocks.set(event.contentIndex, (block = { state: 'held', events: [], text: '' }));
       if (event.type === 'text_delta') block.text += event.delta;
-      if (keepAll || block.state === 'kept') yield event;
+      // A dropped block stays silent even after a keep tool call: pi-ai emits
+      // every text_end after the last tool call, and Flue throws on an end
+      // (or delta) for a block whose text_start it never saw, which fails the
+      // whole run, the question card included.
+      if (block.state === 'kept' || (keepAll && block.state === 'held')) yield event;
       else if (block.state === 'held') {
         block.events.push(event);
         if (isSubstantial(block.text)) yield* release(block);
