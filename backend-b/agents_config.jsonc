@@ -16,6 +16,9 @@
   // of its reasoning_efforts). It starts as a copy of the base entry and its own
   // keys replace the base's (top-level only, own "name" required, no own
   // "thinking_level") — e.g. openai/gpt-6-luna@xhigh sets only its name.
+  // openrouter_routing must not set "order": it turns off OpenRouter's sticky
+  // routing (x-session-id, llm.ts withSessionAffinity), so turns of one chat
+  // hop hosts and lose the prompt cache.
   // Parsed and validated at worker start (parseModelsConfig, core/src/models.js).
   "models": {
     "deepseek/deepseek-v4.1-flash-1017": {

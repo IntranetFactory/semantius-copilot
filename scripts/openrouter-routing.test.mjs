@@ -180,5 +180,43 @@ console.log('\n== anthropic cache_control (installed dist) ==');
   check('compat.cacheControlFormat "anthropic" -> cache_control breakpoints sent', hasCacheControl(fixed), JSON.stringify(fixed?.messages));
 }
 
+// --- 5. Sticky routing session header --------------------------------------
+// llm.ts withSessionAffinity: pi-ai sends the conversation's sessionId as
+// `x-session-id` on openrouter.ai base URLs only when
+// compat.sendSessionAffinityHeaders is set (detected false), so OpenRouter
+// keeps one chat on one host and its prompt cache.
+console.log('\n== x-session-id sticky routing (installed dist) ==');
+{
+  const piAiDir = realpathSync(fileURLToPath(new URL('../backend-b/node_modules/@earendil-works/pi-ai', import.meta.url)));
+  const { stream } = await import(pathToFileURL(join(piAiDir, 'dist', 'api', 'openai-completions.js')));
+  const placeholder = {
+    id: 'z-ai/glm-5.3', name: 'z-ai/glm-5.3', api: 'openai-completions',
+    provider: 'model-z-ai-glm-5.3', baseUrl: 'https://openrouter.ai/api/v1', reasoning: false,
+    input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192,
+  };
+  const sessionHeaderFor = async (model) => {
+    const seen = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      seen.push(new Headers(init.headers).get('x-session-id'));
+      return new Response(JSON.stringify({ id: 'x', choices: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      const context = { systemPrompt: 's', messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }], tools: [] };
+      try {
+        await stream(model, context, { apiKey: 'test-key', stream: false, maxTokens: 16, sessionId: 'conv-abc' }).result();
+      } catch {
+        /* see section 3 */
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    return seen[0];
+  };
+  check('no compat flag -> no x-session-id (the gap)', (await sessionHeaderFor(placeholder)) === null);
+  const sent = await sessionHeaderFor({ ...placeholder, compat: { sendSessionAffinityHeaders: true } });
+  check('compat.sendSessionAffinityHeaders -> x-session-id is the sessionId', sent === 'conv-abc', String(sent));
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);
 process.exit(failures === 0 ? 0 : 1);

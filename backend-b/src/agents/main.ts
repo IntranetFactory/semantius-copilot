@@ -689,3 +689,10 @@ export function Main({ id }: AgentProps) {
 // The generic multi-agent host: durable identity `main` (generated DO class
 // FlueMainAgent, wrangler migration v4) and the /agents/main mount name.
 Main.agentName = 'main';
+
+// One turn's wall-clock budget, retry attempts included (Flue stamps the
+// deadline once, when the input is applied). The store default of 1 hour cut
+// off a live MiMo build-and-deploy turn at 60:00 while it was still working:
+// 78 LLM calls, several of them 3–4.6 min each (README "Failed runs, stopped
+// runs, retry"). The user's ⏹ remains the way out of a genuinely stuck turn.
+Main.durability = { timeoutMs: 2 * 60 * 60 * 1000 };

@@ -52,6 +52,18 @@ function withAppHeaders<T extends { headers?: Record<string, string> }>(entry: T
   return { ...entry, headers: { ...(entry.headers ?? {}), ...OPENROUTER_APP_HEADERS } };
 }
 
+/** OpenRouter sticky routing (openrouter.ai/docs/features/prompt-caching):
+ * without a session id OpenRouter picks a host per request, and every host
+ * switch mid-chat loses the prompt cache (full-price input on every turn).
+ * Flue passes each conversation's persisted affinityKey as pi-ai's
+ * `options.sessionId`; pi-ai sends it as `x-session-id` on openrouter.ai base
+ * URLs only when this compat flag is set (detected false for every model).
+ * OpenRouter then pins the chat to the host of its first successful request
+ * until 10 minutes of inactivity. A routing `order` turns sticky routing off. */
+function withSessionAffinity<T extends { compat?: object }>(entry: T): T {
+  return { ...entry, compat: { ...(entry.compat ?? {}), sendSessionAffinityHeaders: true } };
+}
+
 function registerProvider(id: string, opts: { api?: string; baseUrl?: string; apiKey?: string }): void {
   const auth = {
     apiKey: {
@@ -64,7 +76,7 @@ function registerProvider(id: string, opts: { api?: string; baseUrl?: string; ap
     // Built-in provider: keeps its model catalog, overrides transport/auth.
     const models = openrouterProvider()
       .getModels()
-      .map((model) => withAppHeaders(opts.baseUrl ? { ...model, baseUrl: opts.baseUrl } : model));
+      .map((model) => withSessionAffinity(withAppHeaders(opts.baseUrl ? { ...model, baseUrl: opts.baseUrl } : model)));
     setProvider(createProvider({ id, auth, models, api: openAICompletionsApi() }));
     return;
   }
@@ -386,7 +398,7 @@ export function modelSpecifierFor(modelId?: string | null, webTools?: Record<str
       id,
       auth,
       models: [
-        withAppHeaders(
+        withSessionAffinity(withAppHeaders(
           withAnthropicCaching(
             withReasoning(
               withRouting(
@@ -413,7 +425,7 @@ export function modelSpecifierFor(modelId?: string | null, webTools?: Record<str
             ),
             model,
           ),
-        ),
+        )),
       ],
       api: model.dropToolCallText
         ? (withoutToolCallText(completionsApi, createAssistantMessageEventStream, [askUserQuestion.name]) as ProviderStreams)

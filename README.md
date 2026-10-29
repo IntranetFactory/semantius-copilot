@@ -870,6 +870,18 @@ via the model entry's `headers`, the title call explicitly), so OpenRouter's act
 shows the app as Semantius instead of unknown. The host that served each call (and its
 latency and throughput) is listed per request at openrouter.ai/activity.
 
+**Sticky routing (prompt cache across turns).** Without a session id OpenRouter picks a
+host per request, so turns of one chat hop hosts and each switch loses the prompt cache
+(full-price input every turn). Every OpenRouter model entry carries
+`compat.sendSessionAffinityHeaders: true` (llm.ts `withSessionAffinity`, on the built-in
+`openrouter` provider and every `model-<id>` provider). pi-ai then sends the conversation's
+`sessionId` (Flue's persisted per-conversation `affinityKey`) as `x-session-id`, and
+OpenRouter pins the chat to the host of its first successful request until 10 minutes of
+inactivity ([prompt-caching docs](https://openrouter.ai/docs/features/prompt-caching)).
+Subagent conversations have their own key, so they pin separately. A routing `order` turns sticky
+routing off, so no registry entry uses it. If the pinned host errors, the next turn re-routes.
+`scripts/openrouter-routing.test.mjs` asserts the header against the installed pi-ai dist.
+
 Mechanics (`backend-b/src/llm.ts`): the routing rides on the per-model `model-<id>`
 provider entry as pi-ai's `compat.openRouterRouting`, which its openai-completions API
 sends as `params.provider` unchanged — so it works for catalog-known models (full catalog
@@ -2073,6 +2085,19 @@ settlement — the reducer builds the settlement flavour of `agent.error` as
 `new Error(String(settlement.error.message))`, which `settlementErrorOf` mirrors, so a message
 match rules it out) render as `connection error — <message>` with a **Reconnect** button →
 `agent.refresh()`.
+
+**Turn timeout (`Main.durability`, 2 hours).** Flue fails a submission that is still running
+when its deadline arrives, with `run failed — Submission exceeded the configured timeout.` /
+`The operation ran longer than the configured durability timeout.` It stamps the deadline once,
+when the input is applied (`timeoutAt`), so crash-recovery attempts share the budget and do not
+reset it. The store default is 1 hour. That killed `sub_ik_2b8cefd2cb614272ab5747da020f84b1` in
+session `mimo-znyfd8jocloxuktcies8m2ch4mmac5g8-937581e5be0047b28c332fd6e2c8a509` (MiMo v2.6 Pro,
+"build and deploy it"). It was accepted at 22:58:20 and aborted at exactly 23:58:43 on 2026-10-28,
+still working: 78 LLM calls, the longest 276 s, with workspace backups every minute up to the end.
+The Retry finished the job in about 30 minutes, because the workspace already held most of it.
+The budget is now 2 hours (`backend-b/src/agents/main.ts`). It is a backstop, not a pacing tool:
+the user's ⏹ ends a stuck turn. `pnpm logs:query --grep <submission id>` shows the timeout line;
+`scripts/llm-audit.mjs <session>` shows how the hour was spent.
 
 `scripts/run-outcome.test.mjs` (part of `pnpm test`) covers the derivation over the real
 session's shape plus aborted / completed / older-failed / unanchored / pending-echo / joined
