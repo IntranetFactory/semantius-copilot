@@ -182,9 +182,11 @@ const target = (t: string) => perEntity[t]?.target ?? COUNT;
 // "yes → 10 each" so often came back short). A `for i < target` loop makes the count STRUCTURAL: it cannot
 // emit fewer. The DATA is still yours to author: each row is one plausible record, drawn by the table's
 // seeded generator from pools YOU fill with real domain values, with every field that must agree with
-// another derived from the same driver. See "Records, not fields" below the block.
+// another derived from the same driver. Open each table with a `// Drivers:` line naming each driver and
+// the fields derived from it, before the loop body is written. See "Records, not fields" below the block.
 
 // --- accounts ---
+// Drivers: the name (→ email, website) and the place (→ city, state, postal_code, phone area code).
 // No country field on accounts or on anything they belong to → US places. A place carries everything that
 // must agree with its city; the street name comes from the country's pool (here US), the house number is drawn.
 const places = [
@@ -238,6 +240,7 @@ assertSeedDistinct("accounts", accountRows, ["city"]);
 assertSeedDistinct("accounts", streetNames.map((s) => ({ street_name: s })), ["street_name"]);   // the name, not the house number
 
 // --- contacts (FK → accounts) ---
+// Drivers: the person (→ contact_name, email local part) and the account dealt to it (→ account_id, email domain).
 // A contact belongs to an account: its email domain comes from that account.
 const firstNames = ["Jane", "Carlos", "Mei", "Tom", "Aisha", "Liam", "Sofia", "Raj", "Nina", "Omar", "Grace", "Daniel"];
 const lastNames  = ["Smith", "Reyes", "Chen", "Becker", "Khan", "Murphy", "Rossi", "Patel", "Novak", "Haddad", "Okafor", "Lindqvist"];
@@ -280,6 +283,7 @@ The loop fixes only the *count*; it calls no LLM at runtime. Each row is one pla
   - `r.tuples(n, [poolA, poolB])`: `n` distinct combinations with both parts spread (first + last name, two-word names). It throws when the pools cannot give `n`; add pool entries.
 - **Every enum is dealt: `r.deal(values, n)`**, so every §5 value appears once there are at least as many rows as values, in shuffled order, and two enums of the same length never move in step. Repeat a value in the pool to weight the mix (`["active", "active", "active", "on_hold", "churned"]`). Fields that depend on the state are derived from it (example below).
 - **FK parents are dealt too: `r.deal(parentRows, n)`**, so every parent gets a child before any gets a second, and fields a child takes from its parent (company, city) stay as varied as the parents.
+- **Text that names another record comes from the parent dealt to the row.** A summary, title or description that mentions a parent (an offer's summary naming its job opening, a ticket title naming its asset) is composed in the loop body from `parents[i]`, the same row that gives the FK id, never drawn from a pool of its own: two independent draws give rows that each read right and name the wrong parent.
 - **No base + index in anything a person reads.** A house number, postal code, phone, suite, amount or date is never `100 + i`, `10000 + i`, `555-01${i}` or `days(-7 * i)`. Draw it (`r.int(1, 2400)`, the place's postal list, `555-01` + `r.int(0, 99)`). The row index shows only in code-like fields, through `uniq` (`account_code`, `sku`, `invoice_number`).
 - **Addresses come from a place.** A place carries everything that must agree with its city: city, state or region, country, its postal codes, and the phone area code. Pick the place, take the postal code from its own list, the region and country from the place, and build the phone on its area code. The street name comes from a pool of at least 8 names for the place's country, dealt over the rows (`r.deal(streets, n)`) so the names spread before any repeats; one pool serves every city of that country. The house number is drawn (`r.int(1, 2400)`). When the model keeps the house number in its own field, it goes there and the street field holds the name only.
   - **US or international.** When neither the entity nor any record it belongs to has a country field, every place is in the US (five-digit ZIP, two-letter state). When there is a country field, the places span several countries, each in its own real format (Germany: `10115 Berlin`, Berlin; UK: `London EC1A 1BB`; France: `75008 Paris`), and the country written is a value the field allows: its §5 enum value, or a real id read from the countries table. The street follows the country too: each country has its own pool of street names, and the house number stands where that country puts it (US: `1432 Market Street`; UK: `12 High Street`; Germany: `Hauptstraße 12`; Netherlands: `Kerkstraat 5`; France: `12 rue Victor Hugo`). Deal each country's pool over that country's rows, and guard the street names across the whole table.

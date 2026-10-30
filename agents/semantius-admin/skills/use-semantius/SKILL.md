@@ -9,7 +9,9 @@ description: >-
   tables; run analytical queries across Semantius data; get a web UI link
   (deep link) to a record, list, or module; or send transactional emails via
   the Semantius email service (`crud sendEmail`). Also trigger when
-  writing shell scripts or Bun scripts that chain semantius commands.
+  writing shell scripts or Bun scripts that chain semantius commands, and on
+  any request containing `[blank]` (a sample prompt the user has not filled in,
+  e.g. "which fields are in [blank]").
 ---
 
 # use-semantius Skill
@@ -72,6 +74,9 @@ Understanding which layer you're working with determines which tools to use:
 
 ## Quick Decision Guide
 
+**The request contains `[blank]`?**
+→ Ask before anything else, see "Unfilled `[blank]` placeholders" below. Run nothing until every blank is filled
+
 **Managing schema, create/modify entities, fields, modules?**
 → Layer 1, read `references/data-modeling.md`, follow mandatory creation order
 
@@ -113,6 +118,19 @@ Understanding which layer you're working with determines which tools to use:
 
 **A baked recipe (e.g. from a `semantius-skill-maker`-generated skill) hit an unexpected 409/422 and you suspect schema drift?**
 → Live introspect with `read_entity` / `read_field`, see `references/data-modeling.md` § "Runtime schema introspection (live FK / shape lookup)". Do not silently adapt the recipe; abort, surface the drift, recommend regenerating the domain skill.
+
+---
+
+## Unfilled `[blank]` placeholders
+
+The plugin's sample prompts use `[blank]` where the user puts a name from their own instance ("which fields are in [blank]", "add permission [blank] to solution [blank]"). The token `[blank]`, in any case, is a blank the user did not fill.
+
+1. **Never fill it yourself.** Do not guess it from context, even when only one candidate fits. Do not put it in a `semantius` command. Run nothing, not even a read of business data, until every blank is filled. The only calls allowed before then are the catalog reads that list the options (step 4).
+2. **Work out each blank's kind from the word next to it.** "solution [blank]" is a module, "permission [blank]" a permission, "role [blank]" a role, "field [blank]" a field, "user [blank]" a user. Any other blank ("fields in [blank]", "how many [blank]", "states of [blank]") is an entity.
+3. **Ask about containers first.** Settle the solution before a permission, role or entity in it, and the entity before a field of it. Each answer narrows the next list.
+4. **Offer the user's own names as a list.** Read the candidates from the live catalog and offer them in catalog order, by display label: a module's `module_name`, an entity's `plural_label`, a field's `title`, a permission's or role's `description`. Never show a `table_name`, slug or `module:action` name. Offer up to 4 options, plus a free-text slot for anything else. Never ask "do you mean X?" about a single candidate, and never hint which option fits. When the request creates something new ("add permission [blank]"), that blank is a new name: ask for it as free text once its container is known.
+5. **Ask in plain words.** "Which solution?", "Which kind of record?", "What should the new permission be called?" Never use internal terms such as entity, table or module. One question per blank. If you cannot call a tool that asks the user a question and waits for the answer, ask in chat and wait for the reply.
+6. **Then run it.** Once every blank is filled, restate the full request in one line ("Adding the permission Close tickets to the Service Desk solution.") and run it under the Golden Rules below.
 
 ---
 

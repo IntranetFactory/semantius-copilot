@@ -27,7 +27,7 @@ description: >-
 
 - Do NOT start this skill, or any of its stages, in an agent that another agent started to run on its own (a background worker, subagent, executor, or Task). Those agents cannot ask the user questions, so they cannot run this skill correctly. Running in the cloud is fine when the user is talking to that agent directly.
 - Do NOT write a delegation prompt that tells another agent to run this skill, "build and deploy end to end", or "make the decisions yourself".
-- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the question-format step of the shared preflight.
+- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the question-format step of the shared preflight. For dot, OpenAI's personal assistant, and other similarly limited tools without a supported interactive question tool, do not stop: read `references/dot-questions.md`, ask questions in chat, and wait for the user's reply before continuing.
 - An agent's general habit of delegating long or multi-step work does not apply here. This rule overrides it.
 
 **What may be delegated:** only steps that ask nothing and change nothing the user has not confirmed.
@@ -314,7 +314,14 @@ It is not a scope flag: no `Q:` task, no widget.
 
 In a fast run, read [`references/fast-flow.md`](./references/fast-flow.md) now and again after a context reset. The design step ends with one go-ahead question; after a yes, no sub-skill asks anything until the modeler's closing sample-data question, because the user approved the whole build at once, every further stop breaks that promise, and the closing summary is their review. When the user answers the go-ahead, write the marker into your pipeline tasks' descriptions (`fast: go-ahead given` / `fast: guided flow for this build`; `references/fast-flow.md`, section 3). Before entering the analyst, and again before the modeler, read the marker in your pipeline task's description (`TaskGet`): `fast: go-ahead given` means pass `Interaction flow: fast`; `fast: guided flow for this build` (the user chose "Ask me along the way") means pass `guided`.
 
-**Exit check (fast flow).** Before the modeler's closing message goes out, check its draft for (a) `[Open <System Name> in Semantius →](<ui_baseurl>/<module_slug>)`, (b) the download link to the deployed spec, and (c) the sample-data question, unless the user already answered it. Add whatever is missing, per the modeler's Closing Contract. Write `log_diag "fast: close-out verified"` in the response before the closing message (the one that completes the Verify task), because the closing message has no tool call after its text.
+**Exit check (fast flow).** Before the modeler's closing message goes out, scan the closing block of the assembled draft (the lines after the `---`) and **count**, per the modeler's Closing Contract:
+
+- **Absolute URLs:** none outside the Open link, `[Open <System Name> in Semantius →](<ui_baseurl>/<module_slug>)`, and the spec download line. The download line's link form is the environment's, so the gate doesn't judge it.
+- **Link targets:** the Open link's URL is exactly `<ui_baseurl>/<module_slug>` (the `ui_baseurl` read at setup), and its text names the System Name. The download line hands over the deployed spec, `<system_slug>-semantic-spec.md` (the `Input artifact:` file, after Stage 5b), and no other file. Check both in the response that logs `fast: close-out verified`.
+- **File download links:** exactly 1 in a fast run, exactly 0 in guided or expert flow. 2 or more fails, whatever the extra files are.
+- **The sample-data question:** present and unanswered, unless the user already answered it.
+
+A failure is not a wording problem to be smoothed over. Delete an extra line, correct a line whose target is wrong, add a missing one (the Open link, the spec download line in a fast run, the sample-data question unless it was answered), re-scan, then send. The count is the gate; presence alone is not. Write `log_diag "fast: close-out verified"` in the response before the closing message (the one that completes the Verify task), because the closing message has no tool call after its text.
 
 ### Presenting the plan
 

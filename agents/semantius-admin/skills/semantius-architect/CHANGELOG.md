@@ -8,6 +8,14 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Empty-section rule names the RACI trio
+
+2026-10-29. The template's empty-section rule listed only the §3 sub-blocks and `**Key types:**` as left out when empty, while §9 says the RACI trio is absent outside `raci`, so the two read as a conflict. Rules: `references/semantic-blueprint-template.md` ("Empty-section convention").
+
+1. **The RACI trio (RACI realization, Processes wired, §9.2 functional ownership) is an omit exception**: absent under every access level other than `raci` unless inherited, never a `_(none: …)_` placeholder.
+
+---
+
 ## Checker: write-time refusals on specs
 
 2026-10-29. Three spec mistakes reached deploy and halted it there, where each costs a fix and a re-run instead of one edit before saving. Rules: `references/consistency-check.ts` (spec checks `reserved field name`, `label parent`, `validation rules`); the analyst's pre-save table.

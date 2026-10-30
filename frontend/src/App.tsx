@@ -531,7 +531,7 @@ type Detail =
  * https console, but the hidden-textarea path keeps copy working when it isn't,
  * and a rejected copy says "Copy failed" rather than silently doing nothing.
  */
-function CopyableValue({ text, tone = 'dark' }: { text: string; tone?: 'dark' | 'light' }) {
+function useCopy() {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   useEffect(() => {
@@ -540,7 +540,7 @@ function CopyableValue({ text, tone = 'dark' }: { text: string; tone?: 'dark' | 
     return () => window.clearTimeout(timer);
   }, [state]);
 
-  const copy = async () => {
+  const copy = async (text: string) => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
@@ -560,6 +560,13 @@ function CopyableValue({ text, tone = 'dark' }: { text: string; tone?: 'dark' | 
       setState('failed');
     }
   };
+
+  return [state, copy] as const;
+}
+
+function CopyableValue({ text, tone = 'dark' }: { text: string; tone?: 'dark' | 'light' }) {
+  const [state, copyText] = useCopy();
+  const copy = () => copyText(text);
 
   const label = state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy to clipboard';
 
@@ -792,17 +799,34 @@ function RawSession({
     };
   }, [apiKey, sessionId]);
 
+  // The conversation's `messages` array on its own — the part usually pasted
+  // elsewhere (a repro, a prompt eval) without the session index around it.
+  const messages = (conversation as { messages?: unknown } | undefined)?.messages;
+  const [copyState, copy] = useCopy();
+
   return (
-    <CopyableValue
-      text={JSON.stringify(
-        {
-          sessionIndex: session,
-          conversation: error ? { error } : conversation ?? '(loading…)',
-        },
-        null,
-        2,
-      )}
-    />
+    <div>
+      <div className="rawbar">
+        <button
+          type="button"
+          className="linkbtn"
+          disabled={!Array.isArray(messages)}
+          onClick={() => copy(JSON.stringify(messages, null, 2))}
+        >
+          {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy messages array'}
+        </button>
+      </div>
+      <CopyableValue
+        text={JSON.stringify(
+          {
+            sessionIndex: session,
+            conversation: error ? { error } : conversation ?? '(loading…)',
+          },
+          null,
+          2,
+        )}
+      />
+    </div>
   );
 }
 

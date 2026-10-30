@@ -8,6 +8,29 @@ Entries below are newest first.
 
 ---
 
+## The closing block hands over the spec only
+
+2026-10-29. In an ATS fast run the closing block carried "Download the ATS design" next to "Download the ATS spec", although the spec the same run produced had already superseded the design. The Closing Contract said what belonged in the block but not that nothing else may be added, and the exit check could only fail on a missing line, so an extra one passed. Rules: `SKILL.md`, "Closing Contract: clean and sticky"; `../semantius-admin/SKILL.md`, "Exit check (fast flow)"; `../semantius-admin/references/fast-flow.md`, section 6.
+
+1. **The closing block is a closed set:** the status line, the Open link, the spec download (fast runs only), the sample-data question, and nothing else. Guided and expert flow carry the status line, the Open link and the question.
+2. **The spec is the only file handed over.** No download line for the design document, the deploy script, the run log or any other file, and no "for reference" line. The design document is linked only when the user asks for it, in a later turn, once. The contract outranks the general habit of handing over every file produced.
+3. **The exit check counts instead of checking presence,** over the lines after the `---`: no absolute URLs outside the Open link and the spec download line (whose link form is the environment's and is not judged); exactly 1 file download link in a fast run, 0 in guided or expert flow; the sample-data question present unless already answered.
+4. **The exit check also checks link targets:** the Open link's URL is exactly `<ui_baseurl>/<module_slug>` with the System Name in its text, and the download line hands over `<system_slug>-semantic-spec.md`, the deployed spec, and no other file.
+5. **A failure is fixed before sending:** an extra line is deleted, a line with a wrong target is corrected, a missing Open link, spec download line or sample-data question is added, and the block is re-scanned.
+
+---
+
+## Label columns fixed by one call; seed text from the row's parent
+
+2026-10-29. Every create was followed by a hand-written label-column pass (title, description, `catalog_field_code`, input type, uniqueness), and the check run halted on it: a recorded `create_entity` did not record the label column the platform creates, so the post-create read found nothing. In a seed, offer summaries were drawn from their own pool while the job-opening link was dealt separately, so eight rows named the wrong opening. Rules: `references/scaffold-lib.ts` (`syncLabelColumns`), `references/deploy-lib.ts` (check run), `references/deploy-script-template.md` (helper table, step 4), `references/stage-1-parse.md` (label-column notes), `references/stage-4-execute.md` (4c), `references/stage-6-sample-data.md` (script pattern, "Records, not fields"), SKILL.md (committed resources).
+
+1. **`syncLabelColumns(labelColumns)` runs the label-column post-create pass** after the fields pass: one read, then one `update_field` per label column that differs from its §3 row. A re-run sends nothing.
+2. **In a check run, a recorded `create_entity` also records its label column field** as the platform creates it, so later reads find it.
+3. **Each seeded table opens with a `// Drivers:` line** naming each driver and the fields derived from it.
+4. **Text that names another record is composed from the parent dealt to the row**, the same row that gives the FK id, never from a pool of its own.
+
+---
+
 ## Sample data: re-run-safe by default where a table has a unique field
 
 2026-10-29. A seed script that halted partway could not be re-run: every table went in with `postMany`, a bare insert, so the tables that had landed were inserted twice, and the recovery was to inspect and finish or clear by hand. Rules: `references/stage-6-sample-data.md` (script pattern, "Re-running the seed (idempotency)").

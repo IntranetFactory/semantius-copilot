@@ -8,11 +8,11 @@
     //"z-ai/glm-5.3",
     "deepseek/deepseek-v4.1-flash-1017",
     "deepseek/deepseek-v4.1-flash-1017@max",
-    "openai/gpt-6-luna",
-    "openai/gpt-6-luna@xhigh",
+    //"openai/gpt-6-luna",
+    //"openai/gpt-6-luna@xhigh",
     "meta/muse-spark-1.3-contributor",
     "meta/muse-spark-1.3-contributor@max",
-    "xiaomi/mimo-v2.6-pro",
+    "xiaomi/mimo-v2.6-pro"
     // "anthropic/claude-haiku-5.5@high",
     // "anthropic/claude-haiku-5.5@xhigh",
     // "anthropic/claude-haiku-5.5@max"

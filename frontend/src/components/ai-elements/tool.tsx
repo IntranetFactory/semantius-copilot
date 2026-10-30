@@ -238,8 +238,9 @@ export const ToolCallGroup = ({ parts, latest, caption, className }: ToolCallGro
   // to. The tool name stays in the line (as on the live line) because not every
   // call carries a plain-language description — a path, a `Q:` subject or
   // `#3 → completed` on its own would not read as a sentence. A failure keeps
-  // the failure label below: the count + red icon must not be traded for a
-  // summary.
+  // the plain total ("17 tool calls" — no separate failed count; the red icon
+  // and the auto-opened rows already mark which call failed) and must not be
+  // traded for a summary.
   const latestSettled =
     latest && !active && errorCount === 0 ? parts.at(-1) : undefined;
   // The line names what is happening, not just which tool: while a call is
@@ -261,7 +262,7 @@ export const ToolCallGroup = ({ parts, latest, caption, className }: ToolCallGro
       ? `Awaiting approval · ${toolName(active)}`
       : `Running ${toolName(active)}${summary ? "" : "…"}`
     : errorCount > 0
-      ? `${parts.length} tool call${parts.length === 1 ? "" : "s"} · ${errorCount} failed`
+      ? `${parts.length} tool call${parts.length === 1 ? "" : "s"}`
       : latestSettled
         ? `Ran ${toolName(latestSettled)}`
         : single

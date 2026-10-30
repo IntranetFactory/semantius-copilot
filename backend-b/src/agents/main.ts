@@ -694,5 +694,7 @@ Main.agentName = 'main';
 // deadline once, when the input is applied). The store default of 1 hour cut
 // off a live MiMo build-and-deploy turn at 60:00 while it was still working:
 // 78 LLM calls, several of them 3–4.6 min each (README "Failed runs, stopped
-// runs, retry"). The user's ⏹ remains the way out of a genuinely stuck turn.
-Main.durability = { timeoutMs: 2 * 60 * 60 * 1000 };
+// runs, retry"). 2 hours then cut off another one mid-deploy, after a sandbox
+// runtime update had eaten 19 min of it. The user's ⏹ remains the way out of a
+// genuinely stuck turn.
+Main.durability = { timeoutMs: 3 * 60 * 60 * 1000 };

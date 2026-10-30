@@ -87,6 +87,8 @@ button { cursor: pointer; } /* kept global; harmless to ai-elements' own buttons
    top-right corner rather than the text flow, so it stays reachable while a long
    payload scrolls inside the <pre>; the extra padding-right keeps text from
    running underneath it. */
+.rawbar { display: flex; justify-content: flex-end; margin-bottom: 0.25rem; }
+.rawbar .linkbtn:disabled { color: #a0aec0; text-decoration: none; cursor: default; }
 .rawblock { position: relative; }
 .rawblock > pre { padding-right: 2.6rem; }
 .copybtn { position: absolute; top: 0.5rem; right: 0.5rem; display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem; padding: 0; border-radius: 6px; border: 1px solid rgba(226, 232, 240, 0.22); background: rgba(226, 232, 240, 0.1); color: #e2e8f0; }

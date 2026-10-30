@@ -185,7 +185,16 @@ The modeler's Stage 5 verification report ends with this section, **before** the
 >
 > Say "change" and what you want different to revisit any of these.
 
-Lines that touch other modules come first, then the rest grouped by skill. Leave out the "Changes to other modules" group when it is empty, and the whole section when the log is missing or empty. The Closing Contract follows: the status line, the link, a download link to the deployed spec (fast runs only, in the form this agent's environment offers for downloads, per the modeler's Closing Contract), and the demo-data question, which is asked and waits. Before that message goes out, the admin checks it for the link, the spec download link and the demo-data question (unless it was already answered), adds any that are missing, and logs `fast: close-out verified` (exit check, [`../SKILL.md`](../SKILL.md), "Fast flow").
+Lines that touch other modules come first, then the rest grouped by skill. Leave out the "Changes to other modules" group when it is empty, and the whole section when the log is missing or empty. The Closing Contract follows: the status line, the link, a download link to the deployed spec (fast runs only, in the form this agent's environment offers for downloads, per the modeler's Closing Contract), and the demo-data question, which is asked and waits. Nothing else goes in that block: the spec is the only file the run hands over.
+
+Before that message goes out, the admin scans the closing block of the assembled draft (the lines after the `---`) and **counts**:
+
+- **Absolute URLs:** none outside the Open link and the spec download line. The download line's link form is the environment's, so the gate doesn't judge it.
+- **Link targets:** the Open link's URL is exactly `<ui_baseurl>/<module_slug>` (the `ui_baseurl` read at setup), and its text names the System Name. The download line hands over the deployed spec, `<system_slug>-semantic-spec.md` (the `Input artifact:` file, after Stage 5b), and no other file. Check both in the response that logs `fast: close-out verified`.
+- **File download links:** exactly 1 in a fast run, exactly 0 in guided or expert flow. 2 or more fails, whatever the extra files are.
+- **The sample-data question:** present and unanswered, unless the user already answered it.
+
+A failure is not a wording problem to be smoothed over. Delete an extra line, correct a line whose target is wrong, add a missing one (the Open link, the spec download line in a fast run, the sample-data question unless it was answered), re-scan, then send. The count is the gate; presence alone is not. Then it logs `fast: close-out verified` (exit check, [`../SKILL.md`](../SKILL.md), "Fast flow").
 
 On a halt, the admin's failure report (Step 6.8) adds one line after the halt message: *"Before it stopped, I decided N things for you; they're listed in the run folder."* (the run-folder path is already printed on a failed run).
 

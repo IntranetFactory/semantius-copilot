@@ -45,7 +45,7 @@
  *
  * Import it next to deploy-lib.ts:
  *   import { read1, write, runDeploy } from "./deploy-lib";
- *   import { scaffoldModule, verifyScaffold, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
+ *   import { scaffoldModule, syncLabelColumns, verifyScaffold, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
  * and copy `lucide-icon-tags.json` next to it (the icon check reads it).
  *
  * `verifyScaffold(cfg)` is the executable self-audit: pass the SAME config back
@@ -738,6 +738,49 @@ export async function verifyEntities(
   }
   throwIfFailed(f, "verifyEntities", "entity / field");
   return f;
+}
+
+// ──────────────────────────── label-column post-create pass ─────────────────
+
+/** The §3 label-column row of one entity (the field `create_entity` creates); none for a based entity or a junction without one. */
+export interface LabelColumnExpect {
+  table_name: string; field_name: string;   // the §3 **Label column:**
+  title: string;                            // the row's §3 Label
+  description?: string;                     // the row's §3 description; sent only when non-empty
+  input_type: "required" | "default" | "disabled";   // "disabled" when computed_fields names it, else from §3 Required
+  unique_value?: boolean;                   // the row's §3 `unique` marker
+}
+
+/**
+ * The post-create pass on every label column (modeler Stage 1, "Title correction" and the three
+ * notes after it): `create_entity` creates the field with a title derived from `singular_label`,
+ * `input_type: "required"`, no description, no `catalog_field_code` and no DB uniqueness. One
+ * read for every table, then one `update_field` per label column that differs from its row:
+ * `title`, `description` (when the row has one), `catalog_field_code` = `field_name` (only while
+ * live is empty: write-once), `input_type`, and `unique_value: true` (when marked). Diffed
+ * against live, so a re-run sends nothing. Throws when a label column is not found live. Run it
+ * after the fields pass, before the rules:
+ *
+ *   await syncLabelColumns([{ table_name: "contracts", field_name: "contract_number",
+ *     title: "Contract Number", description: "…", input_type: "required", unique_value: true }]);
+ */
+export async function syncLabelColumns(rows: LabelColumnExpect[]): Promise<void> {
+  if (!rows.length) return;
+  const live = new Map((await readIn("read_field", "table_name", rows.map((r) => r.table_name)))
+    .map((x) => [`${x.table_name}.${x.field_name}`, x] as const));
+  const missing = rows.map((r) => `${r.table_name}.${r.field_name}`).filter((id) => !live.has(id));
+  if (missing.length) throw new Error(`syncLabelColumns: label column(s) not found live: ${missing.join(", ")}`);
+  for (const r of rows) {
+    const id = `${r.table_name}.${r.field_name}`;
+    const l = live.get(id)!;
+    const data: Record<string, unknown> = {};
+    if (String(l.title ?? "") !== r.title) data.title = r.title;
+    if (r.description && String(l.description ?? "") !== r.description) data.description = r.description;
+    if (!l.catalog_field_code) data.catalog_field_code = r.field_name;
+    if (String(l.input_type ?? "") !== r.input_type) data.input_type = r.input_type;
+    if (r.unique_value && !l.unique_value) data.unique_value = true;
+    if (Object.keys(data).length) await write("update_field", { id, data }, `label column ${id}`);
+  }
 }
 
 // ──────────────────────────── deploy-version stamp (Stage 5b) ─────────────────

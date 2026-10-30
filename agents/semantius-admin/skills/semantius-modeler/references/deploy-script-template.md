@@ -57,6 +57,7 @@ DEPLOY_CHECK=1 bun run .tmp_deploy/deploy_<slug>.ts && bun run .tmp_deploy/deplo
 | `scaffoldModule(cfg)` | the entire baseline scaffold (module + permissions + hierarchy + roles + the six module-record references + provenance) in one idempotent call | self-preflights its tools' field names (every create it issues plus the `update_module` reference keys); returns `{moduleId, permissionNames: {read, manage, admin?}, roleIds}` (permissions are keyed by name, so there are no permission ids); `scope: "basic"` skips the admin tier. Stamped `SCAFFOLD_LIB_MAJOR = 6` |
 | `preflightSchemas({tool: [keys]})` | assert your hand-authored payloads' field names against the LIVE tool schema before writing | throws naming the available keys (kills the `name`-vs-`role_name` class) |
 | `checkEnumIcons(table, field, entries)` / `iconFindings` | the icon check on every enum field the script creates or updates, before `mergeEnumEntries` | against the bundled Lucide list (`lucide-icon-tags.json`, copied next to it): `none` and an unknown name become `""`, so no invalid name is ever sent; each unknown name is recorded in `iconFindings`. `scaffoldModule` checks the module's `icon_name` the same way: an unknown name is deployed as `box` and recorded |
+| `syncLabelColumns(labelColumns)` | the post-create pass on every label column (Stage 1, "Title correction" and the notes after it), right after the fields pass | one read, then one `update_field` per label column that differs: §3 title, description (when non-empty), `catalog_field_code` (only while empty), `input_type` (`"disabled"` for a computed label column), `unique_value: true` (when marked). A re-run sends nothing; throws when a label column is not found live. In a check run the label column `create_entity` would create is there to read. |
 | `verifyScaffold(cfg)` | the executable self-audit — re-reads live and asserts the Stage 5 scaffold checks as code | returns findings for the report; **throws on any drift**, so run as the last step inside `runDeploy` and a failed audit halts the deploy |
 | `verifyEntities(entityExpect, fieldExpect)` | the executable Stage 5 areas 5, 5a and 6 for the entities and fields: label column, owning module, label parent, key type, provenance, `unique_value`, enum entries, FK targets, reserved names, byte-for-byte labels / titles / descriptions, `select_rule` / `input_type_rule` | three reads in all; returns findings for the report and **throws on any mismatch** (a `select_rule` / `input_type_rule` mismatch is a warning: Stage 5 offers a retry); run it right after `verifyScaffold`. A halt here gets one silent re-run of the same command before it is reported (`stage-5-verify.md`, area 5). Pass the entity rows plus the `label_parent` / `select_rule` set later, and per table the field rows as sent plus the label column's §3 title and description, `created: true` on the rows this run created |
 
@@ -65,7 +66,7 @@ DEPLOY_CHECK=1 bun run .tmp_deploy/deploy_<slug>.ts && bun run .tmp_deploy/deplo
 ```typescript
 // .tmp_deploy/deploy_<slug>.ts
 import { read1, readMany, readIn, write, ensure, ensureMany, ensureFields, ensureEntitiesByLevel, ensurePairs, updateEntity, runDeploy } from "./deploy-lib";
-import { scaffoldModule, verifyScaffold, verifyEntities, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
+import { scaffoldModule, syncLabelColumns, verifyScaffold, verifyEntities, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
 
 // enum_values: merge the spec's §5 entries with the live entries BY VALUE before diffing or sending (diffField
 // uses it for every existing enum field). The spec's order, values, labels and stated hints win; a hint the spec
@@ -182,11 +183,12 @@ runDeploy(async () => {
       if (Object.keys(patch).length) await write("update_field", { id: `${t}.${f.field_name}`, data: patch });
     }
   }
-  //    Same data for several fields → ONE id-array call, e.g. the label columns that carry the `unique` marker:
-  if (uniqueLabelIds.length) await write("update_field", { id: uniqueLabelIds, data: { unique_value: true } });
-  //    Each auto-created label column then gets ONE post-create update_field carrying what create_entity did not set:
-  //    the §3 title (when it differs), the §3 description (when non-empty), and catalog_field_code = its field_name.
-  //    When diffing JSON columns (computed_fields, validation_rules, select_rule, input_type_rule) against live, compare
+  //    The label columns create_entity made: what it did not set (§3 title, description, catalog_field_code,
+  //    input_type, unique_value), diffed against live, one update_field per label column that differs.
+  //    labelColumns: one row per entity with a §3 Label column (none for a based entity or a junction without one);
+  //    input_type "disabled" when computed_fields names it, else from §3 Required.
+  await syncLabelColumns(labelColumns);
+  //    Same data for several fields → ONE id-array call. When diffing JSON columns (computed_fields, validation_rules, select_rule, input_type_rule) against live, compare
   //    STRUCTURALLY with object keys sorted: jsonb reorders keys, so a raw JSON.stringify compare always reports drift.
 
   // 5. Rules + Spine pass — computed_fields / validation_rules (4e) and select_rule / input_type_rule (4f) via

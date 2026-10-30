@@ -49,7 +49,10 @@ export const writes = (): number => writeCount;
 // every write checked and recorded but NEVER sent: reads still go to live, and the
 // rows a create would have added are kept in memory and returned by later reads
 // that match them (`eq.`, `in.()` and `is.null` filters), so `ensure*` re-reads,
-// FK ids and the next stage behave as on a real run. A script error (an undefined
+// FK ids and the next stage behave as on a real run. A recorded `create_entity`
+// also records the label column field the platform creates with the entity (title
+// from `singular_label`, `input_type: "required"`, no description, no
+// `catalog_field_code`), so the post-create read of it finds it. A script error (an undefined
 // helper, a wrong payload shape, a field row without `table_name`) halts the dry
 // run before anything reached the platform. Updates to rows that already exist
 // live are not reflected in later reads, and `verifyScaffold` /
@@ -145,6 +148,14 @@ function dryWrite(tool: string, payload: any, label: string): any {
       ...r, id: r.id ?? (tool === "create_field" ? `${r.table_name}.${r.field_name}` : -(++dryId)),
     }));
     store.push(...out);
+    if (tool === "create_entity") {   // the platform creates the label column field with the entity
+      const fields = dryRows.get("read_field") ?? [];
+      dryRows.set("read_field", fields);
+      for (const r of out) if (r.label_column) fields.push({
+        id: `${r.table_name}.${r.label_column}`, table_name: r.table_name, field_name: r.label_column, format: "text",
+        title: r.singular_label ?? "", description: "", catalog_field_code: "", input_type: "required", unique_value: false,
+      });
+    }
   } else {
     const keyCol = payload.permission_name !== undefined ? "permission_name" : payload.id !== undefined ? "id" : "table_name";
     const keys = new Set([payload[keyCol]].flat().map(String));

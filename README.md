@@ -2086,7 +2086,7 @@ settlement — the reducer builds the settlement flavour of `agent.error` as
 match rules it out) render as `connection error — <message>` with a **Reconnect** button →
 `agent.refresh()`.
 
-**Turn timeout (`Main.durability`, 2 hours).** Flue fails a submission that is still running
+**Turn timeout (`Main.durability`, 3 hours).** Flue fails a submission that is still running
 when its deadline arrives, with `run failed — Submission exceeded the configured timeout.` /
 `The operation ran longer than the configured durability timeout.` It stamps the deadline once,
 when the input is applied (`timeoutAt`), so crash-recovery attempts share the budget and do not
@@ -2095,7 +2095,13 @@ session `mimo-znyfd8jocloxuktcies8m2ch4mmac5g8-937581e5be0047b28c332fd6e2c8a509`
 "build and deploy it"). It was accepted at 22:58:20 and aborted at exactly 23:58:43 on 2026-10-28,
 still working: 78 LLM calls, the longest 276 s, with workspace backups every minute up to the end.
 The Retry finished the job in about 30 minutes, because the workspace already held most of it.
-The budget is now 2 hours (`backend-b/src/agents/main.ts`). It is a backstop, not a pacing tool:
+The budget was raised to 2 hours, and 2 hours then cut off
+`sub_ik_e2dd315cecc2e53a7e09b03c89f800fb` (session
+`mimo-znyfd8jocloxuktcies8m2ch4mmac5g8-d388d67dd9c44194916468b92bcae8f5`, ATS build-and-deploy)
+at 19:10:54 on 2026-10-29, with its last `bun run .tmp_deploy/deploy_ats.ts` still in flight. A
+19-minute deploy command in that turn had been cut off by `sandbox.exec was interrupted while
+the platform was updating the sandbox runtime`, so it had to be read back and re-run. The budget
+is now 3 hours (`backend-b/src/agents/main.ts`). It is a backstop, not a pacing tool:
 the user's ⏹ ends a stuck turn. `pnpm logs:query --grep <submission id>` shows the timeout line;
 `scripts/llm-audit.mjs <session>` shows how the hour was spent.
 

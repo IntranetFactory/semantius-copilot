@@ -8,6 +8,15 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## RACI lines absent outside raci; concrete icon queries first
+
+2026-10-29. Stage 9.5 said to write the RACI realization as a `_(none: …)_` placeholder under every access level other than `raci`, while the template, the pre-save table and the optimizer leave it out; the checker reads any `**RACI realization:**` line as a RACI matrix, so following Stage 9.5 failed the save. The icon rule made the first query the enum's meaning plus the entry's (`"invoice paid"`), which matches no Lucide icon, so icon search took a second round. Rules: `references/stage-9-governance.md` (access-level short-circuit), `references/semantic-spec-template.md` ("Empty-section convention"), `references/stage-4-fields.md` ("Enum values, labels and hints", rule 3).
+
+1. **Outside `raci`, the RACI mode, RACI realization and RACI plan lines are absent**, never a placeholder; **Processes** and §9.2 keep their `_(none: …)_` placeholders.
+2. **Icon queries start with what the icon would show**, an object plus a mark or an action (`"banknote check"`, `"user search"`); the enum-plus-entry query comes last.
+
+---
+
 ## Pre-save: write-time refusals checked
 
 2026-10-29. Rules: SKILL.md, pre-save table (rows "Validation-rule identity", "No reserved field names", "Label parent is a link"); checks in `../semantius-architect/references/consistency-check.ts`.

@@ -190,6 +190,8 @@ With both gates passed (version + consistency), extract the rest:
 
 > **Label-column input type (same post-create pass, mandatory):** the auto-created `label_column` field lands with `input_type: "required"` whatever the §3 row says. In the same `update_field`, send `input_type: "disabled"` when the label column is named in the entity's `computed_fields` (a `display_name` built from name parts: the platform fills it and overwrites any typed value), otherwise the value derived from the §3 `Required` column whenever it is not `"required"`. Re-runs converge it through the Stage 4d field diff and its computed-field rule.
 
+> The deploy script runs these four post-create corrections with one call, `syncLabelColumns` in `scaffold-lib.ts` (`deploy-script-template.md`, step 4).
+
 ### Self-References and forward references
 
 Fields that reference their own entity (e.g., `campaign.parent_campaign_id → campaigns`) or an entity declared later in §3 need no special flag and no second pass: Stage 4c creates **every** entity of the spec (one `create_entity` call) before Stage 4d creates any field, so every in-spec `reference_table` already exists when its field is created. Parse them like any other FK.
