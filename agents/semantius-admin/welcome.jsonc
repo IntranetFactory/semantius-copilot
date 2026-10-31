@@ -1,0 +1,98 @@
+{
+  "$schema": "../../core/welcome.schema.json",
+  // Shown by the chat UI while a conversation is empty (UI-only, never reaches
+  // the model). Clicking a prompt sends `prompt ?? display` immediately, unless
+  // `prefill: true` — then it only fills the composer for editing. A prompt's
+  // optional `hint` shows as a dismissible tip above the composer when it is
+  // clicked; closing it is remembered per agent + `display` in the browser, so
+  // re-wording a `display` gives its tip one more airing.
+  "title": "Welcome to the Semantius Agent",
+  "subtitle": "I help you with everything on your Semantius data platform: your records, the entities and modules that hold them, who can use them, and whole new business systems. Where a prompt says [blank], I'll ask you which one.",
+  "sections": [
+    {
+      "title": "New system",
+      "subtitle": "Design, build and deploy a whole business system",
+      "prompts": [
+        {
+          "display": "Design and build a new system",
+          "prompt": "Design, build and deploy a new business system on Semantius for ",
+          "prefill": true,
+          "hint": "Finish the sentence in a few words, such as \"handling customer support tickets\". I'll interview you for the rest. Looking for ideas? Browse the [system templates](https://www.semantius.com/templates) and press **Run** on one to build it with me."
+        },
+        {
+          "display": "Build a system like one you know",
+          "prompt": "Design, build and deploy a new business system on Semantius, like ",
+          "prefill": true,
+          "hint": "Name a product you know, such as Zendesk or Salesforce, and what you use it for."
+        },
+        {
+          "display": "Deploy a blueprint",
+          "prompt": "Deploy this blueprint: ",
+          "prefill": true,
+          "hint": "Paste the blueprint's link, or upload the blueprint file with the + button."
+        }
+      ]
+    },
+    {
+      "title": "Modules",
+      "subtitle": "A module groups the entities, permissions and roles of one system",
+      "prompts": [
+        { "display": "What modules are installed?" },
+        { "display": "Show me a diagram of module [blank]" },
+        { "display": "Review module [blank] and suggest improvements" }
+      ]
+    },
+    {
+      "title": "Entities",
+      "subtitle": "An entity is one kind of record, such as a ticket or a customer, with its fields",
+      "prompts": [
+        { "display": "Which fields are in [blank]?" },
+        { "display": "Add a field to [blank]" },
+        {
+          "display": "Create an entity from a CSV file",
+          "prompt": "Create a new entity from the attached CSV file and import its rows.",
+          "prefill": true,
+          "hint": "Upload the CSV file with the + button, then send. Excel file? Save it as CSV first."
+        }
+      ]
+    },
+    {
+      "title": "Roles",
+      "subtitle": "Roles bundle permissions and are given to users",
+      "prompts": [
+        {
+          "display": "Onboard a new user",
+          "prompt": "Onboard a new user to the platform: create the user and give them the roles they need. Ask me for their name, email address and roles."
+        },
+        { "display": "Who has role [blank]?" },
+        { "display": "Give user [blank] role [blank]" }
+      ]
+    },
+    {
+      "title": "Records",
+      "subtitle": "Your data: find, add, change, count",
+      "prompts": [
+        { "display": "Show me the latest [blank]" },
+        { "display": "Add a new [blank]" },
+        { "display": "How many [blank] do we have, by status?" }
+      ]
+    },
+    {
+      "title": "Import & export",
+      "subtitle": "Move records and modules in and out",
+      "prompts": [
+        {
+          "display": "Import a CSV into [blank]",
+          "prompt": "Import the attached CSV file into [blank].",
+          "prefill": true,
+          "hint": "Upload the CSV file with the + button. Replace [blank] with the entity it goes into, or leave it and I'll ask. Excel file? Save it as CSV first."
+        },
+        { "display": "Back up module [blank]" },
+        {
+          "display": "Copy module [blank] to another instance",
+          "hint": "Have the other instance's address ready (https://<org>.semantius.app). I'll ask you to sign in to it."
+        }
+      ]
+    }
+  ]
+}

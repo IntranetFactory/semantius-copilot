@@ -134,9 +134,10 @@ export function AgentChat({
    * container's 'draft' → sessionId key flip), which would drop the tip the
    * very click that raised it. */
   hint?: string;
-  /** A clicked welcome prompt's `hint` (`key` = its `display`) — the host
-   * decides whether it was already dismissed and puts it back in via `hint`. */
-  onHint?: (hint: string, key: string) => void;
+  /** Every welcome-prompt click: its `hint`, or undefined to clear the tip
+   * (`key` = its `display`) — the host decides whether it was already
+   * dismissed and puts it back in via `hint`. */
+  onHint?: (hint: string | undefined, key: string) => void;
   /** The tip's ✕. */
   onDismissHint?: () => void;
   /** The picked model (an id from the meta's `models`), sent in the seed.

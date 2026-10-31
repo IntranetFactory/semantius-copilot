@@ -5,6 +5,8 @@ import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
+import { InlineMarkdown } from "./inline-markdown";
+
 /**
  * Where "the user closed this tip" is remembered. The INTERFACE lives here (in
  * the app-agnostic folder); the IMPLEMENTATION is the host app's — see
@@ -25,7 +27,7 @@ export type HintStore = {
 };
 
 export type HintTipProps = Omit<ComponentProps<"div">, "children"> & {
-  /** The tip text (an agent.jsonc prompt `hint`). */
+  /** The tip text (a welcome prompt `hint`; inline markdown, see ./inline-markdown). */
   children: string;
   /** Close (✕) — the host persists the dismissal via its HintStore. */
   onDismiss?: () => void;
@@ -49,7 +51,9 @@ export const HintTip = ({ children, className, onDismiss, ...props }: HintTipPro
     {...props}
   >
     <LightbulbIcon className="mt-0.5 size-4 shrink-0" />
-    <p className="min-w-0 flex-1 whitespace-pre-wrap">{children}</p>
+    <p className="min-w-0 flex-1 whitespace-pre-wrap">
+      <InlineMarkdown>{children}</InlineMarkdown>
+    </p>
     {onDismiss ? (
       <button
         className="-m-1 shrink-0 rounded p-1 hover:bg-amber-100 dark:hover:bg-amber-900/40"

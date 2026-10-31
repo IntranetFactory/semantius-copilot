@@ -9,11 +9,23 @@ import { dirname, join, relative, sep } from 'node:path';
 
 import { parse as parseJsonc, printParseErrorCode } from 'jsonc-parser';
 
-import { mergeInstructions, validateAgentBundle, validateAgentConfig } from './agent.js';
+import { mergeInstructions, validateAgentBundle, validateAgentConfig, validateWelcome } from './agent.js';
 
 export * from './index.js';
 
 export const AGENT_CONFIG_FILE = 'agent.jsonc';
+export const WELCOME_FILE = 'welcome.jsonc';
+
+/** Parse a JSONC file (comments + trailing commas), throwing on the first error. */
+function readJsonc(path) {
+  const errors = [];
+  const value = parseJsonc(readFileSync(path, 'utf-8'), errors, { allowTrailingComma: true });
+  if (errors.length > 0) {
+    const { error, offset } = errors[0];
+    throw new Error(`${path}: JSONC parse error ${printParseErrorCode(error)} at offset ${offset}`);
+  }
+  return value;
+}
 
 /**
  * Scan an agents/ folder: subfolders WITH agent.jsonc are agents; subfolders
@@ -38,6 +50,7 @@ export function scanAgentsDir(agentsDir) {
  *   - agent.jsonc (REQUIRED, JSONC with comments/trailing commas) validated
  *     against the contract in agents/agent.schema.json,
  *   - optional INSTRUCTIONS.md appended to the config's instructions,
+ *   - optional welcome.jsonc as the welcome card (instead of agent.jsonc "welcome"),
  *   - `models` (ids from backend-b/agents_config.jsonc) carried as-is,
  *   - every skills/<skill>/ subfolder walked into a files map.
  * `version` is a content hash over config + sorted skill files, so any change
@@ -50,14 +63,19 @@ export function scanAgentsDir(agentsDir) {
 export function createAgentBundleFromDir(agentDir, options = {}) {
   const agentName = agentDir.replaceAll('\\', '/').split('/').filter(Boolean).at(-1);
 
-  const configPath = join(agentDir, AGENT_CONFIG_FILE);
-  const errors = [];
-  const config = parseJsonc(readFileSync(configPath, 'utf-8'), errors, { allowTrailingComma: true });
-  if (errors.length > 0) {
-    const { error, offset } = errors[0];
-    throw new Error(`${configPath}: JSONC parse error ${printParseErrorCode(error)} at offset ${offset}`);
-  }
+  const config = readJsonc(join(agentDir, AGENT_CONFIG_FILE));
   validateAgentConfig(config);
+
+  // welcome.jsonc: the card on its own (root = the welcome object, `$schema`
+  // aside), so UI copy edits never touch models/egress. Exactly one source.
+  const welcomePath = join(agentDir, WELCOME_FILE);
+  if (existsSync(welcomePath)) {
+    if (config.welcome !== undefined) {
+      throw new Error(`${agentDir}: welcome is defined in both ${AGENT_CONFIG_FILE} and ${WELCOME_FILE} — keep one`);
+    }
+    const { $schema, ...welcome } = readJsonc(welcomePath) ?? {};
+    config.welcome = validateWelcome(welcome, WELCOME_FILE);
+  }
 
   const mdPath = join(agentDir, 'INSTRUCTIONS.md');
   const instructions = mergeInstructions(

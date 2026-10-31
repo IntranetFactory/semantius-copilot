@@ -276,6 +276,14 @@ try {
   check('scanAgentsDir: agent.jsonc folders found, others skipped', scan.agents.join() === 'commented-agent' && scan.skipped.join() === 'no-config');
   const jsoncBundle = createAgentBundleFromDir(jsoncAgent);
   check('JSONC config parsed (comments + trailing comma) & models carried', jsoncBundle.models?.join() === 'hy4');
+  // welcome.jsonc: root is the card (`$schema` stripped); a second source in agent.jsonc is an error.
+  writeFileSync(join(jsoncAgent, 'welcome.jsonc'), '{\n  "$schema": "x",\n  // c\n  "title": "Hi",\n}\n', 'utf-8');
+  const welcomeBundle = createAgentBundleFromDir(jsoncAgent);
+  check('welcome.jsonc carried as the welcome card', JSON.stringify(welcomeBundle.welcome) === '{"title":"Hi"}');
+  writeFileSync(join(jsoncAgent, 'agent.jsonc'), '{ "instructions": "Scratch agent.", "models": ["hy4"], "welcome": { "title": "Hi" } }', 'utf-8');
+  let bothRejected = false;
+  try { createAgentBundleFromDir(jsoncAgent); } catch (e) { bothRejected = /both agent\.jsonc and welcome\.jsonc/.test(e.message); }
+  check('welcome in both agent.jsonc and welcome.jsonc rejected', bothRejected);
 
   // 4. hostile bundles rejected before reconstruction (design §8/§13)
   for (const [label, mutate] of [

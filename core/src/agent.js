@@ -130,12 +130,21 @@ function validateWhitelist(raw, label) {
  * @param {string} label
  * @returns {AgentWelcome}
  */
-function validateWelcome(raw, label) {
+export function validateWelcome(raw, label) {
   const { maxTitleChars, maxSubtitleChars, maxDisplayChars, maxPromptChars, maxHintChars } = WELCOME_LIMITS;
   const checkString = (value, name, max, required) => {
     if (value === undefined && !required) return;
     if (typeof value !== 'string' || value.length === 0 || value.length > max) {
       throw new BundleValidationError(`${label}: ${name} must be a non-empty string of at most ${max} chars`);
+    }
+  };
+  // Subtitles and hints render inline markdown (frontend inline-markdown.tsx,
+  // same link pattern); a link it would not open fails here instead.
+  const checkLinks = (value, name) => {
+    for (const [, , url] of String(value ?? '').matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g)) {
+      if (!/^(https?:|mailto:)/i.test(url)) {
+        throw new BundleValidationError(`${label}: ${name} link "${url}" must be an http(s) or mailto URL`);
+      }
     }
   };
   const checkObject = (value, name, allowed) => {
@@ -153,6 +162,7 @@ function validateWelcome(raw, label) {
   const welcome = checkObject(raw, 'welcome', ['title', 'subtitle', 'sections']);
   checkString(welcome.title, 'welcome title', maxTitleChars, true);
   checkString(welcome.subtitle, 'welcome subtitle', maxSubtitleChars, false);
+  checkLinks(welcome.subtitle, 'welcome subtitle');
   if (welcome.sections !== undefined) {
     if (!Array.isArray(welcome.sections)) {
       throw new BundleValidationError(`${label}: sections must be an array`);
@@ -161,6 +171,7 @@ function validateWelcome(raw, label) {
       const section = checkObject(rawSection, 'section', ['title', 'subtitle', 'prompts']);
       checkString(section.title, 'section title', maxTitleChars, true);
       checkString(section.subtitle, 'section subtitle', maxSubtitleChars, false);
+      checkLinks(section.subtitle, 'section subtitle');
       if (!Array.isArray(section.prompts) || section.prompts.length === 0) {
         throw new BundleValidationError(`${label}: section "${section.title}" must have a non-empty prompts array`);
       }
@@ -169,6 +180,7 @@ function validateWelcome(raw, label) {
         checkString(prompt.display, 'prompt display', maxDisplayChars, true);
         checkString(prompt.prompt, 'prompt text', maxPromptChars, false);
         checkString(prompt.hint, 'prompt hint', maxHintChars, false);
+        checkLinks(prompt.hint, 'prompt hint');
         if (prompt.prefill !== undefined && typeof prompt.prefill !== 'boolean') {
           throw new BundleValidationError(`${label}: prompt prefill must be a boolean when present`);
         }

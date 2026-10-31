@@ -208,6 +208,8 @@ agents/      SOURCE OF TRUTH for every agent. One folder per agent:
              agents/<name>/agent.jsonc      REQUIRED config (folders without it are
                                             skipped) — schema: core/agent.schema.json
              agents/<name>/INSTRUCTIONS.md  optional, appended to the config instructions
+             agents/<name>/welcome.jsonc    optional welcome card (instead of the config's
+                                            "welcome") — schema: core/welcome.schema.json
              agents/<name>/skills/<skill>/  0..16 skills (each needs a SKILL.md)
 core/        Host-agnostic Flue-core seams (no Cloudflare imports):
              agent-bundle format + validation, tar reconstruction (2-RPC),
@@ -519,6 +521,7 @@ pnpm deploy:agents     # deploy:agent --all — ships agents/ content changes as
 # or individually:
 pnpm deploy:b          # vite build + wrangler deploy the backend worker
 pnpm deploy:agent <n>  # bundle agents/<n>/ and PUT it to KV as agentdef:<n> (see above)
+pnpm deploy-semantius-admin-agent  # shortcut for deploy:agent semantius-admin
 pnpm deploy:frontend   # vite build (URL from frontend/.env.production) + wrangler deploy
 ```
 
@@ -996,8 +999,11 @@ against canned SSE streams.
 ## Welcome card (per-agent `welcome`)
 
 The chat UI shows a per-agent welcome card while a conversation is empty, configured by
-the optional `welcome` key in `agent.jsonc` (validated in `core/src/agent.js`
-`validateWelcome`, mirrored in `core/agent.schema.json`): a `title`, optional
+the optional `welcome` key in `agent.jsonc` — or, to keep UI copy edits away from
+models/egress, a sibling `agents/<name>/welcome.jsonc` whose root IS the card (its
+`$schema` key is stripped; defining both fails the bundle; `semantius-admin` uses the
+file). Validated in `core/src/agent.js` `validateWelcome`, mirrored in
+`core/welcome.schema.json`: a `title`, optional
 `subtitle`, and `sections[]` (each with `title`, optional `subtitle`, and `prompts[]`).
 Each prompt has a `display` label, an optional fuller `prompt`, an optional `prefill`
 flag, and an optional `hint`. Semantics, implemented in ONE place —
@@ -1009,7 +1015,17 @@ shared `AgentChat` so `/chat`, `/copilot` and `/agent/<name>` cannot drift:
 - `prefill: true`: the text only **fills the composer** for editing before sending.
 - `hint` set: clicking also shows that text in a **dismissible amber tip above the
   composer** (`HintTip`, `hint.tsx`). The tip outlives the welcome card — it stays
-  through the conversation until the user closes it with the ✕.
+  through the conversation until the user closes it with the ✕, or until another
+  welcome prompt is clicked: that prompt's hint replaces it, and a prompt without one
+  (or with one the user already closed) clears it. Only the ✕ records a dismissal.
+- **Inline markdown** in the card/section `subtitle`s and in `hint`s (not `display`,
+  which sits in a button): `**bold**` and `[text](url)`, rendered as React elements by
+  `ai-elements/inline-markdown.tsx` — a ~40-line pattern matcher, deliberately not
+  Streamdown, whose block-level output (paragraph margins, `# ` → heading) does not fit
+  one-line slots. Links open in a new tab and only for `http(s):`/`mailto:`;
+  `validateWelcome` fails the deploy on any other scheme. Everything else (lists,
+  `*italic*`, backticks, an unclosed `**`) shows literally; a link inside a link is not
+  supported.
 
 **Where a closed tip is remembered.** The ✕ persists a dismissal under the id
 `` `<agentName>:<display>` `` — the prompt's required, user-visible `display` is its

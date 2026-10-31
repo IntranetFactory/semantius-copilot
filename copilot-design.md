@@ -50,8 +50,9 @@ Flue core (host-agnostic):  bundle → provision skill → discovery → run →
 ```
 c:\dev\semantius-copilot\             pnpm workspace; conventional package names
 ├─ agents/      SOURCE OF TRUTH for every agent: agents/<name>/{agent.jsonc (REQUIRED),
-│               INSTRUCTIONS.md (optional, appended), skills/<skill>/…}. Schema:
-│               core/agent.schema.json. Folders without agent.jsonc are skipped.
+│               INSTRUCTIONS.md (optional, appended), welcome.jsonc (optional welcome
+│               card), skills/<skill>/…}. Schema: core/agent.schema.json (+
+│               core/welcome.schema.json). Folders without agent.jsonc are skipped.
 ├─ backend-a/   Flue+CF Worker — the FIXED hoth-trip-planner agent; skills BAKED INTO the
 │               container image (hard-coded / OOTB).
 ├─ backend-b/   Flue+CF Worker — MULTI-AGENT: the whole agent (instructions + model +
@@ -92,6 +93,10 @@ are added to schema + `validateAgentConfig` together):
   `openrouter:web_fetch`, …), any content, ≤16 entries / ≤16 KiB. Appended verbatim to the
   request-body `tools` of every turn on an openrouter model — only when the org's copilot
   firewall is off (`copilotFirewallEnabled: false`) (README "web_tools").
+- `welcome` — optional welcome card for the chat UI (README "Welcome card"). It can live
+  instead in a sibling `welcome.jsonc` whose root IS the card (schema
+  `core/welcome.schema.json`), so UI copy edits never touch models/egress; defining it in
+  both places fails the bundle. `semantius-admin` uses `welcome.jsonc`.
 
 Skills live in `agents/<name>/skills/<skill>/` (0..16; each needs a `SKILL.md` whose
 frontmatter `name` matches the skill dir name). `hoth-trip-planner` has one skill,

@@ -217,11 +217,12 @@ export function AgentChatContainer({
   const [hint, setHint] = useState<{ id: string; text: string }>();
 
   /** A clicked prompt's hint, scoped to this agent by its `display` — unless
-   * the user has already closed this one, in which case it never comes back. */
-  function showHint(text: string, key: string) {
+   * the user has already closed this one, in which case it never comes back.
+   * A prompt without a (still-open) hint clears the previous click's tip;
+   * that is not a dismissal, so the store is left alone. */
+  function showHint(text: string | undefined, key: string) {
     const id = `${agentName}:${key}`;
-    if (hintStore?.isDismissed(id)) return;
-    setHint({ id, text });
+    setHint(text && !hintStore?.isDismissed(id) ? { id, text } : undefined);
   }
 
   function dismissHint() {

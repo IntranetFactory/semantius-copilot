@@ -15,6 +15,7 @@
     "deploy:frontend": "pnpm --filter frontend deploy",
     "deploy:agent": "node scripts/deploy-agent.mjs",
     "deploy:agents": "node scripts/deploy-agent.mjs --all",
+    "deploy-semantius-admin-agent": "node scripts/deploy-agent.mjs semantius-admin",
     "deploy": "pnpm deploy:b && node scripts/deploy-agent.mjs --all && pnpm deploy:frontend",
     "logs": "pnpm --filter backend-b logs",
     "logs:query": "node scripts/logs.mjs",

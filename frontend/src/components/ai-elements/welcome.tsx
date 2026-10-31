@@ -4,9 +4,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ComponentProps } from "react";
 
+import { InlineMarkdown } from "./inline-markdown";
+
 /** One clickable starter prompt on the welcome card. The text sent (or
  * prefilled, when `prefill` is true) is `prompt ?? display`. An optional `hint`
- * is surfaced as a dismissible tip above the composer when it is clicked. */
+ * is surfaced as a dismissible tip above the composer when it is clicked.
+ * Subtitles and hints take inline markdown (`**bold**`, `[text](url)`). */
 export type WelcomePrompt = { display: string; prompt?: string; prefill?: boolean; hint?: string };
 export type WelcomeSection = { title: string; subtitle?: string; prompts: WelcomePrompt[] };
 /** Per-agent welcome card (agent.jsonc `welcome`) — shown by the chat UI while
@@ -19,10 +22,11 @@ export type WelcomeCardProps = ComponentProps<"div"> & {
   onSend: (text: string) => void;
   /** Put text into the composer for editing (prompt with `prefill: true`). */
   onPrefill: (text: string) => void;
-  /** A clicked prompt's `hint`, to show above the composer. `key` is the
-   * prompt's `display` — the host scopes it (this card has no agent name, and
-   * must not: nothing app-specific travels with this folder). */
-  onHint?: (hint: string, key: string) => void;
+  /** EVERY prompt click: its `hint` to show above the composer, or undefined
+   * (no hint) to clear a tip a previous click raised. `key` is the prompt's
+   * `display` — the host scopes it (this card has no agent name, and must not:
+   * nothing app-specific travels with this folder). */
+  onHint?: (hint: string | undefined, key: string) => void;
 };
 
 /**
@@ -44,7 +48,7 @@ export const WelcomeCard = ({
     // Hint FIRST: a non-prefill click sends, and a send from a draft remounts
     // this whole surface (the container's key flip). Raising the hint in the
     // same batched event lets the host — which survives that remount — hold it.
-    if (prompt.hint) onHint?.(prompt.hint, prompt.display);
+    onHint?.(prompt.hint, prompt.display);
     if (prompt.prefill) onPrefill(text);
     else onSend(text);
   };
@@ -54,7 +58,9 @@ export const WelcomeCard = ({
       <div className="space-y-1">
         <h3 className="font-semibold text-base">{welcome.title}</h3>
         {welcome.subtitle && (
-          <p className="text-muted-foreground text-sm">{welcome.subtitle}</p>
+          <p className="text-muted-foreground text-sm">
+            <InlineMarkdown>{welcome.subtitle}</InlineMarkdown>
+          </p>
         )}
       </div>
       {welcome.sections?.length ? (
@@ -81,7 +87,9 @@ const Section = ({
     <div className="space-y-1">
       <h4 className="font-medium text-sm">{section.title}</h4>
       {section.subtitle && (
-        <p className="text-muted-foreground text-sm">{section.subtitle}</p>
+        <p className="text-muted-foreground text-sm">
+          <InlineMarkdown>{section.subtitle}</InlineMarkdown>
+        </p>
       )}
     </div>
     <div className="flex flex-col gap-2">
