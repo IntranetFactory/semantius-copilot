@@ -32,7 +32,7 @@ The admin owns `diag-admin.log`. Each sub-skill writes its own `diag-<role>.log`
 Rules for the logs:
 
 - **Best-effort, never blocking.** A failed write is ignored; logging never halts the run or alters a decision.
-- **Gitignored and ephemeral.** The whole `.tmp_admin/` tree is in `.gitignore`. The user manages cleanup. Nothing here is committed.
+- **Scratch and ephemeral.** The user manages cleanup.
 - **Diagnostics, NOT a decision log.** They record check results, timings, and internal transitions, distinct from the banned decision/audit log (see "Things the admin must NEVER do"). Standing decisions still live only in `customizations.yaml`; git remains the decision audit trail. The fast-flow `auto-picks.md` is a per-run diagnostic, not a policy record.
 - **Never named in chat** unless a run fails and the user needs it for support. The final report (Step 6.8) prints the run-folder path once on a failed run; on a clean run, don't mention it at all.
 - **Task descriptions are not the log.** The harness task list ([`task-tracking.md`](./task-tracking.md)) holds working state the user may open (`TaskGet`): flag values, a one-line step summary, the verbatim failure message, ledger answers. Check results, timings, transitions, and command output stay here. When the harness has no task tools, the fallback checklist file `.tmp_admin/<run_id>/open-questions.md` sits in this folder under these same rules.

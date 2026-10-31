@@ -27,7 +27,7 @@ A task is `{id, subject, description, activeForm, status, blocks[], blockedBy[]}
 
 `Q:` tasks are not chained among themselves (that is what makes them batchable). A skill sets edges only on its own tasks; an edge may point at another skill's task (the child → parent edge is set by the sub-skill on its own stage task).
 
-**Fallback when the harness has no task tools at all (or only a whole-list `TodoWrite`):** keep the same ledger as a checklist file in the run's scratch folder (`.tmp_import/run-<ts>/open-questions.md`, `.tmp_admin/<run_id>/open-questions.md`, `.tmp_deploy/open-questions.md`) holding **open questions and their status only**. Answers never go into that file: they live only in the artifact of record (below). The file is diagnostics-class, like the per-run diagnostic log, gitignored and ephemeral; it is not a decision log.
+**Fallback when the harness has no task tools at all (or only a whole-list `TodoWrite`):** keep the same ledger as a checklist file in the run's scratch folder (`.tmp_import/run-<ts>/open-questions.md`, `.tmp_admin/<run_id>/open-questions.md`, `.tmp_deploy/open-questions.md`) holding **open questions and their status only**. Answers never go into that file: they live only in the artifact of record (below). The file is diagnostics-class, like the per-run diagnostic log, scratch and ephemeral; it is not a decision log.
 
 ## 2. Pattern A: stage tracking
 

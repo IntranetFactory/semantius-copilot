@@ -50,7 +50,7 @@ A handful of rules govern this skill end-to-end. They are stated ONCE here; the 
 - **Internal mechanics never reach chat.** Preflight, the org probe, file staging, `curl` / `jq` / `yq` plumbing, stage transitions, run-ids, and skill-internal vocabulary go to the per-run diagnostic log, never to chat and never into a task subject. Task descriptions may hold working state (a one-line step summary, the flag values, the verbatim failure message); diagnostic detail stays in the log. The "surface / never-surface" lists, the narration-restraint rules, and the banned-vocabulary list in Output discipline below are the resident expression of this.
 - **The plan is the task list.** The admin never renders a numbered plan in chat. It creates one task per plan line (Step 6.5 line shapes as subjects, chained in pipeline order with `blockedBy`) and emits ONE lead-in sentence in chat that names the steps by what they do, cues which step asks questions, and says which step writes to the live model (or that nothing is applied). Never a numbered list, never a code fence. Rules: [`references/task-tracking.md`](./references/task-tracking.md); wording and worked examples: [`references/plan-shapes.md`](./references/plan-shapes.md).
 - **Never `WebFetch` for an artifact.** Fetch remote artifacts with `curl -s -L` only; `WebFetch` runs an HTML-to-markdown pass that silently strips YAML front-matter. `WebSearch` and `WebFetch` serve only the architect's and analyst's product lookups (architect SKILL.md, "Reference material").
-- **`.tmp_admin/` is gitignored and ephemeral.** The run folder persists after the run; the user manages cleanup; nothing in it is committed.
+- **`.tmp_admin/` is scratch and ephemeral.** The run folder persists after the run; the user manages cleanup.
 
 ---
 
@@ -440,7 +440,7 @@ RUN_DIR=".tmp_admin/$RUN_ID"
 mkdir -p "$RUN_DIR/incoming"
 ```
 
-`.tmp_admin/` is already in `.gitignore`. The folder stays on disk after the run completes; the next run gets its own folder. The user manages cleanup. The run folder holds incoming downloads (`incoming/`) and the per-agent diagnostic logs (`diag-<agent>.log`, per the Output discipline section), plus, in a fast run, `auto-picks.md` (the per-run list of what was picked for the user; [`references/fast-flow.md`](./references/fast-flow.md), section 5). No decision log: persisted decisions live in `$CUSTOMIZATIONS_FILE` (per-org, committed) per Step 7.
+The folder stays on disk after the run completes; the next run gets its own folder. The user manages cleanup. The run folder holds incoming downloads (`incoming/`) and the per-agent diagnostic logs (`diag-<agent>.log`, per the Output discipline section), plus, in a fast run, `auto-picks.md` (the per-run list of what was picked for the user; [`references/fast-flow.md`](./references/fast-flow.md), section 5). No decision log: persisted decisions live in `$CUSTOMIZATIONS_FILE` (per-org, committed) per Step 7.
 
 ### 6.3 Inspect each artifact
 
@@ -610,7 +610,7 @@ For each item:
 - ❌ Wrong: `"Create run folder and customizations file"`, `"Append to customizations.yaml"`, `"Mkdir tmp_admin"`, `"Fetch URL into staging"`, `"yq insert at .collisions"`.
 - ✅ Right: `"Setting up the run"`, `"Downloading the blueprint"`, `"Reading the artifact"`, `"Saving your choice"`, `"Checking earlier choices"`. Neutral plain English, no yq / .tmp_admin / customizations.yaml references.
 
-Similarly for chat narration: when the run folder is created, narrate at most one short sentence — *"Setting up the customize pass on `<slug>`..."* — and skip mentioning the `.tmp_admin/run-<id>/` path. The user doesn't need the gitignored staging location; if they want it for debugging, the final report (Step 6.8) surfaces it.
+Similarly for chat narration: when the run folder is created, narrate at most one short sentence — *"Setting up the customize pass on `<slug>`..."* — and skip mentioning the `.tmp_admin/run-<id>/` path. The user doesn't need the scratch staging location; if they want it for debugging, the final report (Step 6.8) surfaces it.
 
 ### 6.8 Final report
 
@@ -753,5 +753,5 @@ When a phrasing is ambiguous, ask one clarifying question (Step 0); do not guess
 - **Auto-recover from a sub-skill failure.** Surface the failure; let the user choose the next step.
 - **Modify built-in tables silently.** Additive fields are allowed; replacement is not.
 - **Write an `org:` field inside `customizations.yaml`.** The folder name is the org; a duplicate field would drift, the folder path cannot.
-- **Create a `history.jsonl` (or any decision log file).** Git on `customizations.yaml` is the audit trail. Provenance comments inside the file carry per-entry dates. (The per-run `$DIAG_LOG` is NOT a decision log — it's gitignored, ephemeral diagnostics, never a source of truth. Allowed. The task list and the no-task-tool fallback checklist file are the same class: they track open questions and progress; answers live only in `customizations.yaml` and the artifacts. Allowed. The fast-flow `auto-picks.md` in the run folder is allowed: a per-run diagnostic, not a policy record; [`references/fast-flow.md`](./references/fast-flow.md), section 5.)
+- **Create a `history.jsonl` (or any decision log file).** Git on `customizations.yaml` is the audit trail. Provenance comments inside the file carry per-entry dates. (The per-run `$DIAG_LOG` is NOT a decision log — it's scratch, ephemeral diagnostics, never a source of truth. Allowed. The task list and the no-task-tool fallback checklist file are the same class: they track open questions and progress; answers live only in `customizations.yaml` and the artifacts. Allowed. The fast-flow `auto-picks.md` in the run folder is allowed: a per-run diagnostic, not a policy record; [`references/fast-flow.md`](./references/fast-flow.md), section 5.)
 - **Surface internal mechanics in chat.** Preflight guards, org probes, CLI/`yq` plumbing, stage transitions, and skill-internal vocabulary go to `$DIAG_LOG`, never to the user. See the Output discipline section.

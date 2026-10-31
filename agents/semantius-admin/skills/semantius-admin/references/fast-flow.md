@@ -159,7 +159,7 @@ The concrete pick at the main known gates, from rules 1 to 9. Every gate's own f
 
 ## 5. The auto-picks log
 
-`.tmp_admin/<run_id>/auto-picks.md`, in the run folder next to the diagnostic logs. It is a per-run diagnostic, not a policy record (gitignored, ephemeral; `output-discipline.md`), so the admin's "no decision log file" rule allows it. Each skill writes one line per decision, when the stage lists its questions, **all of a stage's lines in one Bash call** (several `log_pick` lines in one command), never one call per pick:
+`.tmp_admin/<run_id>/auto-picks.md`, in the run folder next to the diagnostic logs. It is a per-run diagnostic, not a policy record (scratch, ephemeral; `output-discipline.md`), so the admin's "no decision log file" rule allows it. Each skill writes one line per decision, when the stage lists its questions, **all of a stage's lines in one Bash call** (several `log_pick` lines in one command), never one call per pick:
 
 ```bash
 AUTO_PICKS=".tmp_admin/$RUN_ID/auto-picks.md"

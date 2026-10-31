@@ -60,7 +60,7 @@
   // re-wording a `display` gives its tip one more airing.
   "welcome": {
     "title": "Welcome to the Semantius Agent",
-    "subtitle": "I help you with everything on your Semantius data platform: working with your data, running analytics, managing the data model, and designing, building, and deploying whole business systems.",
+    "subtitle": "I help you with everything on your Semantius data platform: working with your data, managing the data model, and designing, building, and deploying whole business systems.",
     "sections": [
       {
         "title": "Design & build",
@@ -79,7 +79,31 @@
             "display": "What can you build for me?"
           },
           {
-            "display": "Show me the data model diagram for a module"
+            "display": "Show me the data model diagram for module [blank]"
+          }
+        ]
+      },
+      {
+        "title": "Manage modules",
+        "subtitle": "Modules group related entities with their permissions and roles.",
+        "prompts": [
+          {
+            "display": "Design a data model for a new business system",
+            "prompt": "I want to design a new business system on Semantius. Interview me about the domain, then propose a semantic blueprint with entities, fields, relationships, and permissions.",
+            "prefill": true,
+            "hint": "A few sentences about your domain is enough to start — name the things you track and who works with them, and I'll interview you for the rest."
+          },
+          {
+            "display": "What modules are installed?"
+          },
+          {
+            "display": "Which entities belong to module [blank]."
+          },
+          {
+            "display": "Create a new module."
+          },
+          {
+            "display": "Show me the data model diagram for module [blank]"
           }
         ]
       },

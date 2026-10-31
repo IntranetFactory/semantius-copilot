@@ -8,6 +8,12 @@ Entries below are newest first.
 
 ---
 
+## The deploy never edits .gitignore
+
+2026-10-30. The skill told the agent to add `.tmp_deploy/` to the user's `.gitignore`, an edit to a shared, committed file nobody asked for. In an ATS run the folder disappeared in a workspace restore after it had been ignored. Rule: `SKILL.md`, "Generated artifacts".
+
+1. **The agent does not add, change or create a `.gitignore` entry** for the scratch folder.
+
 ## The closing block hands over the spec only
 
 2026-10-29. In an ATS fast run the closing block carried "Download the ATS design" next to "Download the ATS spec", although the spec the same run produced had already superseded the design. The Closing Contract said what belonged in the block but not that nothing else may be added, and the exit check could only fail on a missing line, so an extra one passed. Rules: `SKILL.md`, "Closing Contract: clean and sticky"; `../semantius-admin/SKILL.md`, "Exit check (fast flow)"; `../semantius-admin/references/fast-flow.md`, section 6.
