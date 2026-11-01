@@ -285,6 +285,48 @@
       // claude-haiku-5.5 at its highest thinking effort.
       "name": "Claude Haiku 5.5 (Max)"
     },
+    "anthropic/claude-sonnet-5.5": {
+      "name": "Claude Sonnet 5.5",
+      "provider": "openrouter",
+      // Via OpenRouter, not Anthropic direct. Not in pi-ai 0.83.0's catalog (its
+      // newest Sonnet is anthropic/claude-sonnet-5); as on Haiku 5.5, the
+      // placeholder gets cache_control breakpoints from withAnthropicCaching (llm.ts).
+      // OpenRouter, checked 2026-10-31 (snapshot anthropic/claude-sonnet-5.5-20260928):
+      // context 1000000, max output 128000 on every host (Anthropic, Claude
+      // Platform on AWS, Bedrock, Vertex, Azure). $2.00 / $10.00 per M tokens,
+      // flat — no long-context tier, unlike Haiku 5.5 (cache reads $0.10, cache
+      // writes $2.50, 1h writes $4.00). Regional endpoints (Vertex us/europe,
+      // Azure us, Bedrock us-east-1/eu-west-1) charge +10%.
+      // reasoning: MANDATORY (no "none", unlike Haiku 5.5 and Sonnet 5), default
+      // effort "high", supported ["low","medium","high","xhigh","max"].
+      // No max_price: every host is first-party or a hyperscaler at ≤ list + 10%.
+      "max_tokens": 128000,
+      "context_window": 1000000,
+      // Flue's default "medium" sits one below Sonnet's own default "high". The
+      // @high/@xhigh/@max variants below are what semantius-admin offers;
+      // reasoning tokens bill as output ($10/M), so each step up costs more and
+      // takes longer.
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "anthropic/claude-sonnet-5.5@high": {
+      // claude-sonnet-5.5 at thinking effort "high", its own default; everything
+      // else comes from the base entry.
+      "name": "Claude Sonnet 5.5 (High)"
+    },
+    "anthropic/claude-sonnet-5.5@xhigh": {
+      // claude-sonnet-5.5 at thinking effort "xhigh" (one below "max").
+      "name": "Claude Sonnet 5.5 (Extra High)"
+    },
+    "anthropic/claude-sonnet-5.5@max": {
+      // claude-sonnet-5.5 at its highest thinking effort.
+      "name": "Claude Sonnet 5.5 (Max)"
+    },
     "tencent/hy4-preview": {
       "name": "Tencent Hy4 Preview",
       "provider": "openrouter",
@@ -353,8 +395,8 @@
     "meta/muse-spark-1.3-contributor@xhigh": {
       // muse-spark-1.3-contributor at thinking effort "xhigh" (its default is
       // "medium"). Reasoning tokens bill as output, so turns cost more and take
-      // longer. semantius-admin's default, so the dropdown names it by effort only.
-      "name": "Effort: standard"
+      // longer.
+      "name": "Muse Spark 1.3 Contributor (Extra High)"
     },
     "meta/muse-spark-1.3-contributor@max": {
       // muse-spark-1.3-contributor at thinking effort "max", its highest. Same

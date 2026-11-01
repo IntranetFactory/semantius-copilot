@@ -200,11 +200,16 @@ try {
     prompted?.['a/b']?.systemPrompt === 'Be brief.' && prompted?.['a/b@high']?.systemPrompt === 'Be brief.',
     JSON.stringify(prompted),
   );
+  // Shape, not wording: the base carries a prompt, its @ variants inherit it
+  // unchanged, and no other model carries one.
+  const musePrompt = registry['meta/muse-spark-1.3-contributor']?.systemPrompt;
   check(
-    'registry: shipped Muse prompt on the base and its @xhigh/@max variants only',
-    ['meta/muse-spark-1.3-contributor', 'meta/muse-spark-1.3-contributor@xhigh', 'meta/muse-spark-1.3-contributor@max'].every((id) =>
-      registry[id]?.systemPrompt?.startsWith('Silent'),
-    ) && Object.entries(registry).filter(([, e]) => e.systemPrompt).length === 3,
+    'registry: shipped Muse prompt on the base and its @ variants only',
+    !!musePrompt &&
+      Object.entries(registry).every(([id, e]) =>
+        id.split('@')[0] === 'meta/muse-spark-1.3-contributor' ? e.systemPrompt === musePrompt : e.systemPrompt === undefined,
+      ),
+    Object.keys(registry).filter((id) => registry[id].systemPrompt).join(' '),
   );
   check('registry: a plain openrouter entry accepted', !registryRejects({}));
   // The browser sees aliases (slugs of the display name), never registry ids.
