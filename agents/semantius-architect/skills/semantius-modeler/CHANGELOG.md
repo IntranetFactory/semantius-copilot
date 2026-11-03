@@ -8,6 +8,10 @@ Entries below are newest first.
 
 ---
 
+## Spec §6 headings: `FK table`, `References`, `Label`
+
+2026-11-03. The first three columns of the §6 relationship table were `From`, `To` and `Verb`. An older spec keeps those names, and the modeler accepts either, because the columns and their order are the same. Deploy behavior does not change. Rules: `references/stage-1-parse.md`, `references/stage-2-reconcile.md`, `references/stage-3-plan.md`, `references/stage-4-execute.md`, `references/conflict-resolution.md`, `SKILL.md`.
+
 ## "Relationship" replaces "edge" and "connect" for data relationships
 
 2026-11-03. Paired with the analyst's entry of the same name. The Stage 3 block is now `🔗 Relationships to other modules`. The question is now `Q: Add all <N> relationships to other modules, or review each one?`, its header "Module relationships", and its first option "Add all relationships (Recommended)". Permission hierarchy rows are "hierarchy relationships" throughout, including `scaffold-lib.ts` (`checkHierarchyRelationship`, and the `relationship missing` failure text). A handoff that the platform can start is still "connected": that word is about the handoff's wiring, not a data relationship. The file format is unchanged; `version` stays `3.1`.

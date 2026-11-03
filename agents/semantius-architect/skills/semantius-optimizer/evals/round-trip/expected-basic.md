@@ -132,7 +132,7 @@ flowchart LR
 
 ## 4. Relationship summary
 
-| From | Field | To | Cardinality | Kind | fk_format | Delete behavior |
+| FK table | FK field | References | Cardinality | Kind | fk_format | Delete behavior |
 |---|---|---|---|---|---|---|
 | `assets` | `vendor_id` | `vendors` | N:1 | reference | reference | restrict |
 | `assets` | `owner_id` | `users` | N:1 | reference | reference | clear |

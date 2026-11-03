@@ -16,7 +16,7 @@ The blueprint carries authoritative `write tier` per §3 row and authoritative `
    - the base's key type fits: `typeid` for `has_a`; `typeid` or `is_a` for `is_a`. A base provisioned by this spec is checked in the file; a reused base against the Stage 2c index (live, managed, right key type);
    - no based entity carries `**Label column:**`, `**Label parent:**` or `**Order column:**`, or repeats a field of any level above it;
    - `<table_name>_ext` is free live for every based entity this spec creates, and no `table_name` ends in `_ext`;
-   - **no cascade on an `is_a` entity's FKs**: every §4 row whose `From` is an `is_a` entity is `restrict` or `clear`;
+   - **no cascade on an `is_a` entity's FKs**: every §4 row whose `FK table` is an `is_a` entity is `restrict` or `clear`;
    - **writers of a based entity also write its base.** Same module: the based entity's `**Edit permission:**` equals its base's. Base in another module: a cross-module §9.1 Permission hierarchy row `` | `<slug>:<tier>` | `<base edit_permission>` | ✨ to create | `` (shape in `stage-3-shared-base.md` → Permissions).
    The file-level part is enforced by `consistency-check.ts`.
 

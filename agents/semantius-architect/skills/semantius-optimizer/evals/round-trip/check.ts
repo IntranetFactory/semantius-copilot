@@ -38,7 +38,7 @@ const SKELETON_END = /^## Skeleton ends above this line/;
 /** Table header rows of the skeleton that the optimizer never emits (it writes the
  *  section's `_(none: …)_` placeholder instead, or omits the surface entirely). */
 const NOT_EMITTED_BY_OPTIMIZER = new Set<string>([
-  "| From | To | Verb | Cardinality | Required | Delete | Reconciliation |",  // §6 relationship table
+  "| FK table | References | Label | Cardinality | Required | Delete | Reconciliation |",  // §6 relationship table
   "| source module | target domain | target module | trigger_event | transition | payload | integration | friction | description |", // §6 Outbound
   "| target module | source domain | source module | trigger_event | transition | payload | integration | friction | description |", // §6 Inbound
   "| rule_name | data_object | source flag | intent |",                       // §8.2

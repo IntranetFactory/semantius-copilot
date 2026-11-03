@@ -63,15 +63,15 @@ _`field_required` applies only when both entities are installed. It never makes 
 
 ### 5.1 Relationships between entities in this blueprint
 
-| from | verb | to | cardinality | kind | field_required | owner_side | delete_mode | fk_format | notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `vendors` | supplies | `purchase_requests` | one_to_many | reference | yes | source | restrict | reference | - |
+| from | verb | to | cardinality | kind | field_required | delete_mode | fk_format | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `vendors` | supplies | `purchase_requests` | one_to_many | reference | yes | restrict | reference | - |
 
 ### 5.2 Relationships to platform built-ins (`users`)
 
-| from | verb | to | cardinality | field_required | owner_side | delete_mode | fk_format | notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `users` | raises | `purchase_requests` | one_to_many | yes | source | restrict | reference | - |
+| from | verb | to | cardinality | field_required | delete_mode | fk_format | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `users` | raises | `purchase_requests` | one_to_many | yes | restrict | reference | - |
 
 ### 5.3 Relationships to entities outside this blueprint
 

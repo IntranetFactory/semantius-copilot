@@ -32,7 +32,7 @@ These run on every owned entity (skip `reuse-from` / `dropped`):
   - §2 Mermaid edge direction + verb matches what §3 `relationship_label` + §4 `Cardinality`/`Kind` derive (🔴 if drift — mechanically enforced by `consistency-check.ts`, not an eyeball check; see `stage-11-write.md` "Generate §2, never hand-author it"). If a hand-edit drifted §2 out of sync, regenerate it with `consistency-check.ts --emit-mermaid` rather than patching the diagram by hand.
   - `format: parent` + `Delete: clear` is a 🔴 (parent-owned child cannot orphan-survive parent).
   - `format: reference` + `Delete: cascade` is a 🟡 (probably should be `parent`).
-  - Any `Delete: cascade` on an `is_a` entity (a §4 row whose `From` is `is_a`) is a 🔴 (the platform refuses it, `90249`; use `restrict` or `clear`).
+  - Any `Delete: cascade` on an `is_a` entity (a §4 row whose `FK table` is `is_a`) is a 🔴 (the platform refuses it, `90249`; use `restrict` or `clear`).
   - Families (platform facts: `../../use-semantius/references/entity-families.md`): a based entity repeating a base field, a `**Based on:**` whose base key type does not fit, or a `_process_gates_` row on a based entity is a 🔴; `consistency-check.ts` reports each.
   - Keep each fact once: run Stage 4's N-checks on every owned entity and report each finding as a 🟡 with its fix (N1 copies, N2 numbered repeats, N3 junction fields about one side, N6 family placement, N7 a type enum switching more than 3 fields, N8 a live duplicate).
 

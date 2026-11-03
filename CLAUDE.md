@@ -18,3 +18,13 @@
   message. When an action is possible (saving a key, deploying), do it — don't print
   instructions for the user to run. When an input only the user can provide is missing
   (API key, credential), ask for it immediately.
+- **Explain changes**: every commit message, changelog entry and note says why the change
+  was made and who asked for it. Mark anything added without an explicit request as such.
+- **Report problems directly**: a defect goes into the turn's final message, in plain words.
+  A note in a file does not count as telling the user, and nothing is "known" until they
+  have been told.
+- **No untested claims**: never write that something works or is covered unless it was
+  tested. Otherwise say it is untested.
+- **Agents only mention what they cover**: an agent's `INSTRUCTIONS.md` and `welcome.jsonc`
+  describe what it does and never name work, skills or other agents it does not have, not
+  even to redirect or to say they are missing. Asked for by Martin Amm, 2026-11-03.

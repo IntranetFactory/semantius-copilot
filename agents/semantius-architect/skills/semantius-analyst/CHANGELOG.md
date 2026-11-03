@@ -8,6 +8,10 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## Spec §4 and §6 use FK headings; blueprint `from` is the parent
+
+2026-11-03. "from" meant the parent in a blueprint and the table holding the field in a spec. The two files describe different things, so the row order stays and the words change. §4 is now `FK table | FK field | References`, and §6 is `FK table | References | Label`. `FK table` is the blueprint's `to`, and `References` is its `from`. Blueprints no longer carry `owner_side`. An older blueprint with the column is still read, except that a `one_to_one` row with `target` stops the run and asks for a regenerate. The format version stays `3.1`, because column order and meaning do not change. Rules: `references/semantic-spec-template.md`, `references/stage-1-parse.md`, `references/stage-2-inspect.md`, `references/stage-3-collisions.md`, `references/stage-9-governance.md`, `references/stage-11-write.md`, `references/modes-audit-extend-rebuild.md`, `SKILL.md`.
+
 ## "Relationship" replaces "edge" and "connect" for data relationships
 
 2026-11-03. The owner's rule is that every relationship is named a relationship. "Edge" and "connect" are gone wherever they meant one: §5 rows, cross-module relationships, permission hierarchy relationships. A Mermaid line stays an "edge" only where the text is about the diagram ("diagram edge", "dotted edge"). Two options changed: the drift option is now "Pin to both (cross-module inclusion relationship)", and the skip option's description now starts "Don't add any relationship." Plan narration now says `✨ hierarchy relationship to be added`. Paired with the entries of the same name in the architect, modeler, importer and optimizer changelogs; `semantius-admin` and `use-semantius`, which keep no changelog, changed the same way (the fast-flow summary now says "I only add relationships to records your instance already has"). The file format is unchanged; `version` stays `3.1`.

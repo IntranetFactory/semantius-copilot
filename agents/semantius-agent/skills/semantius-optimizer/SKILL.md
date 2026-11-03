@@ -72,7 +72,7 @@ This skill writes files at `version: "3.1"` (the `FORMAT_VERSION` constant in
 and only with the user's approval.
 
 The authoritative output shape is
-`semantius-plugin/skills/semantius-analyst/references/semantic-spec-template.md`
+`../use-semantius/references/shared/semantic-spec-template.md`
 (its "Skeleton" fence is the emitted surface, byte-for-byte). Read it before
 changing the extractor, and run `bun evals/round-trip/check.ts` afterward: it
 renders the fixtures offline via `--from-fixture`, diffs them against the committed
@@ -90,8 +90,6 @@ Read first:
 - `<skills-root>/use-semantius/SKILL.md` and
   `<skills-root>/use-semantius/references/data-modeling.md` (built-ins list,
   platform constraints).
-- `<skills-root>/semantius-analyst/references/semantic-spec-template.md` (the
-  output template the extractor targets).
 - `references/spec-extract-lib.ts` in this skill folder (the mapping).
 
 ---
@@ -308,8 +306,7 @@ Stage 2a and Stage 3 do not apply:
    bun run references/spec-extract-lib.ts <module_slug> --diagram
    ```
 
-   It prints the §2 Mermaid block a full run would write, built from live state with
-   the conventions of `semantius-architect/references/stage-5-mermaid.md`: one node per
+   It prints the §2 Mermaid block a full run would write, built from live state: one node per
    entity (related entities of other modules and built-ins included), each diagram edge labeled
    with its relationship field's `relationship_label`, dotted edges for entity families,
    built-ins and shared masters shaded green. Never draw the diagram by hand, and never

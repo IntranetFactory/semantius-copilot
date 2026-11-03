@@ -341,7 +341,7 @@ For each confirmed row `{from_table, resolved_target_table, target_singular, ver
 - `field_name` is the live field Stage 2g found pointing at the target with the row's verb, whatever its name; otherwise the auto-generated `<target_singular>_id` from Stage 2g (or the user-supplied alternative if the row went through the field-name-collision flow in Stage 3).
 - `format` is always `reference` for §6 rows; `parent` is never used (cross-module ownership is not allowed). A cross-model junction is not a §6 row: it deploys in 4c and 4d as an entity of this module, with `parent` on both legs.
 - `reference_delete_mode` is the row's `delete_mode` from §6 (an empty `Delete` follows `Required`: `yes` uses `restrict`, `no` uses `clear`; `cascade` is rejected at parse time).
-- `relationship_label` is the row's `verb` from §6.
+- `relationship_label` is the row's `Label` from §6.
 - `title` is derived from the target's singular form (e.g. `Hardware Asset`) or set from the verb-plus-target idiom; the analyst's verb is the authoritative metadata, the `title` is just a UI label.
 - Always include `width: "default"`.
 - Send `input_type: "required"` when the row's `Required` is `yes`, otherwise `input_type: "default"`. The Stage 1 default-value guard (required FK case) and its fast-flow line apply: before including a `yes` row, check whether `from_table` already holds rows (a table this deploy created holds none). The platform enforces `input_type: "required"`, not only the UI, so this guard is what protects a table that already holds rows.

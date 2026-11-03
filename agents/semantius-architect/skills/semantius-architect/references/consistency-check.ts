@@ -1354,7 +1354,7 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
 /**
  * Parse every §3.N field-level relationship annotation into a
  * "<table>\u0000<field>" -> relationship_label map. This is the ONLY place
- * verb text is allowed to come from; §4 carries structure (From/To/Cardinality/
+ * verb text is allowed to come from; §4 carries structure (FK table/References/Cardinality/
  * Kind), never the verb.
  */
 function parseSpecRelationshipLabels(lines: string[]): Map<string, string> {
@@ -1376,7 +1376,7 @@ function parseSpecRelationshipLabels(lines: string[]): Map<string, string> {
   return out;
 }
 
-/** §4 relationship summary rows as structured records (From/Field/To/Cardinality/Kind/fk_format/Delete behavior). */
+/** §4 relationship summary rows as structured records (FK table/FK field/References/Cardinality/Kind/fk_format/Delete behavior). Read by position, so an older spec with the From/Field/To headings reads the same. */
 function parseSpecRelationshipRows(lines: string[]): { from: string; field: string; to: string; cardinality: string; kind: string; del: string }[] {
   const out: { from: string; field: string; to: string; cardinality: string; kind: string; del: string }[] = [];
   for (const row of tableRows(topSection(lines, 4))) {
@@ -1414,16 +1414,16 @@ function parseSpecReconciliation(lines: string[]): Map<string, string> {
 
 /**
  * Deterministically derive the §2 mermaid block from §3 (relationship_label,
- * Reconciliation) + §4 (From/Field/To/Cardinality/Kind) + frontmatter entities.
+ * Reconciliation) + §4 (FK table/FK field/References/Cardinality/Kind) + frontmatter entities.
  * This exists so §2 is never hand-authored / freely re-generated: the model
  * fills §3 and §4 first (already fully resolved by that point in reconciliation),
  * then this function's output is pasted into §2 verbatim.
  *
  * Direction rule (matches semantic-spec-template.md's cardinality convention:
  * arrows run parent[one-side] -> child[many-side]):
- *   Cardinality "N:1"  -> From is the many-side, To is the one-side/parent: emit `To --> From`.
- *   Cardinality "1:N"  -> From is the one-side/parent: emit `From --> To`.
- *   Cardinality "1:1"  -> flat connector: emit `From --- To`.
+ *   Cardinality "N:1"  -> FK table is the many-side, References is the one-side/parent: emit `References --> FK table`.
+ *   Cardinality "1:N"  -> FK table is the one-side/parent: emit `FK table --> References`.
+ *   Cardinality "1:1"  -> flat connector: emit `FK table --- References`.
  * Verb rule: an FK leg carries its §3 `relationship_label` as the diagram edge verb
  * whenever one is declared, and is drawn as a bare arrow when none is. This is
  * uniform across Kind: a `reference` leg carries its verb; a junction leg
@@ -1464,7 +1464,7 @@ function emitSpecMermaid(lines: string[], fm: ReturnType<typeof frontmatter>): s
     } else if (/^1:n$/i.test(row.cardinality)) {
       diagramEdgeLines.push(verb ? `    ${row.from} -->|${verb}| ${row.to}` : `    ${row.from} --> ${row.to}`);
     } else {
-      // default / "N:1": To is the parent (one-side), From is the child (many-side).
+      // default / "N:1": References is the parent (one-side), FK table is the child (many-side).
       diagramEdgeLines.push(verb ? `    ${row.to} -->|${verb}| ${row.from}` : `    ${row.to} --> ${row.from}`);
     }
   }
@@ -1562,7 +1562,7 @@ function checkFile(path: string, opts: CheckOpts): { issues: Issue[]; artifact: 
 /**
  * `--emit-mermaid <file.md>`:
  * - On a spec, derives the §2 mermaid block from that file's §3 (relationship_label,
- *   `**Based on:**`) + §4 (From/Field/To/Cardinality/Kind) and prints it to stdout.
+ *   `**Based on:**`) + §4 (FK table/FK field/References/Cardinality/Kind) and prints it to stdout.
  *   Analyst usage: write frontmatter + §3 + §4 first (already fully resolved by
  *   that point in reconciliation), run this, paste the output as §2 verbatim.
  *   Never hand-author §2 — that's exactly the drift this whole file exists to

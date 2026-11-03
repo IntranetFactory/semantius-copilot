@@ -8,6 +8,10 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Blueprint §5: `from` is the parent, and the `owner_side` column is gone
+
+2026-11-03. `owner_side` restated what `from` and `to` already say, and a benchmark blueprint carried a wrong value on every row while its spec still came out right. `from` is now always the parent and `to` is the child, which holds the field. A `many_to_many` row has no parent. §5.1 and §5.2 lose the column; rows, verbs and diagrams keep their direction. The format version stays `3.1`. Rules: `references/semantic-blueprint-template.md`, `references/stage-3-entities.md`, `references/audit-checklist.md`, `references/modes-audit-extend-rebuild.md`.
+
 ## "Relationship" replaces "edge" and "connect" for data relationships
 
 2026-11-03. Paired with the analyst's entry of the same name. §5 rows and the relationships they describe are never called edges now; the template's "Family edges" paragraph is "Family diagram edges" and the audit checklist's "§5 edge integrity" is "§5 relationship integrity". The relationships-to-other-modules note now reads "These are possibilities, not relationships yet". `consistency-check.ts` messages say "§5 relationship" where they name a §5 row and "diagram edge" where they name a Mermaid line; its identifiers follow (`fiveRelationships`, `diagramEdges`, `familyDiagramEdges`). What each check flags is unchanged. The file format is unchanged; `version` stays `3.1`.

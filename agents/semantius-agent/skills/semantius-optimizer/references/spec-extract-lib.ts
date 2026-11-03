@@ -544,7 +544,7 @@ function relationshipSummary(entities: any[], fieldsByTable: Record<string, any[
   const rows: string[] = [
     "## 4. Relationship summary",
     "",
-    "| From | Field | To | Cardinality | Kind | fk_format | Delete behavior |",
+    "| FK table | FK field | References | Cardinality | Kind | fk_format | Delete behavior |",
     "|---|---|---|---|---|---|---|",
   ];
   for (const e of entities) {

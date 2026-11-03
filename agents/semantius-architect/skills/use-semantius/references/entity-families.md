@@ -48,7 +48,7 @@ Inheritance is not a way to reuse fields:
 | 1:n data per organizational level (a customer's data per sales area or company code) | a child entity with a `parent` field |
 | Two entities that merely share some field names | nothing: give each its own fields |
 
-Kinds that differ by only a few fields stay one entity with a type enum even when the kind is fixed at creation. The architect's `normalization.md` holds the full decision order.
+Kinds that differ by only a few fields stay one entity with a type enum even when the kind is fixed at creation.
 
 - **`is_a`, a subtype.** `activities` > `emails` > `classified_emails`, and `tasks` is_a `activities`; `persons` and `organizations` is_a `business_partners`. Every record is exactly one type, fixed when it is created: an email has an `eml_…` id, and `activities` lists it with every other activity. The base must be a managed `typeid` or `is_a` entity (`90240`). The subtype needs its own `id_prefix`. Chains may go several levels deep.
 - **`has_a`, an optional extension.** `customers` and `suppliers` has_a `business_partners`: a partner has at most one customer record and at most one supplier record, and both use the partner's `bp_…` key. The base must be a managed `typeid` entity (`90240`). One level only: nothing can be based on a `has_a` entity.

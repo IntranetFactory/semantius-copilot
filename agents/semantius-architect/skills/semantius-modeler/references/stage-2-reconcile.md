@@ -82,7 +82,7 @@ For every spec entity with `**Reconciliation:** reuse-from semantius_builtin.<ta
 For each parsed §6 row `{from_table, to_concept, verb, cardinality, required, delete_mode}`, check both ends. Either end may be live or created in this deploy: a §3 entity of this spec that is not `dropped` counts as present under its spec `table_name`, because Stage 4c creates it before Stage 4h runs.
 
 - **`from_table`** (the table holding the field, which may be outside this spec): present when this deploy creates it or it is live under that exact name.
-- **`to_concept`**: present when it exactly names a table this deploy creates. Otherwise resolve it against the live catalog (the analyst leaves §6 `To` unprefixed and unresolved on purpose: resolution is the modeler's deploy-time job). Single exact / canonical match → present, with the resolved target table captured. Multiple plausible matches → mark 🟡 ambiguous for the Stage 3 batched question. No match → absent.
+- **`to_concept`**: present when it exactly names a table this deploy creates. Otherwise resolve it against the live catalog (the analyst leaves §6 `References` unprefixed and unresolved on purpose: resolution is the modeler's deploy-time job). Single exact / canonical match → present, with the resolved target table captured. Multiple plausible matches → mark 🟡 ambiguous for the Stage 3 batched question. No match → absent.
 
 Then mark the row:
 

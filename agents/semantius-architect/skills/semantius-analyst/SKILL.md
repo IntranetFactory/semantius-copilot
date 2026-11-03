@@ -342,10 +342,10 @@ After Stages 5/6/7/9/10, run a holistic consistency pass over every owned entity
 
 - `Kind` is `parent` (junction legs say `junction` and are skipped),
 - `Delete behavior` is `cascade`,
-- `To` has its own §3 block with a Fields table in this spec, and
-- the `From` field is not already a live field (in the Stage 2 index) with format `parent`.
+- `References` has its own §3 block with a Fields table in this spec, and
+- the `FK field` is not already a live field (in the Stage 2 index) with format `parent`.
 
-`From` is the child and `To` is the parent. For both, read from their §3 blocks:
+`FK table` is the child and `References` is the parent. For both, read from their §3 blocks:
 
 - **Edit permission:** the `**Edit permission:**` value with backticks removed; no line means `manage`.
 - **Permission codes:** every `<code>` in `"require_permission": "<code>"` or `"has_permission": "<code>"` inside the `**Validation rules**` JSON. Under `access_scope: gated`, a `workflow-gate (lifecycle)` code counts as `<slug>:admin` (the admin role holds every gate there).
@@ -420,7 +420,7 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 | When `access_scope: raci`: §8.1 carries one `workflow-gate (lifecycle)` row per gated §7 state and per §8.2 `create` rule; a gate with `high risk?` `-` has `included in :admin?` ✓ and an `admin → <gate>` row in §9.1, a gate with `high risk?` ✓ has `-` and no such row; every other §8.1 row has `high risk?` `-`; in `documentation` mode every gated §7 state and every §8.2 `create` rule has a §3 `validation_rules` entry whose `has_permission` cites that gate; in `living` mode each has exactly one §9.1 `_enforcement rules_` A-gate row instead (`has_permission` in an `or` with `is_raci_actor`), no §3 `validation_rules` entry repeats an A-gate, and each `create` gate has a `create` `_process_gates_` row on the entity's initial state; the RACI realization, Processes and §9.2 ownership rows are present; every process has exactly one accountable row, and every gate is in the `grant gates [...]` list of exactly one accountable row (the RACI rule); `persona` frontmatter is present | access_scope incoherence list |
 | **RACI provenance — mechanically enforced by `consistency-check.ts`.** When the spec carries a RACI matrix, frontmatter MUST carry `raci_mode` (`living`/`documentation`) AND `raci_mode_source` (`computed-default`/`non-interactive`; `raci_mode` is auto-derived from instance state, so this gate never produces `user-answer`), and the §9 `**RACI mode:**` line must match `raci_mode`. The checker fails the save on any missing / invalid / mismatched value. | RACI provenance missing / inconsistent |
 | Every `re-prefixed-from` annotation in §8.1 names a catalog module and a verb; the verb appears on the relevant entity in §3 | malformed re-prefix list |
-| §4 rows carry `fk_format` and the delete behavior consumed verbatim from the **blueprint's** §5.1 / §5.2, not re-derived. **Exceptions:** a row whose `From` is an `is_a` entity is never `cascade` (use `restrict` / `clear`); a row changed by the Stage 8 FK scope fix is `reference` + `restrict` (both enforced by `consistency-check.ts`) | column-missing list |
+| §4 rows carry `fk_format` and the delete behavior consumed verbatim from the **blueprint's** §5.1 / §5.2, not re-derived. **Exceptions:** a row whose `FK table` is an `is_a` entity is never `cascade` (use `restrict` / `clear`); a row changed by the Stage 8 FK scope fix is `reference` + `restrict` (both enforced by `consistency-check.ts`) | column-missing list |
 | §6 `Outbound handoffs` / `Inbound handoffs` rows carry the `transition` column; for an Outbound `lifecycle` row (or an Inbound row whose `payload` is a declared §3 entity), `to_state` is one of that entity's `workflow_state` enum values | mismatched-state list |
 | Every `select_rule` column references a real field on the entity | dangling columns list |
 | No throwing operator inside any `select_rule` (`require_permission` / `throw_error` abort the per-row read; permission checks must use the non-throwing `has_permission`) | throwing-select_rule list |

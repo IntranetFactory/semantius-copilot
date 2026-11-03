@@ -158,7 +158,7 @@ flowchart LR
 
 ## 4. Relationship summary
 
-| From | Field | To | Cardinality | Kind | fk_format | Delete behavior |
+| FK table | FK field | References | Cardinality | Kind | fk_format | Delete behavior |
 |---|---|---|---|---|---|---|
 | `purchase_requests` | `requester_id` | `users` | N:1 | reference | reference | clear |
 

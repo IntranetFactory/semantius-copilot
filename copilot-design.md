@@ -102,7 +102,8 @@ Skills live in `agents/<name>/skills/<skill>/` (0..16; each needs a `SKILL.md` w
 frontmatter `name` matches the skill dir name). `hoth-trip-planner` has one skill,
 `planner`; `./update.sh` gives `semantius-architect` all eight vendored Semantius skills and
 `semantius-agent` all but `semantius-admin`, `-analyst`, `-architect` and `-modeler`; zero is
-also valid.
+also valid. `scripts/trim-agent-skills.mjs` then trims `semantius-agent`'s copy of what only
+applies with the excluded skills (README, "Upstream skills & semantius CLI").
 
 ## 4. The skill: `hoth-trip-planner`
 

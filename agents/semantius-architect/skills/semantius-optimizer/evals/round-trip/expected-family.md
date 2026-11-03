@@ -176,7 +176,7 @@ flowchart LR
 
 ## 4. Relationship summary
 
-| From | Field | To | Cardinality | Kind | fk_format | Delete behavior |
+| FK table | FK field | References | Cardinality | Kind | fk_format | Delete behavior |
 |---|---|---|---|---|---|---|
 | `activities` | `business_partner_id` | `business_partners` | N:1 | reference | reference | restrict |
 | `emails` | `thread_id` | `activities` | N:1 | reference | reference | clear |

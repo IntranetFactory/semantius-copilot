@@ -8,6 +8,10 @@ Entries below are newest first.
 
 ---
 
+## Spec §4 headings: `FK table`, `FK field`, `References`
+
+2026-11-03. The extractor writes the new §4 headings, matching the analyst's template. Row content and order do not change. Rules: `references/spec-extract-lib.ts`.
+
 ## "Relationship" replaces "edge" and "connect" for data relationships
 
 2026-11-03. Paired with the analyst's entry of the same name. Hierarchy rows are "hierarchy relationships"; a Mermaid line is a "diagram edge". `spec-extract-lib.ts` renames `edgeLines` to `diagramEdgeLines`; its output is byte-identical. The file format is unchanged; `version` stays `3.1`.

@@ -185,17 +185,17 @@ _`field_required` applies only when both entities are installed. It never makes 
 
 Relationships where both entities are §3 entities of this blueprint. Every row maps 1:1 to a Mermaid edge in §2.
 
-| from | verb | to | cardinality | kind | field_required | owner_side | delete_mode | fk_format | notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `{{from_table}}` | {{verb_in_parent_voice}} | `{{to_table}}` | one_to_many \| one_to_one \| many_to_many | composition \| reference \| association \| inheritance | yes \| no \| - | source \| target | restrict \| clear \| cascade | reference \| parent | {{free-form, see below}} |
+| from | verb | to | cardinality | kind | field_required | delete_mode | fk_format | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `{{from_table}}` | {{verb_in_parent_voice}} | `{{to_table}}` | one_to_many \| one_to_one \| many_to_many | composition \| reference \| association \| inheritance | yes \| no \| - | restrict \| clear \| cascade | reference \| parent | {{free-form, see below}} |
 
 **Column rules:**
 
-- **`verb`** — parent-voice (the entity that *points at the other* speaks). Fills the sentence "a `{{from}}` ___ many `{{to}}`". Prefer specific verbs (`owns`, `employs`, `attracts`) over filler (`has`, `references`).
+- **`verb`** — parent-voice (the `from` entity speaks). Fills the sentence "a `{{from}}` ___ many `{{to}}`". Prefer specific verbs (`owns`, `employs`, `attracts`) over filler (`has`, `references`).
 - **`cardinality`** — full words: `one_to_many`, `one_to_one`, `many_to_many`. The analyst translates to Semantius `parent`/`reference` format at spec time.
 - **`kind`**: `composition` (master-detail child; the child has no meaning without its parent), `reference` (independent lifecycle, the default), `association` (a peer relationship between independent records), or `inheritance`.
 - **`field_required`**: once both entities are installed, must the relationship's field be filled in? `yes` makes the field mandatory in the spec; `no` leaves it optional. A `composition` relationship is `yes`, because a `parent` field cannot be empty. A required relationship never requires an entity: whether a module can be installed without an entity is the §3 `install_optional` column, a separate fact.
-- **`owner_side`**: names the parent (the lifecycle owner, the cascade root, the "one" side of a `one_to_many`). `source` means the row's `from` column is the parent; `target` means the `to` column is. The FK column sits on the other end, the child. Useful when `owner_side` is non-obvious from cardinality alone.
+- **`from` and `to`**: `from` is the parent (the lifecycle owner, the cascade root, the "one" side of a `one_to_many`). `to` is the child, and the FK column sits on it. A `one_to_one` row follows the same rule. A `many_to_many` row has no parent, so the order carries no meaning.
 - **`delete_mode`** — what happens to this row when the referenced row is deleted. `restrict` (default for `kind=reference`; protects the parent), `clear` (NULL the FK on the child; only valid when `field_required` is `no`), `cascade` (default for `kind=composition`; deletes the child). The analyst consumes this verbatim — does not re-derive at deploy time, except rows changed by the analyst's Stage 8 FK scope fix (a `parent` + `cascade` relationship becomes `reference` + `restrict`).
 - **`fk_format`** — the Semantius FK shape on the field-level spec. `parent` for ownership/composition + junction-table relationships (both FK fields in an M:N junction use `parent`); `reference` otherwise. Same value the analyst writes to `fields.format`; emitting it here makes the analyst's FK-shape derivation consume-only.
 - **Many-to-many rows (§5.1 and §5.2):** the relationship has no field of its own, only a junction table. `field_required` is `-`, and `delete_mode` / `fk_format` describe the junction's two legs (`cascade`, `parent`).
@@ -204,22 +204,22 @@ Relationships where both entities are §3 entities of this blueprint. Every row 
 
 Relationships where one entity is a Semantius platform built-in (`users`, `roles`, `permissions`). Treated separately because the deployer reuses the built-in; no `create_entity` call.
 
-| from | verb | to | cardinality | field_required | owner_side | delete_mode | fk_format | notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `users` | {{verb}} | `{{table_name}}` | one_to_many | yes \| no | source \| target | restrict \| clear | reference | {{notes}} |
+| from | verb | to | cardinality | field_required | delete_mode | fk_format | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `users` | {{verb}} | `{{table_name}}` | one_to_many | yes \| no | restrict \| clear | reference | {{notes}} |
 
 ### 5.3 Relationships to entities outside this blueprint
 
 _External entities are optional: this blueprint never installs them. If one exists at install, the relationship is proposed. A many-to-many relationship is listed under outgoing and proposed as a new junction table._
 
-Each row relates one entity in this blueprint to one entity outside it, and is not drawn in the §2 diagram. If the external entity does not exist at install, nothing is created. §5.3 rows have no `delete_mode`, `fk_format`, `kind` or `owner_side`, because the field is only proposed at install. `field_required` is `yes` or `no`, and `-` on a many-to-many row.
+Each row relates one entity in this blueprint to one entity outside it, and is not drawn in the §2 diagram. If the external entity does not exist at install, nothing is created. §5.3 rows have no `delete_mode`, `fk_format` or `kind`, because the field is only proposed at install. `field_required` is `yes` or `no`, and `-` on a many-to-many row.
 
-**Which sub-block a row goes in.** Direction means where the relationship's field sits and which way it points. It is not the `from` / `to` columns and not `owner_side`.
+**Which sub-block a row goes in.** Direction means where the relationship's field sits and which way it points. The field sits on `to`, the child.
 
 - **§5.3b (incoming):** only when the field sits on the external entity, meaning the entity holding the field is not listed in this blueprint's §3.
 - **§5.3a (outgoing):** everything else, including many-to-many, and including a field on a §3 entity with `held_as` `consumer` or `contributor`.
 
-The field sits on the child: the `to` end of a `one_to_many`, and the end opposite the parent of a `one_to_one`.
+`from` is the parent on every `one_to_many` and `one_to_one` row in §5.3 too.
 
 **Greenfield mode**: **keep this heading and both sub-blocks.** Populate them only when the user explicitly requested relationships to entities outside this blueprint during the architect conversation; otherwise each sub-block carries the canonical placeholder `_(none: <short reason>)_` (e.g. `_(none: greenfield module, no external relationships requested)_`).
 

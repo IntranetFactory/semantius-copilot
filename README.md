@@ -535,7 +535,7 @@ The frontend deploy publishes the three fixed pages (`/chat`, `/copilot`, `/admi
 
 ### Upstream skills & semantius CLI (`./update.sh`)
 
-Two inputs are vendored from upstream and never edited here; `./update.sh` (Git Bash)
+Two inputs are vendored from upstream and never edited by hand here; `./update.sh` (Git Bash)
 refreshes both:
 
 ```bash
@@ -553,12 +553,37 @@ SEMANTIUS_SKILLS_SRC='C:\other\skills' ./update.sh   # other skills checkout
   here too. Prints the source's git revision. Ships with `pnpm deploy-semantius-agent` and
   `pnpm deploy-semantius-architect`; `pnpm bundle` checks the bundle limits.
 
-  **Known gap (2026-11-03):** the skills `semantius-agent` keeps still point at excluded
-  ones, so these relative links do not resolve there: `semantius-importer` and
-  `semantius-transfer` link `../semantius-admin/references/` (`preflight.md`,
-  `task-tracking.md`, `dot-questions.md`), and `semantius-optimizer` links the analyst's
-  `semantic-spec-template.md` and the architect's `consistency-check.ts`. A references-only
-  folder is no fix here: a skill folder without `SKILL.md` fails bundle validation.
+  After the mirror, `scripts/trim-agent-skills.mjs` trims `semantius-agent`'s copy, so that copy
+  is not an exact mirror (asked for by Martin Amm, 2026-11-03). It removes three references to
+  `semantius-admin` files, in `semantius-importer/SKILL.md` and `semantius-transfer/SKILL.md`,
+  and the maintainer-only `semantius-optimizer/evals/`. Upstream keeps that text for Muse chat
+  and dot, and `semantius-architect` gets it unchanged. Each edit must match upstream exactly
+  once, checked before anything is deleted, so a reworded sentence stops the sync.
+
+  **References to excluded skills, status 2026-11-03.** These skills were excluded because
+  `semantius-agent` does not do that work, and their files are not in its bundle or sandbox.
+  Dead references were first removed from the skills, not resolved by copying the files:
+  following every reference reaches 23 files and about 800 KB, including the `semantius-admin`
+  and `semantius-modeler` `SKILL.md`, which would bring the pipeline back. A references-only
+  folder is no alternative, because a skill folder without `SKILL.md` fails bundle validation.
+
+  Still named in `agents/semantius-agent/skills/`, on 12 lines. None applies to a normal run:
+  `semantius-optimizer/SKILL.md` only asks to read the template before changing the extractor,
+  and its maintainer notes still mention the removed `evals/`.
+
+  | File not in this agent | Lines | Named from (under `agents/semantius-agent/skills/`) |
+  |---|---|---|
+  | `agents/semantius-agent/skills/semantius-analyst/references/semantic-spec-template.md` | 5 | `semantius-optimizer/SKILL.md` (maintainer note), `semantius-optimizer/references/spec-extract-lib.ts` (code comments) |
+  | `agents/semantius-agent/skills/semantius-architect/references/consistency-check.ts` | 6 | `semantius-optimizer/SKILL.md` (notes), `semantius-optimizer/references/spec-extract-lib.ts` (code comments) |
+  | `agents/semantius-agent/skills/semantius-modeler/references/deploy-lib.ts` | 1 | `semantius-optimizer/references/spec-extract-lib.ts` (code comment) |
+
+  The skills also name the excluded skills in prose, for example `semantius-optimizer`'s report
+  suggesting `semantius-analyst`. No real run has tested any of this. Proposed, not built:
+  `update.sh` stops the sync on any new reference to an excluded skill.
+
+  `semantius-optimizer` stays whole in this agent, spec export included, as a read-only export
+  (Martin Amm, 2026-11-03). `update.sh` does not touch either agent's `INSTRUCTIONS.md`, so change
+  `semantius-agent`'s by hand whenever `AGENT_EXCLUDED_SKILLS` changes.
 
   Agent names and skill names are separate: the agent `semantius-agent` was called
   `semantius-admin` until 2026-11-03, and the agent `semantius-architect` began as a copy

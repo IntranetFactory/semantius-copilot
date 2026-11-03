@@ -128,7 +128,7 @@ flowchart LR
 
 ## 4. Relationship summary
 
-| From | Field | To | Cardinality | Kind | fk_format | Delete behavior |
+| FK table | FK field | References | Cardinality | Kind | fk_format | Delete behavior |
 |---|---|---|---|---|---|---|
 | `expense_claim_lines` | `expense_claim_id` | `expense_claims` | N:1 | parent | parent | cascade |
 

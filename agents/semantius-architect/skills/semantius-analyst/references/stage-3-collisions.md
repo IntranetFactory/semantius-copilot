@@ -316,7 +316,7 @@ For every blueprint §5.3 / §6 row, the analyst resolves the target (the row's 
 
 **Internal mapping** (both widgets):
 
-- Pick a specific candidate → the row resolves to that candidate, by the Stage 2g rules: a field gets its spec §6 row, with the candidate as `To` on an outgoing row and as `From` on an incoming one; a many-to-many row gets its junction, with the candidate as the `reuse-from` end.
+- Pick a specific candidate → the row resolves to that candidate, by the Stage 2g rules: a field gets its spec §6 row, with the candidate as `References` on an outgoing row and as `FK table` on an incoming one; a many-to-many row gets its junction, with the candidate as the `reuse-from` end.
 - "Create our own here under a different name" → analyst adds a new §3 entity to the spec under the disambiguated name with `**Reconciliation:** create-new`, with field shape inherited from the blueprint's intent for that target (best-effort from the blueprint's §5.3 / §6 description). The relationship points at the local entity (on a many-to-many row, the junction's leg points at it). Also add a §7.2 🟡 note: *"<Local Plural Label> currently lives in this module as a workforce-context alternative to <Owner Module Display Name>'s <Target Plural Label>. When a catalog <expected context> module is added later, run the analyst on its blueprint to merge."*
 - "Skip" → §6 row marked `dormant` (a many-to-many row gets no §6 row, as in Stage 2g rule 4); no FK column emitted.
 

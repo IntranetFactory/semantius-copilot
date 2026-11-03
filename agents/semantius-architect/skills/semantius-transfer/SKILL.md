@@ -27,7 +27,7 @@ Division of responsibility:
 
 ## Writing conventions
 
-The importer's writing conventions apply unchanged ([`../semantius-importer/SKILL.md`](../semantius-importer/SKILL.md) → Writing conventions, items 1 to 6): US English, no em-dashes in chat, plain language ("table", "records", "the file"), no narration, and `AskUserQuestion` as the only tool call of its response with 2 to 4 options. Stage tasks follow [`../semantius-admin/references/task-tracking.md`](../semantius-admin/references/task-tracking.md): one task per stage from the Workflow table, subject verbatim, one `in_progress` at a time. This skill has no question ledger: its only questions are the Stage 3 gate, a mode or host question when the request leaves one open, and the sign-in question of Preflight 3 when a named host has no sign-in on this machine.
+The importer's writing conventions apply unchanged ([`../semantius-importer/SKILL.md`](../semantius-importer/SKILL.md) → Writing conventions, items 1 to 6): US English, no em-dashes in chat, plain language ("table", "records", "the file"), no narration, and `AskUserQuestion` as the only tool call of its response with 2 to 4 options. Stage tasks: one task per stage from the Workflow table, subject verbatim, one `in_progress` at a time. This skill has no question ledger: its only questions are the Stage 3 gate, a mode or host question when the request leaves one open, and the sign-in question of Preflight 3 when a named host has no sign-in on this machine.
 
 ## Preflight
 
