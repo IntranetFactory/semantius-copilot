@@ -1,0 +1,9 @@
+[
+  { "check": "access_scope", "detail": "§8.1 `expense-claims:approve_expense_claim` is a process gate that is not high-risk: under raci its `included in :admin?` is ✓" },
+  { "check": "access_scope", "detail": "§9.1 has no `expense-claims:admin` → `expense-claims:approve_expense_claim` row; under raci" },
+  { "check": "access_scope", "detail": "§8.1 `expense-claims:pay_expense_claim` is a process gate that is not high-risk: under raci its `included in :admin?` is ✓" },
+  { "check": "access_scope", "detail": "§9.1 has no `expense-claims:admin` → `expense-claims:pay_expense_claim` row; under raci" },
+  { "check": "access_scope", "detail": "§8.1 `expense-claims:dispute_expense_claim_line` is a process gate that is not high-risk: under raci its `included in :admin?` is ✓" },
+  { "check": "access_scope", "detail": "§9.1 has no `expense-claims:admin` → `expense-claims:dispute_expense_claim_line` row; under raci" },
+  { "check": "FK scope", "detail": "checks `expense-claims:dispute_expense_claim_line` the parent does not", "warn": true }
+]

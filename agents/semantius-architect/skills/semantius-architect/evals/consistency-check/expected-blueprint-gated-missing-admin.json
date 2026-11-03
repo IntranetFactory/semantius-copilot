@@ -1,0 +1,6 @@
+[
+  { "check": "access_scope", "detail": "§7 derived gate `purchase-requests:admin` does not follow `access_scope: gated` (expected a §8.1 workflow-gate (lifecycle) code)" },
+  { "check": "access_scope", "detail": "§8.1 `purchase-requests:approve_purchase_request` is a process gate: under gated its `included in :admin?` is ✓" },
+  { "check": "access_scope", "detail": "§9.1 has no `purchase-requests:admin` → `purchase-requests:approve_purchase_request` row; under gated" },
+  { "check": "access_scope", "detail": "§9.1 has no `purchase-requests:admin` → `purchase-requests:create_vendor` row; under gated" }
+]

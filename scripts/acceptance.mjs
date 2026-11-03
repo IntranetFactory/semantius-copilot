@@ -656,9 +656,9 @@ async function main() {
   // The container gets no API key at all: SEMANTIUS_ORG comes from the token's
   // `<org>` half (per session — the image bakes none), and SEMANTIUS_JWT holds
   // only the sentinel, swapped for the user's JWT at egress. Needs the
-  // semantius-admin definition, whose proxy_whitelist covers *.semantius.cloud
+  // semantius-agent definition, whose proxy_whitelist covers *.semantius.cloud
   // (and *.semantius.ai for older CLIs).
-  const semantiusBundle = readBundle('semantius-admin.agent.json');
+  const semantiusBundle = readBundle('semantius-agent.agent.json');
   if (semantiusBundle) {
     const credOrg = tokenOrg;
     await put(B_URL, `/agents/${semantiusBundle.agentName}`, semantiusBundle);
@@ -688,7 +688,7 @@ async function main() {
     );
     await del(B_URL, credId);
   } else if (!semantiusBundle) {
-    console.log('NOTE  [credentials] skipped — dist-bundle/semantius-admin.agent.json missing (run pnpm bundle)');
+    console.log('NOTE  [credentials] skipped — dist-bundle/semantius-agent.agent.json missing (run pnpm bundle)');
   }
 
   // --- Workspace backups: persist / supersede / restore / delete-with-session

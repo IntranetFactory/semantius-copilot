@@ -1,0 +1,7 @@
+[
+  { "check": "§8.1 high risk", "detail": "§8.1 `expense-claims:manage` is a baseline-manage row: its `high risk?` is -" },
+  { "check": "§8.1 high risk", "detail": "§8.1 `expense-claims:pay_expense_claim`: `high risk?` is \"yes\"" },
+  { "check": "access_scope", "detail": "§8.1 `expense-claims:approve_expense_claim` is a high-risk process gate (`high risk?` ✓): under raci its `included in :admin?` is -" },
+  { "check": "access_scope", "detail": "§9.1 rolls `expense-claims:approve_expense_claim` up under `expense-claims:admin`; under raci a high-risk process gate has no hierarchy row" },
+  { "check": "FK scope", "detail": "checks `expense-claims:dispute_expense_claim_line` the parent does not", "warn": true }
+]

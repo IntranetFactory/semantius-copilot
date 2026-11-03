@@ -96,11 +96,13 @@ are added to schema + `validateAgentConfig` together):
 - `welcome` — optional welcome card for the chat UI (README "Welcome card"). It can live
   instead in a sibling `welcome.jsonc` whose root IS the card (schema
   `core/welcome.schema.json`), so UI copy edits never touch models/egress; defining it in
-  both places fails the bundle. `semantius-admin` uses `welcome.jsonc`.
+  both places fails the bundle. `semantius-agent` and `semantius-architect` use `welcome.jsonc`.
 
 Skills live in `agents/<name>/skills/<skill>/` (0..16; each needs a `SKILL.md` whose
 frontmatter `name` matches the skill dir name). `hoth-trip-planner` has one skill,
-`planner`; `semantius-admin` has zero (valid).
+`planner`; `./update.sh` gives `semantius-architect` all eight vendored Semantius skills and
+`semantius-agent` all but `semantius-admin`, `-analyst`, `-architect` and `-modeler`; zero is
+also valid.
 
 ## 4. The skill: `hoth-trip-planner`
 
@@ -498,7 +500,7 @@ comparison by driving the deterministic core directly. Grouped by the five contr
   (>10 min idle / eviction) B **re-materializes** and still works.
 - **Hostile bundle:** `..` / symlink / resolve-outside-dir / oversize / missing per-skill SKILL.md /
   missing instructions / too many skills rejected before reconstruction (`validateAgentBundle`).
-- **Zero-skill agent:** a bundle with `skills: {}` (e.g. semantius-admin) ingests OK, provisions
+- **Zero-skill agent:** a bundle with `skills: {}` ingests OK, provisions
   nothing (`reconstructed === false`, sandbox file count 0), and the agent still answers from its
   bundled instructions.
 - **Egress (`enableInternet:false` + `allowedHosts`):** echo host reachable via the handler; raw-socket

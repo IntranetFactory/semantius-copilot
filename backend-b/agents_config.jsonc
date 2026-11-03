@@ -28,7 +28,7 @@
       // pinned pi-ai 0.83.0 nor the latest 0.85.1 catalog lists it, hence the
       // explicit limits below. Since 2026-10-21 the entry runs the dated
       // -1017 snapshot; the dated slug resolves through the same undated base
-      // (also a miss), so the placeholder notes below still apply. semantius-admin needs well over 300k output for
+      // (also a miss), so the placeholder notes below still apply. semantius-architect needs well over 300k output for
       // single-shot blueprint spec writes. Placeholder side effects, checked 2026-09-19:
       //  - reasoning: the entry says `reasoning: false`, so pi-ai sends no
       //    `reasoning` param and uses the `system` role (right for DeepSeek). The
@@ -261,7 +261,7 @@
       "max_tokens": 128000,
       "context_window": 1000000,
       // Flue's default "medium" = Haiku's own default. The @high/@xhigh/@max
-      // variants below are what semantius-admin offers; reasoning tokens bill as
+      // variants below are what semantius-agent offers; reasoning tokens bill as
       // output ($2.50/M above 100K prompt tokens), so each step up costs more
       // and takes longer.
       "reasoning_efforts": [
@@ -303,7 +303,7 @@
       "max_tokens": 128000,
       "context_window": 1000000,
       // Flue's default "medium" sits one below Sonnet's own default "high". The
-      // @high/@xhigh/@max variants below are what semantius-admin offers;
+      // @high/@xhigh/@max variants below are what semantius-agent offers;
       // reasoning tokens bill as output ($10/M), so each step up costs more and
       // takes longer.
       "reasoning_efforts": [

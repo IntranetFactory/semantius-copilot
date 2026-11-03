@@ -1,0 +1,5 @@
+[
+  { "check": "access_scope", "detail": "§8.1 `expense-claims:pay_expense_claim` is a process gate: under gated its `included in :admin?` is ✓" },
+  { "check": "access_scope", "detail": "§9.1 has no `expense-claims:admin` → `expense-claims:pay_expense_claim` row; under gated" },
+  { "check": "access_scope", "detail": "§9.1 has no `expense-claims:admin` → `expense-claims:dispute_expense_claim_line` row; under gated" }
+]

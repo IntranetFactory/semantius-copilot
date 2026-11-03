@@ -26,7 +26,7 @@ export const SEMANTIUS_JWT_SENTINEL = '__sak__';
 /**
  * Semantius API hosts eligible for session-context JWT injection at egress, and
  * the scope of the sentinel->JWT swap (brokerEgress `policy.jwt` and
- * `policy.secretHosts`). Mirrors the semantius-admin agent's proxy_whitelist.
+ * `policy.secretHosts`). Mirrors the semantius-agent proxy_whitelist.
  *
  * The JWT must never ride to non-Semantius hosts, so this list is deliberately
  * INDEPENDENT of the egress allow list — and that independence became

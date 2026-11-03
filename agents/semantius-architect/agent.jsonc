@@ -1,0 +1,58 @@
+{
+  "$schema": "../../core/agent.schema.json",
+  // Model ids from backend-b/agents_config.jsonc (limits, routing, rationale live there).
+  // The first is the default; the chat UI offers the others in a dropdown.
+  "models": [
+    //"z-ai/glm-5.3-flash",
+    //"z-ai/glm-5.3",
+    "deepseek/deepseek-v4.1-flash-1017",
+    "deepseek/deepseek-v4.1-flash-1017@max",
+    //"openai/gpt-6-luna",
+    //"openai/gpt-6-luna@xhigh",
+    "meta/muse-spark-1.3-contributor",
+    "meta/muse-spark-1.3-contributor@max",
+    "meta/muse-spark-1.3-contributor@xhigh",
+    "anthropic/claude-sonnet-5.5@high",
+    "anthropic/claude-sonnet-5.5@xhigh",
+    "anthropic/claude-sonnet-5.5@max"
+    //"xiaomi/mimo-v2.6-pro"
+    // "anthropic/claude-haiku-5.5@high",
+    // "anthropic/claude-haiku-5.5@xhigh",
+    // "anthropic/claude-haiku-5.5@max"
+  ],
+  "proxy_whitelist": [
+    "registry.npmjs.org", // for  dependencies
+    "registry.npmjs.org", // for  dependencies
+    "*.semantius.ai",
+    "*.semantius.cloud", // semantius CLI >= 0.8.9: api.semantius.cloud org lookup (-> the org's postgrest_url)
+    "$SEMANTIUS_DATA_HOST", // that postgrest_url's host (per-org Neon endpoint), looked up per session; the CLI's data calls go there with the user's JWT
+    "*.semantius.io",
+    "www.semantius.com"
+  ],
+  "web_tools": [
+    {
+      "type": "openrouter:web_search",
+      "parameters": {
+        "engine": "auto",
+        "max_results": 5,
+        "max_total_results": 20,
+        "max_uses": 5,
+        "search_context_size": "medium",
+        "excluded_domains": [
+          "pinterest.com"
+        ]
+      }
+    },
+    {
+      "type": "openrouter:web_fetch",
+      "parameters": {
+        "engine": "auto",
+        "max_uses": 10,
+        "max_content_tokens": 50000,
+        "blocked_domains": [
+          "pinterest.com"
+        ]
+      }
+    }
+  ]
+}

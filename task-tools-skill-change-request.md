@@ -1,6 +1,6 @@
 # Change request: task-tool call economy in the Semantius skills
 
-**For:** the upstream maintainers of `agents/semantius-admin/skills/**` (`semantius-admin`,
+**For:** the upstream maintainers of `agents/semantius-agent/skills/**` (`semantius-admin`,
 `-architect`, `-analyst`, `-modeler`, `-importer`). Nothing under that tree is modified in this
 repo; this file proposes exact wording.
 

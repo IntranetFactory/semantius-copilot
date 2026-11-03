@@ -1,0 +1,3 @@
+[
+  { "check": "§7 high risk", "detail": "§7 rows deriving `purchase-requests:approve_purchase_request` disagree on `high risk?` (✓ on `purchase_requests`.`approved`; - on `purchase_requests`.`reapproved`)" }
+]

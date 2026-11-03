@@ -1,0 +1,4 @@
+[
+  { "check": "access_scope", "detail": "§8.1 carries `workflow-gate (lifecycle)` rows (purchase-requests:approve_purchase_request) but `access_scope: advanced` allows them only under gated and raci" },
+  { "check": "access_scope", "detail": "§7 derived gate `purchase-requests:approve_purchase_request` does not follow `access_scope: advanced` (expected purchase-requests:admin)" }
+]

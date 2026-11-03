@@ -32,7 +32,7 @@ See [`copilot-design.md`](./copilot-design.md) for the original design and accep
 | ---------- | --- |
 | Frontend — chat (users, Semantius token) | https://semantius-copilot-frontend.ma532.workers.dev/chat |
 | Frontend — copilot (users, better-auth cookie) | https://semantius-copilot-frontend.ma532.workers.dev/copilot |
-| Frontend — per-agent page, input-free (users, cookie or `#jwt=`) | https://semantius-copilot-frontend.ma532.workers.dev/agent/\<name\> — one URL per KV-deployed agent, today [/agent/hoth-trip-planner](https://semantius-copilot-frontend.ma532.workers.dev/agent/hoth-trip-planner) and [/agent/semantius-admin](https://semantius-copilot-frontend.ma532.workers.dev/agent/semantius-admin) |
+| Frontend — per-agent page, input-free (users, cookie or `#jwt=`) | https://semantius-copilot-frontend.ma532.workers.dev/agent/\<name\> — one URL per KV-deployed agent, today [/agent/hoth-trip-planner](https://semantius-copilot-frontend.ma532.workers.dev/agent/hoth-trip-planner), [/agent/semantius-agent](https://semantius-copilot-frontend.ma532.workers.dev/agent/semantius-agent) and [/agent/semantius-architect](https://semantius-copilot-frontend.ma532.workers.dev/agent/semantius-architect) |
 | Frontend — admin console | https://semantius-copilot-frontend.ma532.workers.dev/admin |
 | Backend — dynamic bundle (multi-agent) | https://semantius-copilot-backend-b.ma532.workers.dev |
 
@@ -521,7 +521,8 @@ pnpm deploy:agents     # deploy:agent --all — ships agents/ content changes as
 # or individually:
 pnpm deploy:b          # vite build + wrangler deploy the backend worker
 pnpm deploy:agent <n>  # bundle agents/<n>/ and PUT it to KV as agentdef:<n> (see above)
-pnpm deploy-semantius-admin-agent  # shortcut for deploy:agent semantius-admin
+pnpm deploy-semantius-agent      # shortcut for deploy:agent semantius-agent
+pnpm deploy-semantius-architect  # shortcut for deploy:agent semantius-architect
 pnpm deploy:frontend   # vite build (URL from frontend/.env.production) + wrangler deploy
 ```
 
@@ -545,9 +546,27 @@ SEMANTIUS_SKILLS_SRC='C:\other\skills' ./update.sh   # other skills checkout
 
 - **Skills** — every folder of `C:\dev\semantius-agent\semantius-plugin\skills` (a
   `SKILL.md` is required, checked before anything is deleted) **replaces**
-  `agents/semantius-admin/skills/<skill>/`: a mirror, not a merge, so files and whole
-  skills dropped upstream disappear here too. Prints the source's git revision. Ships
-  with `pnpm deploy:agent semantius-admin`; `pnpm bundle` checks the bundle limits.
+  `agents/semantius-architect/skills/<skill>/`; `agents/semantius-agent/skills/<skill>/`
+  gets the same minus `AGENT_EXCLUDED_SKILLS` in `update.sh` (`semantius-admin`, `-analyst`,
+  `-architect`, `-modeler`; a name no longer upstream stops the script before anything is
+  deleted). A mirror, not a merge, so files and whole skills dropped upstream disappear
+  here too. Prints the source's git revision. Ships with `pnpm deploy-semantius-agent` and
+  `pnpm deploy-semantius-architect`; `pnpm bundle` checks the bundle limits.
+
+  **Known gap (2026-11-03):** the skills `semantius-agent` keeps still point at excluded
+  ones, so these relative links do not resolve there: `semantius-importer` and
+  `semantius-transfer` link `../semantius-admin/references/` (`preflight.md`,
+  `task-tracking.md`, `dot-questions.md`), and `semantius-optimizer` links the analyst's
+  `semantic-spec-template.md` and the architect's `consistency-check.ts`. A references-only
+  folder is no fix here: a skill folder without `SKILL.md` fails bundle validation.
+
+  Agent names and skill names are separate: the agent `semantius-agent` was called
+  `semantius-admin` until 2026-11-03, and the agent `semantius-architect` began as a copy
+  of it, but the skills keep upstream's names, including `semantius-admin` and
+  `semantius-architect`.
+  Dated verification notes in this file keep the old agent name. `agentdef:semantius-admin`
+  stays deployed for now: the session sidebar filters on the record's `agentName`, so
+  conversations started before the rename are listed only under `/agent/semantius-admin`.
 - **CLI** — `scripts/fetch-cli.mjs <tag|latest>` resolves the tag (`latest` via the
   `releases/latest` redirect, no API token), reads `semantius-linux-x64`'s sha256 from
   that release's `checksums.txt` and writes the pin `linux-x64/semantius-cli.json`
@@ -1001,8 +1020,8 @@ against canned SSE streams.
 The chat UI shows a per-agent welcome card while a conversation is empty, configured by
 the optional `welcome` key in `agent.jsonc` — or, to keep UI copy edits away from
 models/egress, a sibling `agents/<name>/welcome.jsonc` whose root IS the card (its
-`$schema` key is stripped; defining both fails the bundle; `semantius-admin` uses the
-file). Validated in `core/src/agent.js` `validateWelcome`, mirrored in
+`$schema` key is stripped; defining both fails the bundle; `semantius-agent` and
+`semantius-architect` use the file). Validated in `core/src/agent.js` `validateWelcome`, mirrored in
 `core/welcome.schema.json`: a `title`, optional
 `subtitle`, and `sections[]` (each with `title`, optional `subtitle`, and `prompts[]`).
 Each prompt has a `display` label, an optional fuller `prompt`, an optional `prefill`
@@ -1275,7 +1294,7 @@ convention for getting the token to the backend, never part of the credential.
 Proven live by the acceptance `credentials` checks: inside the container
 `SEMANTIUS_JWT=__sak__` and `SEMANTIUS_ORG=<org>` are set with **no `SEMANTIUS_API_KEY`
 at all**, and `semantius whoami` comes back as the session's user (`admin@test.com` /
-Wei Chen / org `tests` against `https://tests.semantius.ai`). The semantius-admin agent's
+Wei Chen / org `tests` against `https://tests.semantius.ai`). The semantius-agent
 instructions tell it the workspace is already authenticated as that user, so it never
 asks for an API key the way the vendored skill docs otherwise would.
 
@@ -1299,8 +1318,8 @@ step 1 but not step 2: the broker refused the Neon call itself (Workers log:
 `ContainerProxy … POST …neon.tech/…/rpc/get_userinfo` → 403 in 14 ms wall / 1 ms CPU,
 never forwarded). `*.neon.tech` must **not** go into `SEMANTIUS_HOSTS` — anyone can create
 a Neon endpoint and collect the live user JWT there — so step 2 is covered **per session**
-by the `$SEMANTIUS_DATA_HOST` placeholder (see "Egress" above): semantius-admin opts in,
-ingest looks up exactly the verified org's `postgrest_url` host, and only that host joins
+by the `$SEMANTIUS_DATA_HOST` placeholder (see "Egress" above): semantius-agent and
+semantius-architect opt in, ingest looks up exactly the verified org's `postgrest_url` host, and only that host joins
 the session's allow list and JWT scope. `*.semantius.ai` stays: v0.8.9's `whoami` still
 reports `api_baseurl https://tests.semantius.ai`.
 
@@ -2026,7 +2045,7 @@ leave the later call's "no `<user_answers>` for THIS toolCallId → end silently
 force. A superseded ask is not rendered "Skipped" (that badge means the user passed over a card
 they had, not one they never got), and an earlier ask that did receive an answer (a delivery
 joined into the running response) keeps its answered card. The skills under
-`agents/semantius-admin/skills/` are maintained upstream and are never edited here; the
+`agents/semantius-agent/skills/` and `agents/semantius-architect/skills/` are maintained upstream and are never edited here; the
 matching skill-side guidance ("call it alone, after edits; `user_answers` is an input block")
 is filed as `askuserquestion-skill-change-request.md` for upstream. Rejected: a stub
 `user_answers` tool (advertises the very name to avoid, costs schema tokens on every request,
@@ -2500,7 +2519,7 @@ carries the *cookie session's* tenant, that the cookie opens the conversation it
 that an invalid cookie is a 401 — and that **the bearer wins**: a valid cookie sent beside an
 invalid bearer must still 401, or the documented precedence would be a lie.
 
-The **credentials** checks close the loop inside the sandbox, on a semantius-admin
+The **credentials** checks close the loop inside the sandbox, on a semantius-agent
 session (its `proxy_whitelist` covers `*.semantius.cloud` and `*.semantius.ai`): the container carries
 `SEMANTIUS_JWT=__sak__` plus the token's `SEMANTIUS_ORG` and **no `SEMANTIUS_API_KEY`**,
 and `semantius whoami` returns the session user's own identity — proving the sentinel was

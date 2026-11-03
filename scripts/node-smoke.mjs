@@ -101,7 +101,7 @@ try {
   check('registry: the shipped agents_config.jsonc parses', Object.keys(registry).length > 0);
   check(
     'registry: every shipped agent lists only registry ids',
-    ['hoth-trip-planner', 'semantius-admin'].every((a) =>
+    ['hoth-trip-planner', 'semantius-agent', 'semantius-architect'].every((a) =>
       createAgentBundleFromDir(join(here, '..', 'agents', a)).models.every((m) => Object.hasOwn(registry, m)),
     ),
   );
@@ -213,7 +213,7 @@ try {
   );
   check('registry: a plain openrouter entry accepted', !registryRejects({}));
   // The browser sees aliases (slugs of the display name), never registry ids.
-  const adminOptions = modelOptions(registry, createAgentBundleFromDir(join(here, '..', 'agents', 'semantius-admin')).models);
+  const adminOptions = modelOptions(registry, createAgentBundleFromDir(join(here, '..', 'agents', 'semantius-agent')).models);
   check(
     'registry: dropdown options carry aliases, never registry ids',
     adminOptions.length > 0 && adminOptions.every((o) => !Object.hasOwn(registry, o.id) && !o.id.includes('/') && !o.id.includes('@')),
@@ -346,7 +346,7 @@ try {
   const second = await provisionAgentSkills(localSandbox, bundle);
   check('re-provision is absent→write only (no overwrite)', second.reconstructed === false);
 
-  // 9. zero-skill agent (semantius-admin shape): valid, provisions nothing
+  // 9. zero-skill agent: valid, provisions nothing
   rpcCount = 0;
   const zero = await provisionAgentSkills(localSandbox, jsoncBundle);
   check('zero-skill agent provisions with 0 RPCs', zero.reconstructed === false && zero.skillDirs.length === 0 && rpcCount === 0, `rpcs=${rpcCount}`);

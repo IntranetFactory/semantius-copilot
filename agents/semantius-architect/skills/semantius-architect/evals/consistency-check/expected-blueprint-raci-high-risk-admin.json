@@ -1,0 +1,6 @@
+[
+  { "check": "access_scope", "detail": "§8.1 `purchase-requests:approve_purchase_request` is a high-risk process gate (§7 `high risk?` ✓): under raci its `included in :admin?` is -" },
+  { "check": "access_scope", "detail": "§9.1 rolls `purchase-requests:approve_purchase_request` up under `purchase-requests:admin`; under raci a high-risk process gate has no hierarchy row" },
+  { "check": "access_scope", "detail": "§8.1 `purchase-requests:order_purchase_request` is a process gate §7 does not mark high risk: under raci its `included in :admin?` is ✓" },
+  { "check": "access_scope", "detail": "§9.1 has no `purchase-requests:admin` → `purchase-requests:order_purchase_request` row; under raci" }
+]

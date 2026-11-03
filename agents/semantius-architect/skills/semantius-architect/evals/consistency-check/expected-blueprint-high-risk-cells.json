@@ -1,0 +1,4 @@
+[
+  { "check": "§7 high risk", "detail": "§7 `purchase_requests`.`ordered`: `high risk?` is \"yes\"; it is ✓ or -" },
+  { "check": "§7 high risk", "detail": "§7 `purchase_requests`.`rejected` has `high risk?` ✓ but `requires_permission?` is not ✓" }
+]
