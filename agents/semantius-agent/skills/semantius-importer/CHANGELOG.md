@@ -2,6 +2,10 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## Shared preflight and question files live in use-semantius
+
+2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. The checks are `use-semantius/references/preflight.md`, without yq or the customizations path, which this skill never used. It no longer names the pipeline skills; its stage tasks block an in-progress unprefixed task when `TaskList` shows one.
+
 ## "Relationship" replaces "edge" and "connect" for data relationships
 
 2026-11-03. Paired with the analyst's entry of the same name. The `Q:` template is now `Q: <Header> looks like a relationship to <Table>. Add the relationship?`. The file format is unchanged; `version` stays `3.1`.

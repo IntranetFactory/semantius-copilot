@@ -86,7 +86,8 @@ Building a whole module runs through the blueprint → spec → deploy pipeline:
   field-level spec, including all reuse, merge, and rename decisions.
 - **Deploy** a reconciled spec to the live instance.
 - **Extract** a spec from a live module (snapshot, export, reverse-engineer), for
-  modules built or customized directly in the UI.
+  modules built or customized directly in the UI. After extracting a spec, close with one
+  line offering to author the content it could not recover with the analyst's Extend mode.
 
 ## Direct edits vs the blueprint/spec pipeline
 

@@ -4,9 +4,8 @@
 #   1. agents/<agent>/skills/<skill>/          <- mirror of the semantius-plugin skills:
 #      semantius-architect gets all of them, semantius-agent all but AGENT_EXCLUDED_SKILLS.
 #      Every skill folder is REPLACED, not merged, so files and whole skills dropped
-#      upstream disappear here too. scripts/trim-agent-skills.mjs then copies what semantius-agent's
-#      skills link in the excluded skills to a common folder and rewrites those links. Ships with
-#      `pnpm deploy:agent <agent>`.
+#      upstream disappear here too. No agent gets a skill's evals/: they are maintainer-only tests,
+#      and with them a skill exceeds the bundle's file limit. Ships with `pnpm deploy:agent <agent>`.
 #   2. linux-x64/semantius-cli.json            <- pinned semantius CLI release { version,
 #      sha256 }. The binary itself (linux-x64/semantius-linux-x64, >100 MiB) is gitignored
 #      and fetched by scripts/fetch-cli.mjs, which `pnpm deploy:b` runs before baking it
@@ -38,17 +37,15 @@ done
 for skill in "${AGENT_EXCLUDED_SKILLS[@]}"; do
   [ -d "$SKILLS_SRC/$skill" ] || die "excluded skill is not upstream: $skill"
 done
-# Git Bash: Windows node.exe needs Windows paths (it reads /c/dev/... as C:\c\dev\...).
-TRIM_SKILLS="$ROOT/scripts/trim-agent-skills.mjs"
-TRIM_SRC="$SKILLS_SRC"
-TRIM_DST="$ROOT/agents/semantius-agent/skills"
-if command -v cygpath >/dev/null; then
-  TRIM_SKILLS="$(cygpath -m "$TRIM_SKILLS")"
-  TRIM_SRC="$(cygpath -m "$TRIM_SRC")"
-  TRIM_DST="$(cygpath -m "$TRIM_DST")"
-fi
-# A link that cannot be copied stops here, before anything is deleted.
-node "$TRIM_SKILLS" --check "$TRIM_SRC" "${AGENT_EXCLUDED_SKILLS[@]}"
+# The skills semantius-agent keeps must not depend on the excluded ones, so a reference added
+# upstream stops the sync here, before anything is deleted.
+excluded_names="$(IFS='|'; echo "${AGENT_EXCLUDED_SKILLS[*]}")"
+for d in "${src_skills[@]}"; do
+  case " ${AGENT_EXCLUDED_SKILLS[*]} " in *" $(basename "$d") "*) continue ;; esac
+  if hits="$(grep -rnIE --exclude=CHANGELOG.md --exclude-dir=evals "\b($excluded_names)\b" "$d")"; then
+    die "$(basename "$d") names an excluded skill:"$'\n'"$hits"
+  fi
+done
 
 # mirror_skills <agent> [skill to leave out]...
 mirror_skills() {
@@ -61,12 +58,12 @@ mirror_skills() {
     skill="$(basename "$d")"
     case " $* " in *" $skill "*) continue ;; esac
     cp -R "${d%/}" "$skills_dst/"
+    rm -rf "$skills_dst/$skill/evals"
     echo "      $skill"
   done
 }
 mirror_skills semantius-architect
 mirror_skills semantius-agent "${AGENT_EXCLUDED_SKILLS[@]}"
-node "$TRIM_SKILLS" "$TRIM_SRC" "$TRIM_DST" "${AGENT_EXCLUDED_SKILLS[@]}"
 if rev="$(git -C "$SKILLS_SRC" rev-parse --short HEAD 2>/dev/null)"; then
   dirty="$(git -C "$SKILLS_SRC" status --porcelain -- . | head -n 1)"
   echo "    source revision: $rev${dirty:+ + uncommitted changes}"

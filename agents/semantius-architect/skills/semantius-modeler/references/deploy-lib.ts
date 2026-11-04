@@ -229,8 +229,7 @@ export async function read1(tool: string, filters: string): Promise<any | null> 
  * Read-before-write create that returns the AUTHORITATIVE row. The contract:
  * never trust a `create_*` response to carry the new row's `id` / natural key
  * (the PostgREST representation a create echoes is not a contract you can build
- * FK resolution on — the `module_id`-null-on-permission-create failures came
- * from exactly that assumption). Instead: `read1` by natural key first (idempotent
+ * FK resolution on). Instead: `read1` by natural key first (idempotent
  * re-run returns the existing row), `write` only when absent, then `read1` AGAIN
  * so the caller always gets a real row with its real `id`. Throws loud if the
  * post-create read still finds nothing (a silent partial failure).

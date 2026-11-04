@@ -38,10 +38,11 @@ These run on every owned entity (skip `reuse-from` / `dropped`):
 
 - **Permissions consistency** (cross-check §8.1 Permissions catalog + §9.1 hierarchy vs every entity / rule):
   - Every `require_permission` and `has_permission` argument is in §8.1 (🔴 if not).
-  - Every entity with `**Edit permission:** admin` has the `baseline-admin` row (`<slug>:admin`) declared in §8.1 (🔴 if missing).
+  - At every level but `custom`, every owned entity's `**View permission:**` and `**Edit permission:**` code has its §8.1 row, a bundle includes its write permission in §9.1, and no line is a bare `manage`, `admin` or narrow suffix (🔴 otherwise).
+  - Every §8.1 prefix is this module's slug, a §3 `mastered in` module's slug or a §7 realizing module's slug, except a live code carried under "Live names win" (`stage-3-collisions.md`, 3d) (🔴 otherwise).
   - Every `workflow-gate (rule)` row is invoked by at least one rule; every `workflow-gate (lifecycle)` row is cited by the `has_permission` of a gate rule on the gated entity's `workflow_state` transition or of a §8.2 `create` rule, in every RACI mode (in `living` mode by a §9.1 `_enforcement rules_` A-gate, inside its `or` with `is_raci_actor`; an A-gate repeated in §3 `validation_rules` is 🔴) (the spec has no lifecycle table; the blueprint's §7 `requires_permission?` states become these) (🟡 if dead).
   - Every `workflow-gate (lifecycle)` row's `included in :admin?` agrees with its `high risk?` and the access level: ✓ with a §9.1 `<slug>:admin` → gate row, except a high-risk gate under `raci`, which is `-` with no such row; every other §8.1 row has `high risk?` `-` (🔴 on disagreement).
-  - Every `narrow` row is consumed by an entity's `Edit permission:` annotation or a rule (🟡 if dead).
+  - Every `narrow` row includes an entity's write permission in §9.1 or is invoked by a rule (🟡 if dead).
   - No `workflow-gate` permission is included by `<slug>:manage` in §9.1 (🔴 — defeats the gate).
   - Every `narrow` permission rolls up under `<slug>:manage` or higher in §9.1 (🔴 — narrow tier would be unreachable otherwise).
 
@@ -81,11 +82,20 @@ Total: N blockers, N warnings, N notes.
 
 End with: *"Run `semantius-analyst` Extend mode to fix specific items, or fix manually then re-run audit."*
 
+### A spec extracted from a live module
+
+A spec `semantius-optimizer` wrote mirrors live state, so any real modeling defect this audit finds is a genuine problem **in the live module**, now made visible. Run the audit only when the user explicitly asks for it (for example "audit it", "check the live model for defects"); never offer it after an extraction. Split the findings:
+
+- **Real live-model defects (surface as actionable):** label-column-is-a-FK, missing or filler `relationship_label`, malformed JsonLogic, duplicate `validation_rules` codes, an enum whose live values would orphan records. These describe the live module; fixing them means a `semantius-modeler` re-deploy.
+- **Authoring-completeness findings (expected, do NOT surface as actionable):** missing `initial_request`, empty §6/§7, missing `description` block. These fire *by construction* on every extracted spec (they are authored content live never held). Note them as expected, not as problems.
+
+Do NOT confuse this authoring audit with an extraction-fidelity check. "Does the spec faithfully match live?" is a different question, answered by re-running `semantius-optimizer` (deterministic) or a `semantius-modeler` deploy-test round-trip, not by this audit.
+
 ---
 
 ## Mode C: Extend (add to existing spec)
 
-When the user wants to add entities, fields, rules, or §6 relationship rows to an existing spec:
+When the user wants to add entities, fields, rules, or §6 relationship rows to an existing spec, or to author what a spec `semantius-optimizer` wrote cannot hold (§1 beyond a seed, §6/§7, authored frontmatter):
 
 1. Read the current spec. Its `version` must be `"3.x"`; any other `version`, or none → stop and tell the user the spec is not in the current format.
 2. Capture what to add (entity / field / rule) via conversation.

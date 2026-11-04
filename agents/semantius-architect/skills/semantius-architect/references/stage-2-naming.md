@@ -93,7 +93,7 @@ The canonical built-in field shapes live in `use-semantius/references/data-model
 | `users.settings` | per-user preferences blob | `preferences`, `config` |
 | `roles.role_name` | role display name | `name`, `title` |
 | `roles.slug` | stable snake_case handle | `code`, `role_code`, `key` |
-| `permissions.permission_name` | permission code (`<slug>:<action>`) | `name`, `code` |
+| `permissions.permission_name` | permission code (`<module>:<action>`) | `name`, `code` |
 
 When the model legitimately needs an extra field on a built-in (e.g. `users.primary_team_id` to point at a domain entity, `users.job_title`), include it normally — the deployer adds these additively to the live built-in via `create_field`.
 

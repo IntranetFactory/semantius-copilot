@@ -8,6 +8,28 @@ Entries below are newest first.
 
 ---
 
+## Shared preflight and question files live in use-semantius
+
+2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. The checks are `semantius-admin/references/pipeline-preflight.md` on top of `use-semantius/references/preflight.md`; a standalone modeler runs the shared checks and skips yq and the customizations path. `dot-questions.md` is in `use-semantius/references/`.
+
+## An entity's permissions are named by the catalog, never by what is installed
+
+`manage_option` is 1, 2 or 3. No-auto-deletion has two stated exceptions, both a single row the user chose to remove in the same run: "a new dedicated manager group", and a confirmed tier flip that narrows who can edit (Stage 4b). A fast run keeps the row in both cases and logs it.
+
+2026-11-04. Owner-approved, `plans/stable-permission-names-plan.md` in the domain-map repo (decisions D1 to D5, D8, D9). Paired with the architect's, analyst's and optimizer's entries of the same name. When a module embedded an entity whose owner was absent, its gates and overrides took the installing module's name, and the name changed when the owner installed: old rules kept testing the old name, one local name could cover gates from several owners, and adoption forced a choice between lost access and write access to the owner's whole module. Now an embedded entity keeps its owner's names, every entity has its own `read_<entity>` and `write_<entity>`, and `<unit>:read`, `:manage` and `:admin` are bundles that include them through §9.1. The format stays `version: "3.1"`, changed in place, and no deploy has tested this.
+
+- **Stage 1.** `**View permission:**` and `**Edit permission:**` are literal codes, required on every owned entity, except that a `computed` entity omits `**Edit permission:**` and the column takes its platform default. New tiers `entity-read` and `entity-write`. §8.1 has five columns. A bare tier on `**Edit permission:**`, `re-prefixed-from` and a `grant_module` column are rejected.
+- **Stage 2.** The holder rule replaces "set `module_id` to the deploying module", which with shared names would have let each new embedder take the row from the last one. Stage 2.5 scaffolds per-entity rows at every level except `custom`. The NULL `module_id` wording for permissions is gone, because the column is `NOT NULL`. Stage 2d tells an adoption from a shared-module move by the host, because `manage_option` says who edits, not which kind of move it is, and no longer applies its `module_type` check to an adoption onto the deploying module. Stage 2i is gone.
+- **Stage 3 and Stage 5.** Per-entity rows show as a count. The two "home module" lines keep their words: "kept here" now means this module holds rows named for a module that is not installed, and "moved" means the holder rule moved rows here. Stage 5 verifies holders and entity columns (`verifyPermissionRows`, `verifyEntities`), and permission descriptions only on rows this module holds.
+- **Stage 4.** Entity columns come from the spec, and `view_permission` joins the sync list. 4e-merge: identical JsonLogic under one name is not a clash, and on adoption an incoming rule replaces a same-named rule tagged with the module the entity came from. 4i: bridges name one entity's permissions, and an empty shell or shared host gets its own bundle rows. 4c-merge-master no longer re-points bridges, since moved entities keep their codes. 4j and Gate B run only on a shared-module move. 4k follows D8: gate and override codes are literal, tier grants use the unit's bundles, and an `:admin`-tier gated entity gets its own write permission instead of `<unit>:admin`. 4n's sweep is gone, and 4n is now only handoff re-attribution.
+- **No auto-deletion** has one stated exception, per D9: "a new dedicated manager group" (`manage_option: 1` on a shared-module move, and nothing else) deletes the old module's `<slug>:manage` row to the write permission. A fast run keeps the row, because nobody made that choice in the run.
+- **Tier flips.** A flip can now be a different bundle including the same write permission. The old row stays, so a narrowing flip needs an admin to remove it, and the plan says so.
+- **Libraries.** `scaffold-lib.ts` gains `ensurePermissionRows`, `holderAction` and `verifyPermissionRows`, and `verifyEntities` checks the entity columns. `SCAFFOLD_LIB_MAJOR` stays 6: the platform did not change. `deploy-lib.ts` loses one stale comment clause.
+
+## `grant overrides` applies on every RACI row
+
+2026-11-03. Stage 4k said to grant a row's `grant overrides [...]` list and also that an `informed` row gets no role grant, so an override on an Informed row could be lost. The Informed letter still grants nothing, and the list on the row now applies whatever the letter. An `informed` row's `grant_module` cell holds the handoff and not a module, so on that row the code is used as written. Paired with the analyst's entry on where overrides go. No deploy has tested this.
+
 ## Spec §6 headings: `FK table`, `References`, `Label`
 
 2026-11-03. The first three columns of the §6 relationship table were `From`, `To` and `Verb`. An older spec keeps those names, and the modeler accepts either, because the columns and their order are the same. Deploy behavior does not change. Rules: `references/stage-1-parse.md`, `references/stage-2-reconcile.md`, `references/stage-3-plan.md`, `references/stage-4-execute.md`, `references/conflict-resolution.md`, `SKILL.md`.

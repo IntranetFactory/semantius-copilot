@@ -17,7 +17,7 @@ Then render a plan summary as **markdown prose** (NOT inside a triple-backtick c
 
 > 📦 **Module:** `ats-candidate-crm` (♻️ exists, will update metadata)
 >
-> 🔑 **Permissions:** 3 baseline (`:read`, `:manage`, `:admin`) plus workflow gates derived from the lifecycle states (rebased onto `ats-candidate-crm:*` since the catalog owner modules aren't deployed).
+> 🔑 **Permissions:** 3 baseline (`:read`, `:manage`, `:admin`), 13 for reading and writing each entity, plus workflow gates derived from the lifecycle states. Each keeps the name the catalog gives it, also when its module isn't deployed yet.
 >
 > 🗂 **Entities** (6 from your design, plus 1 built-in):
 >
@@ -40,11 +40,11 @@ Then render a plan summary as **markdown prose** (NOT inside a triple-backtick c
 >
 > 🔗 **Cross-module relationships:** all currently dormant. None of `job_profiles`, `skill_profiles`, `job_requisitions`, `candidate_referrals`, `recruitment_agencies`, `recruitment_events`, `talent_pools`, `candidate_assessments`, `background_checks`, `onboarding_journeys`, `benefit_enrollments`, `compensation_statements`, `employees`, `pre_employees` are in your semantic model yet. Recorded as future relationships; no relationship fields are created this run.
 >
-> 🔁 **Lifecycle gates** (rebased onto this module's slug):
+> 🔁 **Lifecycle gates** (each under the module the catalog names for it):
 > - `ats-candidate-crm:hire_candidate`, `ats-candidate-crm:flag_do_not_hire` (Candidates)
 > - `ats-candidate-crm:submitted_interview_scorecard` (Interview Scorecards)
-> - `ats-candidate-crm:approve_offer`, `ats-candidate-crm:rescind_offer` (Offers)
-> - `ats-candidate-crm:publish_posting` (Job Postings)
+> - `ats-offers:approve_offer`, `ats-offers:rescind_offer` (Offers)
+> - `ats-recruitment-pipeline:publish_posting` (Job Postings)
 >
 > 🛡 **Owner-scoped visibility** added for Candidates, Applications, Interview Scorecards, Offers: each gets a `view_all_*` plus `manage_all_*` permission pair so users see only their own rows by default, with managers able to broaden (the row-scope playbook's owner + oversight shape).
 

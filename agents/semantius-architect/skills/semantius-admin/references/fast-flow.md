@@ -145,7 +145,7 @@ The concrete pick at the main known gates, from rules 1 to 9. Every gate's own f
 | Modeler | Ambiguous relationship target | The exact-name candidate; otherwise "Skip this relationship". |
 | Modeler | Relationship proposals (1 to 3 or 4 or more) | Apply all: they are exact matches already. |
 | Modeler | Rule clash on a shared entity (4e) | Keep the live rule (never remove). |
-| Modeler | Extra fields on users, a tier change, a row visibility rule, a shared entity with no manager (Gate B) | Proceed as the spec says, but never remove a live row visibility rule (keep it). |
+| Modeler | Extra fields on users, a tier change, a row visibility rule, a shared entity with no manager (Gate B) | Proceed as the spec says, but never remove a live row visibility rule, or the access a narrowing tier change would take away (keep both). |
 | Modeler | A change that removes or retypes live data (an enum value removal, a field deletion, a cross-primitive format change) | Skip it and keep what is deployed (never remove). |
 | Modeler | A live rule the spec does not have | Keep the live rule. |
 | Modeler | A required field on a table that already has records, required enums with no default included | Add the column as optional (nullable). |

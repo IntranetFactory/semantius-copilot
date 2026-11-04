@@ -1,10 +1,9 @@
 /**
  * spec-extract-lib.ts — deterministic reverse-engineer of a live Semantius module
- * into a `*-semantic-spec.md` (analyst artifact, file format version "3.1").
+ * into a `*-semantic-spec.md` (file format version "3.1").
  *
  * READ-ONLY against Semantius. Every read shells out via `Bun.spawn` with an
- * ARG ARRAY (bypasses the shell — inline JSON is safe on Windows and POSIX),
- * the same proven pattern as semantius-modeler/references/deploy-lib.ts.
+ * ARG ARRAY (bypasses the shell — inline JSON is safe on Windows and POSIX).
  *
  * Usage:  bun run spec-extract-lib.ts <module_slug> [outfile] [--force]
  *         bun run spec-extract-lib.ts --from-fixture <fixture.json> [outfile] [--force]
@@ -16,7 +15,7 @@
  * `--from-fixture` renders the same markdown from a JSON snapshot of the live
  * reads (shape documented at `loadLive()` / the round-trip eval under
  * `../evals/round-trip/`) without touching Semantius; it exists so the emitted
- * markdown can be diffed against the analyst template byte-for-byte in CI.
+ * markdown can be diffed against the spec template byte-for-byte in CI.
  *
  * The mapping rules (and the Category-A / Category-B divergence taxonomy the
  * companion compare loop keys on) are documented in SKILL.md. This file is the
@@ -35,12 +34,12 @@ const BUILTINS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// Entity ordering (canonical — shared with the analyst/architect convention)
+// Entity ordering (canonical — shared with authored specs)
 // ---------------------------------------------------------------------------
 
 /** Tier by `entity_type`, then alphabetical by `table_name`. This is the ONE
  *  ordering key that exists identically on the spec and in live state, so the
- *  forward pipeline (architect/analyst) and this reverse pass produce the same
+ *  authored specs and this reverse pass produce the same
  *  order. NOT `created_at`, which is a deploy-time artifact with no modeling
  *  meaning. Reuse-from / built-in entities are appended last (see `main`). */
 const ENTITY_TYPE_RANK: Record<string, number> = {
@@ -95,6 +94,11 @@ const isRef = (f: any): boolean => !!f.reference_table;
 /** An `is_a` / `has_a` entity: based on `id_refentity`, sharing its key (template §3 `**Based on:**`). */
 const isBased = (e: any): boolean => e.id_type === "is_a" || e.id_type === "has_a";
 
+/** The code the spec's `**Edit permission:**` line carries. None on a computed entity, which has
+ *  no entity-write row, and none at the platform's column default `admin`, which is not a module's code. */
+const editCode = (e: any): string =>
+  e.entity_type === "computed" || e.edit_permission === "admin" ? "" : e.edit_permission || "";
+
 /** An `enum_values` entry is a value or a `{value, label}` object (optional description / color / icon); records store the value. */
 const enumValue = (v: any): string => (v !== null && typeof v === "object" ? String(v.value) : String(v));
 
@@ -116,7 +120,7 @@ function mapLabel(f: any, e: any): string {
 }
 
 /** Markdown table row. A non-empty cell is padded with one space on each side; an
- *  EMPTY cell renders as a single space (`| |`), matching the analyst's authored
+ *  EMPTY cell renders as a single space (`| |`), matching authored
  *  tables. (Padding empties too produced `|  |` — a byte-diff on every blank cell.) */
 function tableRow(cells: string[]): string {
   return "|" + cells.map((c) => (c === "" ? " " : ` ${c} `)).join("|") + "|";
@@ -132,7 +136,7 @@ function humanize(name: string): string {
 
 /** §3 Notes cell composition (suppression rules applied). */
 function mapNotes(f: any, e: any): string {
-  // `unique` mirrors live `unique_value` (a DB-UNIQUE constraint). The analyst
+  // `unique` mirrors live `unique_value` (a DB-UNIQUE constraint). The spec
   // template lists it among the Notes markers and names THIS extractor as the thing
   // that round-trips it, so emit it for label and non-label columns alike, in the
   // template's order: `label_column`, unique, then value annotations. When live
@@ -219,7 +223,7 @@ function frontmatter(mod: any, ownedTables: string[], relatedVersions: Record<st
   // Deploy provenance: live truth, so the optimizer emits it (unlike the
   // authoring-only reconciled_* / source_blueprint keys it deliberately drops).
   // deployed_version mirrors the module's current modules.version; a spec extracted
-  // from live is by definition in-sync, so the analyst's 2a.1 drift gate reads equal
+  // from live is by definition in-sync, so a drift check reads equal
   // until prod next changes. Guarded so an older platform (no version column) omits them.
   if (mod.version !== undefined && mod.version !== null) {
     lines.push(`deployed_version: ${mod.version}`);
@@ -274,7 +278,7 @@ function mermaid(entities: any[], fieldsByTable: Record<string, any[]>): string 
   const referenced = new Set<string>();
   // Deterministic emission order: child entities in canonical order (entity_type
   // tier, then table_name A->Z), then their reference fields in field_order. The
-  // same entity order the analyst emits.
+  // same entity order an authored spec uses.
   for (const e of entities) {
     const fields = fieldsByTable[e.table_name] || [];
     for (const f of fields) {
@@ -296,7 +300,7 @@ function mermaid(entities: any[], fieldsByTable: Record<string, any[]>): string 
   }
   // `master` tags non-builtin entities whose reconciliation is `reuse-from` /
   // `promote-to-master` and that take part in a diagram edge — the same criterion the
-  // architect's consistency-check.ts `emitSpecMermaid` uses, so the checker's
+  // consistency-check.ts `emitSpecMermaid` uses, so the checker's
   // derived diagram and this one agree. Both classDef lines are emitted ONLY when
   // at least one entity qualifies (template §2 omit-rule).
   const masterIds = entities
@@ -326,11 +330,11 @@ function entityDetail(e: any, fields: any[]): string {
     // Built-in / reuse block: referenced, not provisioned, so no owned Fields table.
     // It still carries a Label column and participates in relationships — every inbound
     // FK from an owned entity is fully recoverable from live state, so emit the same
-    // Relationships prose owned entities get. This matches the analyst's authored
+    // Relationships prose owned entities get. This matches an authored
     // built-in block (e.g. `users` listing its inbound 1:N relationships); omitting it dropped
     // recoverable structure, not authored prose. No `**Additive fields**` table is
-    // emitted (the extractor does not read built-in columns), matching the analyst,
-    // which emits that table ONLY when the blueprint adds fields to the built-in.
+    // emitted (the extractor does not read built-in columns), matching an authored
+    // spec, which has that table ONLY when fields are added to the built-in.
     out.push(`**Plural label:** ${e.plural_label}`);
     if (e.label_column) out.push(`**Label column:** \`${e.label_column}\``);
     out.push(`**Reconciliation:** ${reconciliation(e)}`);
@@ -345,14 +349,15 @@ function entityDetail(e: any, fields: any[]): string {
     return out.join("\n");
   }
 
-  // Annotation lines follow the analyst template's order AND its omit-rules:
-  //   Edit permission — omit when the default `manage`.
+  // Annotation lines follow the spec template's order AND its omit-rules:
+  //   View permission, Edit permission: the entity's live codes, in full, on every
+  //     OWNED entity. A line is left out when the live column is empty. Edit permission
+  //     is also left out as `editCode` says.
   //   Catalog entity code — emit for every OWNED entity (equals table_name under
   //     agent-optimized naming; the template emits it regardless).
   //   Catalog owner — emit for an embedded_master placeholder whose canonical owner
   //     module is absent (live `catalog_owner_module` carries the future owner slug).
   //   Reconciliation — omit when create-new.
-  const editSuffix = String(e.edit_permission || "").split(":").pop() || "manage";
   const recon = reconciliation(e);
   out.push(`**Plural label:** ${e.plural_label}`);
   // Label column: required on every non-junction entity; OPTIONAL on a junction (the
@@ -377,7 +382,8 @@ function entityDetail(e: any, fields: any[]): string {
   // Based on (template §3), right after **Key prefix:**: the base, backticked. Create-only.
   if (based && e.id_refentity) out.push(`**Based on:** \`${e.id_refentity}\``);
   out.push(`**Audit log:** ${e.audit_log ? "yes" : "no"}`);
-  if (editSuffix !== "manage") out.push(`**Edit permission:** ${editSuffix}`);
+  if (e.view_permission) out.push(`**View permission:** ${e.view_permission}`);
+  if (editCode(e)) out.push(`**Edit permission:** ${editCode(e)}`);
   // UI/cube/icon lines (canonical spec §1), pinned right after **Edit permission:**.
   // Edit mode / Cube mode: bare enum value, no backticks; omit at the platform default
   // `auto` (verified via `create_*` schema + every live row reads back "auto"). Icon:
@@ -415,7 +421,7 @@ function entityDetail(e: any, fields: any[]): string {
   // §3 behavior blocks (data-integrity / RLS / dynamic-UI logic). Emitted after the
   // Fields table and Relationships prose, ONLY for non-builtin entities (the BUILTINS
   // branch returned early above). Each block is emitted WHEN its live value is non-empty,
-  // in the analyst template's order (semantic-spec-template.md, §3 sub-blocks): Computed fields,
+  // in the spec template's order (§3 sub-blocks): Computed fields,
   // Validation rules, Input type rules, Select rule. All four use the same fence style:
   // `**Heading**`, blank line, ```json, JSON.stringify(v, null, 2), ```, blank line.
   emitJsonBlock(out, "Computed fields", e.computed_fields);
@@ -427,7 +433,7 @@ function entityDetail(e: any, fields: any[]): string {
 }
 
 /** Assemble the §3 "Input type rules" array from per-field `input_type_rule` objects
- *  (analyst template array shape, semantic-spec-template.md §3 "Input type rules"): one entry
+ *  (spec template array shape, §3 "Input type rules"): one entry
  *  `{ field, jsonlogic }` per field carrying a non-empty rule, in field order. Returns
  *  `[]` when no field carries a rule (so `emitJsonBlock` omits the whole block). */
 function inputTypeRules(fields: any[]): Array<{ field: string; jsonlogic: any }> {
@@ -449,7 +455,7 @@ function isNonEmpty(v: any): boolean {
   return false;
 }
 
-/** Emit a §3 behavior block iff `value` is non-empty. Matches the analyst template's
+/** Emit a §3 behavior block iff `value` is non-empty. Matches the spec template's
  *  fence style exactly: `**Heading**`, blank line, a ```json fence, the 2-space
  *  pretty-printed JSON (`JSON.stringify(value, null, 2)`), the closing fence, and a
  *  trailing blank line so successive blocks stay separated. */
@@ -465,7 +471,7 @@ function emitJsonBlock(out: string[], heading: string, value: any): void {
 
 /** §3 Relationships prose. A junction entity (live `entity_type === "junction"`) is
  *  described by ONE junction line, and its two parent entities get the canonical M:N line
- *  (analyst template: "`X` ↔ `Y` is many-to-many through the `<junction>` junction
+ *  (spec template: "`X` ↔ `Y` is many-to-many through the `<junction>` junction
  *  table") rather than a raw 1:N-to-the-junction-table. Everything else: outbound FKs in
  *  field order, then inbound 1:N from owned children. All deterministic from live —
  *  `entity_type` supplies the junction signal; no authored verb is needed. */
@@ -511,7 +517,7 @@ function relationshipsProse(
     const del = f.reference_delete_mode || "clear"; // literal token (clear|restrict|cascade)
     // Disambiguate the FK by its unique `field_name` (like the inbound line's
     // `via child.field_name`), never a display label or a name-derived noun — the same
-    // uniqueness guarantee §1 uses for `table_name`. This is the exact form the analyst
+    // uniqueness guarantee §1 uses for `table_name`. This is the exact form the spec
     // template prescribes, so authored and reverse-engineered specs carry identical prose.
     lines.push(
       `- ${art} \`${e.table_name}\` record ${belong} one \`${f.reference_table}\` via \`${f.field_name}\` (N:1, ${req}, ${del} on delete).`,
@@ -596,24 +602,88 @@ function enumerations(entities: any[], fieldsByTable: Record<string, any[]>): st
   return out.join("\n").trimEnd();
 }
 
-/** Permission suffix relative to this module's slug prefix (`<slug>:<suffix>`). Falls
- *  back to the text after the last colon for a permission minted under another prefix. */
-function permSuffix(name: string, slug: string): string {
-  return name.startsWith(`${slug}:`) ? name.slice(slug.length + 1) : (name.split(":").pop() || name);
+/** Text before the colon of `<prefix>:<suffix>`. The prefix names the entity's owner, the
+ *  module that realizes a gate, or the module that declares a bundle, so it can differ from
+ *  this module's slug and can name a module that is not installed. */
+function permPrefix(name: string): string {
+  return name.split(":")[0];
 }
 
-/** Set of permission names transitively included by `rootName` via the hierarchy relationships
- *  (permissions are keyed by `permission_name`; hierarchy rows relate the two names). */
-function includedClosure(rootName: string, hierarchy: any[]): Set<string> {
-  const adj: Record<string, string[]> = {};
-  for (const h of hierarchy) (adj[h.including_permission_name] ||= []).push(h.included_permission_name);
+/** Text after the colon of `<prefix>:<suffix>`. */
+function permSuffix(name: string): string {
+  return name.split(":").pop() || name;
+}
+
+/** Permission name -> the names it directly includes, from hierarchy rows (permissions are
+ *  keyed by `permission_name`; hierarchy rows relate the two names). */
+function includesIndex(hierarchy: any[]): Record<string, string[]> {
+  const includes: Record<string, string[]> = {};
+  for (const h of hierarchy) (includes[h.including_permission_name] ||= []).push(h.included_permission_name);
+  return includes;
+}
+
+/** Set of permission names transitively included by `rootName`. */
+function includedClosure(rootName: string, includes: Record<string, string[]>): Set<string> {
   const seen = new Set<string>();
   const stack = [rootName];
   while (stack.length) {
     const id = stack.pop()!;
-    for (const next of adj[id] || []) if (!seen.has(next)) { seen.add(next); stack.push(next); }
+    for (const next of includes[id] || []) if (!seen.has(next)) { seen.add(next); stack.push(next); }
   }
   return seen;
+}
+
+/** True for `<prefix>:write_<entity>` that includes its own `<prefix>:read_<entity>`, which every
+ *  entity-write row does. That row is what tells it from a gate whose verb starts the same way
+ *  (`write_off_invoice`). */
+function writesEntity(name: string, includes: Record<string, string[]>): boolean {
+  const suffix = permSuffix(name);
+  if (!suffix.startsWith("write_")) return false;
+  return (includes[name] || []).includes(`${permPrefix(name)}:read_${suffix.slice("write_".length)}`);
+}
+
+/** True for a code that includes a write permission: a bundle, not a gate. */
+function includesWrite(name: string, includes: Record<string, string[]>): boolean {
+  for (const n of includedClosure(name, includes)) if (writesEntity(n, includes)) return true;
+  return false;
+}
+
+/**
+ * Names of the permissions this module's §8.1 carries. A row can be held by another module:
+ * the first embedder of an entity holds its owner-named rows, and an installed owner holds
+ * them from then on, so reading by `module_id` alone would lose them. So besides the rows
+ * this module holds, take every code an owned entity's columns name, every code an owned
+ * entity's rules cite, and whatever those reach through the hierarchy.
+ *
+ * The walk stops at another module's bundle (its `read`, `manage`, `admin` or a narrow tier):
+ * that is the other module's own row, and going through it would pull in that whole module.
+ */
+function modulePermissionNames(
+  mod: any, owned: any[], fieldsByTable: Record<string, any[]>, heldNames: Set<string>, allHierarchy: any[],
+): Set<string> {
+  const includes = includesIndex(allHierarchy);
+  const otherBundle = (name: string): boolean => {
+    if (heldNames.has(name) || permPrefix(name) === mod.module_slug) return false;
+    return ["read", "manage", "admin"].includes(permSuffix(name)) || includesWrite(name, includes);
+  };
+  const cited = new Set<string>();
+  const stack = [...heldNames];
+  for (const e of owned) {
+    if (e.view_permission) stack.push(e.view_permission);
+    if (editCode(e)) stack.push(editCode(e));
+    citedPermissions(e.validation_rules, cited);
+    citedPermissions(e.select_rule, cited);
+    for (const f of fieldsByTable[e.table_name] || []) citedPermissions(f.input_type_rule, cited);
+  }
+  stack.push(...cited);
+  const names = new Set<string>();
+  while (stack.length) {
+    const name = stack.pop()!;
+    if (names.has(name) || otherBundle(name)) continue;
+    names.add(name);
+    stack.push(...(includes[name] || []));
+  }
+  return names;
 }
 
 /** Permission codes a JsonLogic value cites through `require_permission` or
@@ -692,14 +762,23 @@ function raciGateCodes(v: any, out: Set<string> = new Set()): Set<string> {
 }
 
 /**
- * §8.1 Permissions catalog. The `tier` vocabulary MUST be one the modeler accepts
- * (stage-1-parse: baseline-read | baseline-manage | baseline-admin |
- * workflow-gate (lifecycle) | workflow-gate (rule) | override | narrow) — a bare
- * `workflow-gate` is a deploy-time 🛑. Live state carries no tier column, so the
+ * §8.1 Permissions catalog. The `tier` vocabulary MUST be one a deploy accepts
+ * (baseline-read | baseline-manage | baseline-admin | entity-read |
+ * entity-write | workflow-gate (lifecycle) | workflow-gate (rule) | override | narrow);
+ * a bare `workflow-gate` is a deploy-time 🛑. Live state carries no tier column, so the
  * non-baseline tiers are a HEURISTIC over what the spec itself can prove. A rule
  * CITES a code through `require_permission` or `has_permission` in an owned entity's
  * validation_rules / select_rule JSON.
- *   narrow                   the suffix is an owned entity's `edit_permission` suffix
+ *   entity-write             `write_*` named by an owned entity's `**Edit permission:**`, or
+ *                            including its own `read_*`. Never under `access_scope: custom`,
+ *                            where the module keeps its hand-made permissions
+ *   entity-read              `read_*` named by an owned entity's `view_permission`, or
+ *                            included by the module's `read` or by its own `write_*`.
+ *                            Never under `access_scope: custom`
+ *   narrow                   a code that includes a write permission, or (a hand-made code)
+ *                            any other code an owned entity's `edit_permission` names
+ *   workflow-gate (rule)     `bypass_submit_lock`, by name, cited or not (the rule that cites
+ *                            it can sit on a reused entity this spec does not carry)
  *   override                 `view_all_*` / `manage_all_*` row-scope codes (tested before
  *                            the rule test: they are wired into select_rule via has_permission)
  *   workflow-gate (lifecycle) cited by a `workflow_state` transition rule (a validation
@@ -717,19 +796,24 @@ function raciGateCodes(v: any, out: Set<string> = new Set()): Set<string> {
  * `included in :admin?` is `-`), else `-`. Under every other access level, and on
  * every other row, it is `-` (under `gated` the admin holds every gate, so live state
  * cannot show which gates are high-risk).
- * `reconciliation` is `(none)`: live state cannot recover a `re-prefixed-from` origin.
+ * `perms` holds no bundle of another module (`modulePermissionNames`), so a `read`, `manage`
+ * or `admin` suffix here is always this module's own baseline.
  */
 function permissionsCatalog(mod: any, perms: any[], hierarchy: any[], owned: any[]): string {
   const out: string[] = [
     "## 8.1 Permissions catalog",
     "",
-    "| permission | tier | description | included in `:admin`? | high risk? | reconciliation |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| permission | tier | description | included in `:admin`? | high risk? |",
+    "| --- | --- | --- | --- | --- |",
   ];
-  const slug: string = mod.module_slug;
-  const editSuffixes = new Set<string>(
-    owned.map((e) => permSuffix(String(e.edit_permission || ""), slug)).filter((s) => s && s !== "manage" && s !== "admin"),
-  );
+  const includes = includesIndex(hierarchy);
+  const editColumns = new Set<string>(owned.map(editCode).filter(Boolean));
+  const entityReads = new Set<string>(owned.map((e) => e.view_permission).filter(Boolean));
+  for (const h of hierarchy) {
+    const includedBy: string = h.including_permission_name;
+    if (permSuffix(includedBy) === "read" || writesEntity(includedBy, includes)) entityReads.add(h.included_permission_name);
+  }
+  const perEntity = String(mod.access_scope) !== "custom";
   const cited = new Set<string>();
   const lifecycleCited = new Set<string>();
   for (const e of owned) {
@@ -744,12 +828,12 @@ function permissionsCatalog(mod: any, perms: any[], hierarchy: any[], owned: any
     for (const c of citedPermissions(e.select_rule || {})) cited.add(c);
   }
   const raci = String(mod.access_scope) === "raci";
-  const adminPerm = perms.find((p) => permSuffix(p.permission_name, slug) === "admin");
-  const adminClosure = adminPerm ? includedClosure(adminPerm.permission_name, hierarchy) : null;
+  const adminPerm = perms.find((p) => permSuffix(p.permission_name) === "admin");
+  const adminClosure = adminPerm ? includedClosure(adminPerm.permission_name, includes) : null;
 
   // Deterministic order: read, manage, admin, then the rest by name.
   const rank = (p: any) => {
-    const s = permSuffix(p.permission_name, slug);
+    const s = permSuffix(p.permission_name);
     return s === "read" ? 0 : s === "manage" ? 1 : s === "admin" ? 2 : 3;
   };
   const sorted = [...perms].sort(
@@ -757,12 +841,15 @@ function permissionsCatalog(mod: any, perms: any[], hierarchy: any[], owned: any
   );
   for (const p of sorted) {
     const name: string = p.permission_name;
-    const suffix = permSuffix(name, slug);
+    const suffix = permSuffix(name);
     let tier: string;
     if (suffix === "read") tier = "baseline-read";
     else if (suffix === "manage") tier = "baseline-manage";
     else if (suffix === "admin") tier = "baseline-admin";
-    else if (editSuffixes.has(suffix)) tier = "narrow";
+    else if (perEntity && suffix.startsWith("write_") && (editColumns.has(name) || writesEntity(name, includes))) tier = "entity-write";
+    else if (perEntity && suffix.startsWith("read_") && entityReads.has(name)) tier = "entity-read";
+    else if (editColumns.has(name) || includesWrite(name, includes)) tier = "narrow";
+    else if (suffix === "bypass_submit_lock") tier = "workflow-gate (rule)";
     // `override` before the rule test: a row-scope override is wired INTO the entity's
     // select_rule via `has_permission`, so it would otherwise read as a rule gate.
     else if (/^(view_all_|manage_all_)/.test(suffix)) tier = "override";
@@ -774,7 +861,7 @@ function permissionsCatalog(mod: any, perms: any[], hierarchy: any[], owned: any
     else if (adminClosure) inAdmin = adminClosure.has(p.permission_name) ? "✓" : "-";
     else inAdmin = "✓";
     const highRisk = raci && tier === "workflow-gate (lifecycle)" && inAdmin === "-" ? "✓" : "-";
-    out.push(`| \`${name}\` | ${tier} | ${p.description} | ${inAdmin} | ${highRisk} | (none) |`);
+    out.push(`| \`${name}\` | ${tier} | ${p.description} | ${inAdmin} | ${highRisk} |`);
   }
   return out.join("\n");
 }
@@ -813,12 +900,12 @@ function governance(
   // Two trailing lineage columns (`origin`, `catalog role code`) before
   // the final `reconciliation` column (canonical spec §4). These are display-only — the
   // deployer re-derives both from module_type/slug — so the round-trip is a functional
-  // no-op; the modeler parses §9.1 by header name and ignores them as inputs.
+  // no-op; a deploy parses §9.1 by header name and ignores them as inputs.
   out.push("| role | baseline grant | origin | catalog role code | reconciliation |");
   out.push("| --- | --- | --- | --- | --- |");
   // Role slugs come from LIVE `roles.slug` (the correct fully-underscored canonical form),
   // paired to their grant via the module's default-role FK columns. NOT synthesized from
-  // module_slug — that reproduces an architect bug where the spec carried a malformed
+  // module_slug — that reproduces a bug where the spec carried a malformed
   // hyphen/underscore-mixed slug. Live is the truth-source; a diff vs an authored spec on
   // this cell is an upstream authoring defect, not an extractor limitation.
   // Emit each role's live `roles.origin` / `roles.catalog_role_code` in the two new cells.
@@ -846,16 +933,16 @@ function governance(
   out.push("| --- | --- | --- |");
   for (const h of hierarchy) {
     const inc = permByName[h.including_permission_name]?.permission_name;
-    // The included side may be another module's permission only for a family edit grant
-    // (the `hierarchy` filter in `render` admits nothing else from outside the module).
+    // The included side is outside §8.1 only for a family edit grant to another module's
+    // bundle (the `hierarchy` filter in `render` admits nothing else from outside §8.1).
     const included = permByName[h.included_permission_name]?.permission_name ?? h.included_permission_name;
     if (inc && included) out.push(`| \`${inc}\` | \`${included}\` | ♻ exists |`);
   }
   out.push("");
   // Read the module's Processes catalog (no typed `read_process` CRUD tool exists —
-  // read via `postgrestRequest` GET `/processes?module_id=eq.<id>`, the same table the
-  // modeler writes in living-RACI mode). Emit the §9 catalog in the analyst template's
-  // exact format (semantic-spec-template.md §9.1 Processes) when rows exist; keep the
+  // read via `postgrestRequest` GET `/processes?module_id=eq.<id>`, the same table a
+  // deploy writes in living-RACI mode). Emit the §9 catalog in the spec template's
+  // exact format (§9.1 Processes) when rows exist; keep the
   // `_(none: ...)_` placeholder when there are none.
   emitProcesses(out, processes, scope);
   out.push("");
@@ -869,8 +956,8 @@ function governance(
   return out.join("\n");
 }
 
-/** §9 Processes catalog. Emits the analyst template's exact shape
- *  (semantic-spec-template.md §9.1 Processes): the bare `**Processes:**` caption line, a
+/** §9 Processes catalog. Emits the spec template's exact shape
+ *  (§9.1 Processes): the bare `**Processes:**` caption line, a
  *  blank line, then a `| process_key | name | description | ordering |` table — one row
  *  per live process, sorted by `ordering` (then `process_key`) for deterministic output.
  *  When there are no processes, the inline `**Processes:** _(none: ...)_` form (single
@@ -905,7 +992,9 @@ function emitProcesses(out: string[], processes: any[], scope: string): void {
  * Everything the renderer needs, as read from Semantius (raw rows, pre-sort). This is
  * also the JSON shape a `--from-fixture` file carries, so the round-trip eval can feed
  * the renderer without a live instance. `relatedModules` are the `modules` rows of the
- * OTHER modules that own a related (reuse-from) entity.
+ * OTHER modules that own a related (reuse-from) entity. `perms` are the rows this module
+ * holds; `otherPerms` are rows other modules hold, of which `render` keeps the ones this
+ * module reaches (`modulePermissionNames`).
  */
 type LiveData = {
   mod: any;
@@ -913,6 +1002,7 @@ type LiveData = {
   fieldsByTable: Record<string, any[]>;
   related: any[];
   perms: any[];
+  otherPerms: any[];
   allHierarchy: any[];
   roles: any[];
   processes: any[];
@@ -958,9 +1048,19 @@ async function loadLive(slug: string): Promise<LiveData> {
   const allHierarchy = await read("read_permission_hierarchy", {});
   const roles = await read("read_role", { filters: `module_id=eq.${mod.id}` });
 
+  // Rows other modules hold that this module reaches, in batches to keep each filter short.
+  const heldNames = new Set<string>(perms.map((p) => p.permission_name));
+  const otherNames = [...modulePermissionNames(mod, ownedRaw, fieldsByTable, heldNames, allHierarchy)]
+    .filter((n) => !heldNames.has(n));
+  const otherPerms: any[] = [];
+  for (let i = 0; i < otherNames.length; i += 50) {
+    const batch = otherNames.slice(i, i + 50);
+    otherPerms.push(...(await read("read_permission", { filters: `permission_name=in.(${batch.join(",")})` })));
+  }
+
   // §9 Processes catalog. No typed `read_process` CRUD tool exists, so read the
-  // `processes` table via the generic `postgrestRequest` GET (the same table + filter the
-  // modeler uses to materialize living-RACI processes: `/processes?module_id=eq.<id>`).
+  // `processes` table via the generic `postgrestRequest` GET (the same table + filter a
+  // deploy uses to materialize living-RACI processes: `/processes?module_id=eq.<id>`).
   // A read failure must NOT abort the extract — leave the §9 Processes block as its
   // placeholder and FLAG the loss on stderr (canonical spec §5 / task rule 5).
   let processes: any[] = [];
@@ -978,7 +1078,7 @@ async function loadLive(slug: string): Promise<LiveData> {
   }
 
   // Deploy-provenance: live `modules` row of each OTHER module this spec reuses an
-  // entity from (the reference targets pulled in above). Lets the analyst's 2a.1 gate
+  // entity from (the reference targets pulled in above). Lets a drift check
   // detect drift in a reused entity, not just this module's own. Best-effort: skip a
   // module that can't be read.
   const relatedModules: any[] = [];
@@ -988,13 +1088,21 @@ async function loadLive(slug: string): Promise<LiveData> {
     if (rm) relatedModules.push(rm);
   }
 
-  return { mod, ownedRaw, fieldsByTable, related, perms, allHierarchy, roles, processes, relatedModules };
+  return { mod, ownedRaw, fieldsByTable, related, perms, otherPerms, allHierarchy, roles, processes, relatedModules };
+}
+
+/** The rows this module's §8.1 carries: the ones it holds, then the ones it reaches. */
+function modulePermissions(data: LiveData): any[] {
+  const heldNames = new Set<string>(data.perms.map((p) => p.permission_name));
+  const names = modulePermissionNames(data.mod, data.ownedRaw, data.fieldsByTable, heldNames, data.allHierarchy);
+  return [...data.perms, ...data.otherPerms.filter((p) => names.has(p.permission_name) && !heldNames.has(p.permission_name))];
 }
 
 /** Pure: derive the markdown from a LiveData snapshot. Shared by the live path and
  *  `--from-fixture`, so both produce byte-identical output for identical input. */
 function render(data: LiveData): string {
-  const { mod, fieldsByTable, perms, roles, processes } = data;
+  const { mod, fieldsByTable, roles, processes } = data;
+  const perms = modulePermissions(data);
 
   // Canonical modeling order (entity_type tier, then table_name A->Z); reuse-from /
   // built-in entities appended last, sorted the same way.
@@ -1016,8 +1124,9 @@ function render(data: LiveData): string {
   // Permissions are keyed by permission_name (no numeric id); hierarchy rows relate two names.
   const permByName: Record<string, any> = {};
   for (const p of perms) permByName[p.permission_name] = p;
-  // A cross-module row is kept only when it is a family edit grant: one of this module's
-  // permissions including the edit permission of the base of one of its based entities.
+  // A row between two §8.1 permissions is kept, whichever module holds them. A row to anything
+  // else is kept only when it is a family edit grant: one of this module's permissions
+  // including the edit permission of the base of one of its based entities.
   const baseEditPerms = new Set(
     owned.filter(isBased).map((e: any) => related.find((r: any) => r.table_name === e.id_refentity)?.edit_permission).filter(Boolean),
   );
@@ -1034,8 +1143,8 @@ function render(data: LiveData): string {
   // Assemble.
   const parts: string[] = [];
   // `entities` frontmatter lists every §3 entity (owned + reuse-from built-ins) in the
-  // canonical order (entity_type tier, then table_name A->Z), matching the analyst
-  // convention (the master includes `users`).
+  // canonical order (entity_type tier, then table_name A->Z), matching authored
+  // specs (the master includes `users`).
   parts.push(frontmatter(mod, allEntities.map((e) => e.table_name), relatedVersions));
   parts.push("");
   parts.push(`# ${mod.module_name}: Semantic Model`);
@@ -1131,6 +1240,7 @@ async function main() {
     // Defensive defaults so a hand-written fixture may omit the rarely-used arrays.
     data.related ||= [];
     data.perms ||= [];
+    data.otherPerms ||= [];
     data.allHierarchy ||= [];
     data.roles ||= [];
     data.processes ||= [];
@@ -1147,7 +1257,7 @@ async function main() {
   }
   await Bun.write(outfile, md);
   console.log(
-    `Wrote ${outfile}: ${data.ownedRaw.length} owned entities, ${data.related.length} related, ${data.perms.length} permissions.`,
+    `Wrote ${outfile}: ${data.ownedRaw.length} owned entities, ${data.related.length} related, ${modulePermissions(data).length} permissions.`,
   );
 }
 

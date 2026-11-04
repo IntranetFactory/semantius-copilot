@@ -81,7 +81,7 @@ Other optional fields on `modules`: `icon_name`, `domain_code`, `access_scope`, 
 
 - **`icon_name`** — the module's UI icon: a Lucide icon name or an icon URL (see "Icons are Lucide icons" under the Field Format Quick Reference), like an entity's `icon_name`; distinct from the module `logo_url`. The module's `logo_color` has format `color`.
 - **`domain_code`** — short uppercase business-domain code the module belongs to (`ATS`, `HCM`, `ITSM`, `CRM`). Groups related modules; many modules — and many `catalog_module_code`s — can share one `domain_code`.
-- **`access_scope`**: the permission structure of the module (its access level, decided by `semantius-architect`). `enum_values`: `custom` ("Custom permission structure"), `basic` ("Two permissions: view and edit"), `advanced` ("Three permissions: view, edit and admin."), `gated` ("Three permissions: view, edit and admin, plus a permission per process gate held by admins"), `raci` ("Three permissions: view, edit and admin, plus a permission per process gate held by RACI roles (and admins, except high-risk gates)"); default `custom`.
+- **`access_scope`**: the permission structure of the module (its access level). `enum_values`: `custom` ("Custom permission structure"), `basic` ("Two permissions: view and edit"), `advanced` ("Three permissions: view, edit and admin."), `gated` ("Three permissions: view, edit and admin, plus a permission per process gate held by admins"), `raci` ("Three permissions: view, edit and admin, plus a permission per process gate held by RACI roles (and admins, except high-risk gates)"); default `custom`.
 
 Permission naming convention: **always `<module_slug>:<action>`** (e.g., `crm:read`, `crm:manage`). The permission prefix is the slug, not the display name, `crm:read`, never `CRM:read`.
 
@@ -161,7 +161,7 @@ The platform ships with built-in tables for authentication, RBAC, and integratio
 | `origin` | enum NOT NULL | `system` / `model` / `model_master` / `user`. Strictly immutable after INSERT. Set by whoever creates the role; default `user`. |
 | `module_id` | reference → modules | Which module owns the role |
 
-> **Origin semantics.** `system` rows are platform built-ins (DB-init seeded, never deleted). `model` rows are created by `semantius-modeler` on a domain module's scaffold. `model_master` rows are scaffold roles on a master module (see master-data promotion design). `user` rows are admin-created via the UI/API. **Slug rename is permitted for `model` / `model_master` / `user`; locked for `system`.**
+> **Origin semantics.** `system` rows are platform built-ins (DB-init seeded, never deleted). `model` rows are created by a spec deploy on a domain module's scaffold. `model_master` rows are scaffold roles on a master module (see master-data promotion design). `user` rows are admin-created via the UI/API. **Slug rename is permitted for `model` / `model_master` / `user`; locked for `system`.**
 
 #### `permissions` — RBAC permissions, natural-key by name
 
@@ -210,7 +210,7 @@ Platform meta-schema. **Never declare in a domain model.** The deployer manages 
 | `edit_mode` | Optional. Controls how records open for editing: `auto` (default, system decides), `sidebar`, `modal`, or `page`. Set only when the user has a specific UX requirement. |
 | `cube_mode` | Optional. OLAP cube generation: `auto` (default, include in cube) or `disabled`. Set to `disabled` to exclude the entity from cube queries. |
 | `audit_log` | Optional boolean, default `false`. When `true`, every INSERT / UPDATE / DELETE on this entity is recorded by the platform. Enable on entities where change history matters (contracts, financial records, policy data); leave off for high-volume or ephemeral data where audit noise outweighs the value. |
-| `label_parent` | Optional. Names the **one** FK field that is this entity's identity spine — the parent whose composed `_label` prefixes this record's `_label`. Must name a `reference`/`parent` FK; must **not** target a junction and must **not** be set on a junction or on an `is_a` / `has_a` entity (it comes from the base, `90242`). Omit for self-identifying records (then `_label` is just the local label). The analyst derives it; the modeler stamps it. |
+| `label_parent` | Optional. Names the **one** FK field that is this entity's identity spine — the parent whose composed `_label` prefixes this record's `_label`. Must name a `reference`/`parent` FK; must **not** target a junction and must **not** be set on a junction or on an `is_a` / `has_a` entity (it comes from the base, `90242`). Omit for self-identifying records (then `_label` is just the local label). A spec carries it and a deploy stamps it. |
 
 ### Auto-Generated Fields: NEVER Create These Manually
 
@@ -314,7 +314,7 @@ Choose `format` carefully. Format **can** be changed after creation, but **only 
 - `html` renders a rich-text editor on top of HTML storage; reserve for fields that need formatted output (release notes, marketing copy).
 - `code` renders a monospace code editor; reserve for stored source / configuration snippets.
 
-Heuristic for the analyst: field names like `*_name`, `*_title`, `*_label`, `*_code`, `*_id` (string identifier), `email_address`, `phone_number`, `url` → single-line (`string` or `text`). Field names like `description`, `notes`, `body`, `comment`, `concerns`, `strengths`, `feedback`, `summary`, `details`, `rationale`, `instructions` → multi-line (`multiline`).
+Heuristic: field names like `*_name`, `*_title`, `*_label`, `*_code`, `*_id` (string identifier), `email_address`, `phone_number`, `url` → single-line (`string` or `text`). Field names like `description`, `notes`, `body`, `comment`, `concerns`, `strengths`, `feedback`, `summary`, `details`, `rationale`, `instructions` → multi-line (`multiline`).
 
 > 🛑 **Reserved field names.** A `field_name` must **not** start with `_` (reserves the entity's own `_label`) or end with `_id_label` (reserves the `<fk>_label` companions). The platform rejects both on create and on rename. Plain `*_label` names (e.g. `status_label`) remain allowed.
 
@@ -641,21 +641,27 @@ For a relationship between entities in different modules:
 - When both entities exist, the field is proposed. It is non-mandatory unless the spec's §6 `Required` says `yes`: `yes` sends `input_type: "required"` with `reference_delete_mode: "restrict"`, and `no` (the default) sends `input_type: "default"` with `reference_delete_mode: "clear"`.
 - The relationship NEVER forces the other entity (or its module) to install.
 
-The blueprint's §5 `field_required` says whether the relationship's field must be filled in once both entities are installed; the analyst records the decision in the spec's §6 `Required`. Neither makes an entity required. Whether a module can be installed without an entity is a separate fact, the blueprint's §3 `install_optional`.
+The blueprint's §5 `field_required` says whether the relationship's field must be filled in once both entities are installed; the spec records the decision in its §6 `Required`. Neither makes an entity required. Whether a module can be installed without an entity is a separate fact, the blueprint's §3 `install_optional`.
 
-### Embedded-entity governance follows the entity, not the role
+### Embedded-entity governance follows the catalog
 
-When a module embeds an entity (`held_as = embedded_master`) whose canonical owner module is absent at the deploy time, the module emits the entity's FULL derived governance under its own slug:
+An entity's permissions are named by the catalog, never by what is installed. A module that embeds an entity (`held_as = embedded_master`) keeps its owner's names, even when the owner module is not installed yet, and holds them through its own bundles:
 
-- Workflow gates (the `<verb>` codes that gate lifecycle transitions on the entity).
-- Pattern-flag overrides (`view_all_<plural>` / `manage_all_<plural>` / `submit_<singular>`) and matching business rules.
-- Boundary-crossing handoffs (events the embedded entity publishes to / reacts from modules the embedding unit doesn't "play").
+- **Read and write:** `<owner>:read_<entity>` and `<owner>:write_<entity>`, named after the entity's master. The entity's `view_permission` and `edit_permission` point at them and never change.
+- **Workflow gates:** `<owner>:<verb>`, named after the module that realizes the state if the catalog names one, otherwise the entity's master.
+- **Overrides** (`view_all_<plural>` / `manage_all_<plural>` / `submit_<singular>` / `bypass_submit_lock`) and matching business rules: named after the entity's master.
+- **Bundles** (`<unit>:read`, `<unit>:manage`, `<unit>:admin`, a narrow tier): named after the module that declares them. They include the rows above through `permission_hierarchy`, so the module's roles keep holding bundles. `rbac.md` § *Per-entity permissions and bundles* has the full table.
+- **Boundary-crossing handoffs:** the module still emits the events the embedded entity publishes to or reacts from modules the embedding unit doesn't "play".
 
-Each emitted gate / override carries the `re-prefixed-from <canonical-module>.<verb>` reconciliation annotation so the deployer knows it's reconciliation-eligible.
+When the canonical owner module later installs and Branch-B promotion moves the entity to its canonical home, nothing is renamed. The permission rows already exist: they move to the owner and take the owner's description. Entity columns, grants and rules don't change, and the owner adds its own bundle rows. **Once the same modules are installed, every order ends with the same permission names, entity columns, hierarchy rows and grants.** A second module that embeds the same entity uses the same rows and adds only its own bundle rows.
 
-When the canonical owner module later installs and Branch-B promotion moves the entity to its canonical home, the deployer's Stage 4n reconciles every re-prefixed code onto the canonical prefix: sibling permissions are minted under the canonical module, sibling `role_permissions` rows are created for every grant, and matching `permission_hierarchy` relationships are re-emitted. **No deletes** — the no-auto-deletion symmetric rule applies to reconciliation too. The old non-canonical-prefixed permissions remain as quiet orphans.
+Three cases keep other names:
 
-This rule — **gates and overrides follow the ENTITY's current owning module, not the installing unit** — applies uniformly to every blueprint shape (`hiring-starter`, `ats-recruitment-pipeline` which is itself master-of-15-and-embedded-of-5, `real-estate-agent`, any future bundle) and to every install ordering. The deployer's behavior on every install is `module_kind`-agnostic; the `module_kind` frontmatter is an informational label, not a behavior switch.
+- **Deliberately separate table** (`rename-incoming-from` in a spec): keeps the local prefix, because a shared name would make a grant on one table open the other.
+- **Entity already live with other permission names** (reused or built by hand): the live names win, and the module's bundle rows include them.
+- **`access_scope: custom`:** the module keeps its hand-made permissions.
+
+This rule applies uniformly to every blueprint shape (`hiring-starter`, `ats-recruitment-pipeline` which is itself master-of-15-and-embedded-of-5, `real-estate-agent`, any future bundle) and to every install ordering. The deployer's behavior on every install is `module_kind`-agnostic; the `module_kind` frontmatter is an informational label, not a behavior switch.
 
 ---
 

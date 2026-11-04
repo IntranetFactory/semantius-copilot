@@ -21,6 +21,9 @@
  * `--require-icons` (the analyst's pre-save run) also fails a spec §5 entry with no
  * icon line: its icon check has not run. Without it a missing icon line is accepted,
  * as in a spec extracted from live or one deployed by the modeler.
+ *
+ * Permission names are the one place it does judge content: a §8.1 prefix must be one
+ * the file format allows, and every entity must have its permissions and bundle rows.
  */
 
 import { readFileSync } from "node:fs";
@@ -501,6 +504,8 @@ function checkBlueprint(text: string, lines: string[]): Issue[] {
 
   issues.push(...checkLifecycleHighRisk(text, lines));
   issues.push(...checkAccessScope(text, lines));
+  issues.push(...checkSupportsRaci(text, lines));
+  issues.push(...checkPermissionNames(text, lines));
 
   return issues;
 }
@@ -573,6 +578,87 @@ function rowsWithHeaders(block: string[]): { header: string[]; row: string[] }[]
   return out;
 }
 
+/** The §9.1 **RACI realization:** rows, empty when the table is missing. */
+function raciRealizationRows(lines: string[]): { header: string[]; row: string[] }[] {
+  const start = lines.findIndex((l) => /^\*\*RACI realization:\*\*/.test(l.trim()));
+  const raciTable: string[] = [];
+  if (start >= 0) {
+    for (const l of lines.slice(start + 1)) {
+      if (isTableRow(l)) raciTable.push(l);
+      else if (raciTable.length || l.trim() !== "") break; // the table ended, or something else came first
+    }
+  }
+  return rowsWithHeaders(raciTable);
+}
+
+/**
+ * The RACI rule: every process has exactly one accountable row, and every process gate is in the
+ * `grant gates [...]` list of exactly one accountable row. Returns one detail per break.
+ */
+function raciRuleBreaks(raciRows: { header: string[]; row: string[] }[], lifecycleRows: string[]): string[] {
+  const at = (header: string[], row: string[], name: string) => {
+    const i = header.indexOf(name);
+    return i >= 0 ? (row[i] ?? "").replace(/`/g, "").trim() : "";
+  };
+  const breaks: string[] = [];
+  const accountable = new Map<string, number>();
+  const held = new Map<string, number>();
+  for (const { header, row } of raciRows) {
+    const proc = at(header, row, "process_key");
+    if (!accountable.has(proc)) accountable.set(proc, 0);
+    if (at(header, row, "raci") !== "accountable") continue;
+    accountable.set(proc, accountable.get(proc)! + 1);
+    const grants = at(header, row, "realization").match(/grant gates \[([^\]]*)\]/);
+    for (const code of grants ? grants[1].split(",").map((c) => c.trim()).filter(Boolean) : []) {
+      held.set(code, (held.get(code) ?? 0) + 1);
+    }
+  }
+  for (const [proc, n] of accountable) {
+    if (n !== 1) breaks.push(`RACI rule: process \`${proc}\` has ${n} accountable rows; under raci every process has exactly one`);
+  }
+  for (const code of lifecycleRows) {
+    const n = held.get(code) ?? 0;
+    if (n !== 1) breaks.push(`RACI rule: process gate \`${code}\` is in the \`grant gates [...]\` list of ${n} accountable rows; under raci exactly one accountable row holds it`);
+  }
+  return breaks;
+}
+
+/**
+ * `supports_raci` says the blueprint can run at `raci` as it stands: it has at least one gate and the
+ * RACI rule holds. A present value must agree with the file. A missing key counts as false, so it is an
+ * error only under `raci`.
+ */
+function checkSupportsRaci(text: string, lines: string[]): Issue[] {
+  const fm = frontmatter(text);
+  const value = fm.get("supports_raci");
+  if (value !== null && value !== "true" && value !== "false") {
+    return [{ check: "supports_raci", detail: `frontmatter \`supports_raci: ${value}\` must be true or false` }];
+  }
+  const issues: Issue[] = [];
+  if (fm.get("access_scope") === "raci" && value !== "true") {
+    issues.push({ check: "supports_raci", detail: "`access_scope: raci` needs `supports_raci: true`" });
+  }
+  if (value === null) return issues;
+  const gates: string[] = [];
+  for (const { header, row } of rowsWithHeaders(subSection(topSection(lines, 8), /^###\s+8\.1\b/))) {
+    const i = header.indexOf("tier");
+    if (i >= 0 && (row[i] ?? "").replace(/`/g, "").trim().startsWith("workflow-gate (lifecycle)")) {
+      gates.push((row[header.indexOf("permission")] ?? "").replace(/`/g, "").trim());
+    }
+  }
+  const raciRows = raciRealizationRows(lines);
+  const breaks = raciRuleBreaks(raciRows, gates).length;
+  const holds = gates.length > 0 && raciRows.length > 0 && breaks === 0;
+  if (value === "true" && !holds) {
+    const why = gates.length === 0 ? "the file has no gate" : raciRows.length === 0 ? "the file has no RACI realization" : `the RACI rule breaks in ${breaks} place(s)`;
+    issues.push({ check: "supports_raci", detail: `\`supports_raci: true\`, but ${why}` });
+  }
+  if (value === "false" && holds) {
+    issues.push({ check: "supports_raci", detail: "`supports_raci: false`, but the file has gates and the RACI rule holds; it must be true" });
+  }
+  return issues;
+}
+
 /**
  * Frontmatter `access_scope` (the access level the architect's permission step decides)
  * against the body: the value is in the closed set; `gated` / `raci` need a process gate;
@@ -622,39 +708,11 @@ function checkAccessScope(text: string, lines: string[]): Issue[] {
     issues.push({ check: "access_scope", detail: `\`access_scope: ${scope}\` has no process gate (a §7 row with requires_permission? ✓ or a §8.2 \`create\` rule); allowed only when the live module already has this access level`, warn: true });
   }
   if (scope === "raci") {
-    const start = lines.findIndex((l) => /^\*\*RACI realization:\*\*/.test(l.trim()));
-    const raciTable: string[] = [];
-    if (start >= 0) {
-      for (const l of lines.slice(start + 1)) {
-        if (isTableRow(l)) raciTable.push(l);
-        else if (raciTable.length || l.trim() !== "") break; // the table ended, or something else came first
-      }
-    }
-    const raciRows = rowsWithHeaders(raciTable);
+    const raciRows = raciRealizationRows(lines);
     if (raciRows.length === 0) {
       issues.push({ check: "access_scope", detail: "`access_scope: raci` needs the §9.1 **RACI realization:** table (a confirmed RACI matrix), but it is missing or empty" });
     } else {
-      // The RACI rule: every process has exactly one accountable row, and every process gate
-      // is in the `grant gates [...]` list of exactly one accountable row.
-      const accountable = new Map<string, number>();
-      const held = new Map<string, number>();
-      for (const { header, row } of raciRows) {
-        const proc = at(header, row, "process_key");
-        if (!accountable.has(proc)) accountable.set(proc, 0);
-        if (at(header, row, "raci") !== "accountable") continue;
-        accountable.set(proc, accountable.get(proc)! + 1);
-        const grants = at(header, row, "realization").match(/grant gates \[([^\]]*)\]/);
-        for (const code of grants ? grants[1].split(",").map((c) => c.trim()).filter(Boolean) : []) {
-          held.set(code, (held.get(code) ?? 0) + 1);
-        }
-      }
-      for (const [proc, n] of accountable) {
-        if (n !== 1) issues.push({ check: "access_scope", detail: `RACI rule: process \`${proc}\` has ${n} accountable rows; under raci every process has exactly one` });
-      }
-      for (const code of lifecycleRows) {
-        const n = held.get(code) ?? 0;
-        if (n !== 1) issues.push({ check: "access_scope", detail: `RACI rule: process gate \`${code}\` is in the \`grant gates [...]\` list of ${n} accountable rows; under raci exactly one accountable row holds it` });
-      }
+      for (const detail of raciRuleBreaks(raciRows, lifecycleRows)) issues.push({ check: "access_scope", detail });
     }
   } else if (!enforcing && lifecycleRows.length > 0) {
     issues.push({ check: "access_scope", detail: `§8.1 carries \`workflow-gate (lifecycle)\` rows (${lifecycleRows.join(", ")}) but \`access_scope: ${scope}\` allows them only under gated and raci` });
@@ -704,8 +762,8 @@ function checkAccessScope(text: string, lines: string[]): Issue[] {
   return issues;
 }
 
-/** The codes the `**Permission hierarchy:**` table (blueprint and spec §9.1) lists as included by `permission`. */
-function hierarchyIncludes(lines: string[], permission: string): Set<string> {
+/** The `**Permission hierarchy:**` table (blueprint and spec §9.1): each permission and the codes it includes. */
+function hierarchyMap(lines: string[]): Map<string, Set<string>> {
   const h = lines.findIndex((l) => /^\*\*Permission hierarchy:\*\*/.test(l.trim()));
   const hTable: string[] = [];
   if (h >= 0) {
@@ -714,12 +772,337 @@ function hierarchyIncludes(lines: string[], permission: string): Set<string> {
       else if (hTable.length || (l.trim() !== "" && !l.trim().startsWith("_"))) break;
     }
   }
-  const out = new Set<string>();
+  const out = new Map<string, Set<string>>();
   for (const { header, row } of rowsWithHeaders(hTable)) {
     const cell = (name: string) => (header.indexOf(name) >= 0 ? (row[header.indexOf(name)] ?? "").replace(/`/g, "").trim() : "");
-    if (cell("permission") === permission) out.add(cell("includes"));
+    if (!out.has(cell("permission"))) out.set(cell("permission"), new Set());
+    out.get(cell("permission"))!.add(cell("includes"));
   }
   return out;
+}
+
+/** The codes the `**Permission hierarchy:**` table lists as included by `permission`. */
+function hierarchyIncludes(lines: string[], permission: string): Set<string> {
+  return hierarchyMap(lines).get(permission) ?? new Set();
+}
+
+// ---------- permission names: the catalog names an entity's permissions, modules hold them through bundles ----------
+
+const FULL_PERMISSION_CODE = /^[^\s:]+:[^\s:]+$/;
+const ENTITY_TIERS = new Set(["entity-read", "entity-write"]);
+// The `held_as` values that give a module an `entity-write` row (unless the entity is `computed`).
+const WRITING_HELD_AS = new Set(["master", "embedded_master", "contributor"]);
+
+/** A permission code's prefix: the text before its first colon ("" when it has none). */
+function permissionPrefix(code: string): string {
+  const i = code.indexOf(":");
+  return i > 0 ? code.slice(0, i) : "";
+}
+
+/** A bundle tier: the module that declares it keeps its own slug on the row. */
+function isBundleTier(tier: string): boolean {
+  return /^(baseline-(read|manage|admin)|narrow)\b/.test(tier);
+}
+
+/** An override, by tier or by name (`bypass_submit_lock` is a `workflow-gate (rule)` row): its prefix is the entity's master. A lifecycle gate is never one, whatever its verb: its prefix follows §7. */
+function isOverrideRow(tier: string, code: string): boolean {
+  if (tier.startsWith("workflow-gate (lifecycle)")) return false;
+  return tier.startsWith("override") || /^(view_all_|manage_all_|submit_|bypass_submit_lock$)/.test(code.slice(code.indexOf(":") + 1));
+}
+
+/** The names an override row may give its entity: the backticked ones in its description, then the token in its code. */
+function overrideEntityNames(code: string, description: string): string[] {
+  const token = code.slice(code.indexOf(":") + 1).replace(/^(view_all|manage_all|submit)_/, "");
+  return [...[...description.matchAll(/`([^`]+)`/g)].map((m) => m[1]), token];
+}
+
+/** A module code or slug as a slug: `ATS-OFFERS` and `ats-offers` read the same. */
+function moduleSlugOf(s: string): string {
+  return s.trim().toLowerCase().replace(/_/g, "-");
+}
+
+/** The frontmatter `domain_modules` list, block or inline form, as slugs. */
+function domainModuleSlugs(raw: string): string[] {
+  const m = raw.match(/^domain_modules:[ \t]*(.*)$/m);
+  if (!m) return [];
+  if (m[1].trim()) return m[1].replace(/[\[\]`"']/g, "").split(",").map(moduleSlugOf).filter(Boolean);
+  const out: string[] = [];
+  for (const l of raw.slice(m.index! + m[0].length).split("\n").slice(1)) {
+    const e = l.match(/^\s*-\s+(.+?)\s*$/);
+    if (!e) break;
+    out.push(moduleSlugOf(e[1].replace(/[`"']/g, "")));
+  }
+  return out;
+}
+
+type CatalogRow = { id: string; code: string; heldAs: string; masteredIn: string; entityType: string; writeTier: string };
+
+/** The §3 entity rows, read by header name (a header that names the `held_as` column `role` reads the same). */
+function blueprintCatalogRows(lines: string[]): CatalogRow[] {
+  const out: CatalogRow[] = [];
+  for (const { header, row } of rowsWithHeaders(topSection(lines, 3))) {
+    const held = header.includes("held_as") ? "held_as" : "role";
+    if (!header.includes("data_object") || !header.includes(held)) continue;
+    const at = (name: string) => (header.indexOf(name) >= 0 ? (row[header.indexOf(name)] ?? "").replace(/`/g, "").trim() : "");
+    const id = at("data_object");
+    if (!id) continue;
+    out.push({ id, code: at("catalog code") || id, heldAs: at(held), masteredIn: at("mastered in"), entityType: at("entity_type"), writeTier: at("write tier") });
+  }
+  return out;
+}
+
+/** The bundle suffix a §3 `write tier` names: `:manage` _(pending)_ reads `manage`; `read` and an empty cell name none. */
+function writeTierBundle(writeTier: string): string | null {
+  const m = writeTier.match(/^:?([a-z0-9_]+)/);
+  return m && m[1] !== "read" ? m[1] : null;
+}
+
+/**
+ * The file format's naming rule on a blueprint. An entity's permissions are named by the catalog,
+ * never by what is installed: `<owner>:read_<entity>` and `<owner>:write_<entity>`, where `<owner>`
+ * is §3 `mastered in` (this module's slug on a `master` row) and `<entity>` the §3 `catalog code`.
+ * Which rows an entity gets follows from how the module holds it, and §9.1 holds them through the
+ * module's bundles. A §8.1 prefix is this module's slug, a §3 `mastered in` value, or a module §7
+ * names for a state. Under `custom` no per-entity rows exist and the module's names are its own.
+ *
+ * §7 names a state's realizer in its `realizing module` column, which a file carries whenever a gate
+ * is named after a module other than the unit. A table without it says the gate is the entity's
+ * master's, so any other prefix fails: nothing in the file could confirm it.
+ */
+function checkPermissionNames(text: string, lines: string[]): Issue[] {
+  const issues: Issue[] = [];
+  const prefixIssue = (detail: string) => issues.push({ check: "permission prefix", detail });
+  const entityIssue = (detail: string) => issues.push({ check: "entity permissions", detail });
+  const fm = frontmatter(text);
+  const scope = fm.get("access_scope");
+  const unit = fm.get("system_slug") ?? "";
+  const units = new Set([unit, ...domainModuleSlugs(fm.raw)]);
+  const permRows = rowsWithHeaders(subSection(topSection(lines, 8), /^###\s+8\.1\b/))
+    .filter(({ header }) => header.includes("permission") && header.includes("tier"))
+    .map(({ header, row }) => {
+      const at = (name: string) => (header.indexOf(name) >= 0 ? (row[header.indexOf(name)] ?? "").replace(/`/g, "").trim() : "");
+      return { code: at("permission"), tier: at("tier"), included: at("included in :admin?"), description: header.indexOf("description") >= 0 ? (row[header.indexOf("description")] ?? "") : "" };
+    });
+  if (scope === "custom") {
+    for (const p of permRows) {
+      if (ENTITY_TIERS.has(p.tier)) entityIssue(`§8.1 \`${p.code}\` is an ${p.tier} row, but \`access_scope: custom\` keeps the module's hand-made permissions and has no per-entity rows`);
+    }
+    return issues;
+  }
+  const catalog = blueprintCatalogRows(lines);
+  const isBuiltin = (r: CatalogRow) => BUILTINS.has(r.id) || /built-in/.test(r.masteredIn);
+  // null: no owner to name the entity's permissions after (a built-in, or no master in the catalog).
+  const ownerOf = (r: CatalogRow): string | null => {
+    if (isBuiltin(r)) return null;
+    if (r.masteredIn && r.masteredIn !== "-") return r.masteredIn;
+    return r.heldAs === "master" ? unit : null;
+  };
+  const allowed = new Set(units);
+  for (const r of catalog) if (!isBuiltin(r) && r.masteredIn && r.masteredIn !== "-") allowed.add(r.masteredIn);
+
+  // §7: the gate on a state carries the prefix of the module that realizes it, else of the entity's master.
+  const byId = new Map(catalog.map((r) => [r.id, r]));
+  for (const { entity, header, row } of lifecycleStateRows(lines)) {
+    const at = (name: string) => (header.indexOf(name) >= 0 ? (row[header.indexOf(name)] ?? "").replace(/`/g, "").trim() : "");
+    const hasColumn = header.includes("realizing module");
+    const named = hasColumn ? (at("realizing module").match(/^[A-Za-z0-9][A-Za-z0-9_-]*/)?.[0] ?? "") : "";
+    const realizer = named ? moduleSlugOf(named) : "";
+    if (realizer) allowed.add(realizer);
+    const gate = at("derived gate");
+    const prefix = permissionPrefix(gate);
+    if (!at("requires_permission?").includes("✓") || !prefix || gate.startsWith("⚠") || (units.has(prefix) && gate.endsWith(":admin"))) continue;
+    const r = byId.get(entity);
+    const owner = r ? ownerOf(r) : null;
+    const state = `\`${entity}\`.\`${at("state_name")}\``;
+    if (hasColumn) {
+      const want = realizer || owner;
+      if (want && prefix !== want) prefixIssue(`§7 ${state} derives \`${gate}\`; its prefix is \`${want}\`, the ${realizer ? "module §7 names as realizing the state" : "entity's master"}`);
+    } else if (!owner) {
+      allowed.add(prefix);
+    } else if (prefix !== owner) {
+      allowed.add(prefix);
+      prefixIssue(`§7 ${state} derives \`${gate}\`, not the entity's master \`${owner}\`; a gate named after another module needs a \`realizing module\` column naming it`);
+    }
+  }
+
+  // §8.1 prefixes by tier. An entity row's prefix is checked against the row its entity expects, below.
+  for (const p of permRows) {
+    const prefix = permissionPrefix(p.code);
+    if (isBundleTier(p.tier)) {
+      if (!units.has(prefix)) prefixIssue(`§8.1 \`${p.code}\` is a ${p.tier} row: it keeps this module's slug \`${unit}\``);
+    } else if (!ENTITY_TIERS.has(p.tier)) {
+      if (!allowed.has(prefix)) {
+        prefixIssue(`§8.1 \`${p.code}\`: prefix \`${prefix}\` is not this module's slug, a §3 \`mastered in\` value, or a module §7 names for a state`);
+      } else if (isOverrideRow(p.tier, p.code)) {
+        const r = overrideEntityNames(p.code, p.description).map((n) => catalog.find((c) => c.id === n || c.code === n)).find(Boolean);
+        const owner = r ? ownerOf(r) : null;
+        if (owner && prefix !== owner) prefixIssue(`§8.1 \`${p.code}\` is an override on \`${r!.id}\`: its prefix is the entity's master, \`${owner}\``);
+      }
+    }
+  }
+
+  // Which rows each entity gets, and the bundle rows that hold them.
+  const byCode = new Map(permRows.map((p) => [p.code, p]));
+  const hierarchy = hierarchyMap(lines);
+  const includes = (parent: string, child: string) => hierarchy.get(parent)?.has(child) ?? false;
+  const unitBundle = (suffix: string, code: string) => [...units].some((u) => includes(`${u}:${suffix}`, code));
+  const expected = new Set<string>();
+  const requireRow = (r: CatalogRow, code: string, tier: string): boolean => {
+    expected.add(code);
+    const p = byCode.get(code);
+    if (!p) {
+      entityIssue(`§3 \`${r.id}\` (${r.heldAs}) has no §8.1 \`${code}\` row (tier ${tier})`);
+      return false;
+    }
+    if (p.tier !== tier) entityIssue(`§8.1 \`${code}\` has tier "${p.tier}"; it is ${tier}`);
+    if (!p.included.includes("✓")) entityIssue(`§8.1 \`${code}\`: its \`included in :admin?\` is ✓`);
+    return true;
+  };
+  for (const r of catalog) {
+    if (isBuiltin(r)) continue;
+    const owner = ownerOf(r);
+    if (!owner) {
+      if (r.heldAs === "embedded_master") entityIssue(`§3 \`${r.id}\` is embedded_master with no \`mastered in\`: it has no owner to name its permissions after, so it needs a master first`);
+      continue;
+    }
+    const read = `${owner}:read_${r.code}`, write = `${owner}:write_${r.code}`;
+    if (requireRow(r, read, "entity-read") && !unitBundle("read", read)) {
+      entityIssue(`§9.1 has no \`${unit}:read\` → \`${read}\` row; the read bundle includes every entity the module holds`);
+    }
+    if (!WRITING_HELD_AS.has(r.heldAs) || r.entityType === "computed") continue;
+    if (!requireRow(r, write, "entity-write")) continue;
+    if (!includes(write, read)) entityIssue(`§9.1 has no \`${write}\` → \`${read}\` row; a write permission includes its read`);
+    const bundle = scope === "basic" ? "manage" : writeTierBundle(r.writeTier);
+    if (bundle && !unitBundle(bundle, write)) {
+      entityIssue(`§9.1 has no \`${unit}:${bundle}\` → \`${write}\` row; ${scope === "basic" ? "under basic every write sits under manage" : `\`${r.id}\` has \`write tier\` ${r.writeTier}`}`);
+    }
+  }
+  for (const p of permRows) {
+    if (!ENTITY_TIERS.has(p.tier) || expected.has(p.code)) continue;
+    const m = p.code.match(/^([^:]*):(read|write)_(.+)$/);
+    const r = m ? catalog.find((c) => c.code === m[3] || c.id === m[3]) : undefined;
+    if (!m) {
+      entityIssue(`§8.1 \`${p.code}\` is an ${p.tier} row: it is named \`<owner>:${p.tier === "entity-read" ? "read" : "write"}_<entity>\``);
+    } else if (!r) {
+      entityIssue(`§8.1 \`${p.code}\` names no §3 entity (\`<entity>\` is the §3 \`catalog code\`)`);
+    } else if (!ownerOf(r)) {
+      entityIssue(`§8.1 \`${p.code}\`: \`${r.id}\` gets no per-entity rows (${isBuiltin(r) ? "a platform built-in keeps platform permissions" : "it has no master in the catalog"})`);
+    } else if (m[1] !== ownerOf(r)) {
+      prefixIssue(`§8.1 \`${p.code}\`: \`${r.id}\` is mastered in \`${ownerOf(r)}\`, so this row is \`${ownerOf(r)}:${m[2]}_${r.code}\``);
+    } else if (m[3] !== r.code) {
+      entityIssue(`§8.1 \`${p.code}\`: \`<entity>\` is the §3 \`catalog code\`, \`${r.code}\``);
+    } else {
+      entityIssue(`§8.1 \`${p.code}\`: a ${r.entityType === "computed" ? "computed" : r.heldAs} entity gets no entity-write row`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * The same rule on a spec, which has no §7 and no `mastered in`: an owned entity's prefix comes from
+ * its `**Catalog owner:**` line, or is this module's slug, and a silo keeps the local prefix. A gate's
+ * realizer is not recorded in a spec, so a gate's prefix is the blueprint's and is not checked here.
+ * Live names win on a `reuse-from` or `promote-to-master` entity: its codes may have any prefix, and
+ * the spec only adds bundle rows for them. The old shape is refused at every access level; under
+ * `custom` an entity's line may be absent, when the module has no value for it.
+ */
+function checkSpecPermissionNames(lines: string[], fm: ReturnType<typeof frontmatter>, ents: Map<string, SpecEntity>): Issue[] {
+  const issues: Issue[] = [];
+  const shapeIssue = (detail: string) => issues.push({ check: "old permission shape", detail });
+  const prefixIssue = (detail: string) => issues.push({ check: "permission prefix", detail });
+  const entityIssue = (detail: string) => issues.push({ check: "entity permissions", detail });
+  if (lines.some((l) => isTableRow(l) && cells(l).some((c) => c.replace(/`/g, "") === "grant_module"))) {
+    shapeIssue("a table has a `grant_module` column; every code in a `realization` cell is literal");
+  }
+  for (const l of lines) {
+    if (/\bre-prefixed-from\b/.test(l)) shapeIssue(`\`re-prefixed-from\` on "${(cells(l)[0] ?? l).trim()}"; a permission keeps its catalog name, with no annotation`);
+  }
+  const slug = fm.get("system_slug") ?? "";
+  const scope = fm.get("access_scope");
+  const skipEntity = (id: string, e: SpecEntity) => BUILTINS.has(id) || /^dropped\b/.test(e.reconciliation);
+  const isReused = (e: SpecEntity) => /^(reuse-from|promote-to-master)\b/.test(e.reconciliation);
+  const prefixes = new Set([slug]);
+  for (const [id, e] of ents) {
+    if (skipEntity(id, e)) continue;
+    const pairs: [string, string, boolean][] = [["View permission", e.viewPermission, true], ["Edit permission", e.editPermission, e.entityType !== "computed"]];
+    for (const [label, value, required] of pairs) {
+      if (!value) {
+        if (required && !isReused(e) && scope !== "custom") shapeIssue(`§3 \`${id}\` has no \`**${label}:**\` line; an owned entity carries it as a full code`);
+      } else if (!FULL_PERMISSION_CODE.test(value)) {
+        shapeIssue(`§3 \`${id}\` \`**${label}:** ${value}\` is not a full permission code`);
+      } else {
+        prefixes.add(permissionPrefix(value));
+      }
+    }
+    if (e.catalogOwner) prefixes.add(e.catalogOwner);
+    const home = e.reconciliation.match(/^(?:reuse-from|promote-to-master)\s+`?([^.\s`]+)\./);
+    if (home) prefixes.add(home[1]);
+  }
+  const perms = parseSpecPermissions(lines);
+  if (scope === "custom") {
+    for (const p of perms) {
+      if (ENTITY_TIERS.has(p.tier)) entityIssue(`§8.1 \`${p.permission}\` is an ${p.tier} row, but \`access_scope: custom\` keeps the module's hand-made permissions and has no per-entity rows`);
+    }
+    return issues;
+  }
+  const hierarchy = hierarchyMap(lines);
+  const includes = (parent: string, child: string) => hierarchy.get(parent)?.has(child) ?? false;
+  const byCode = new Map(perms.map((p) => [p.permission, p]));
+  const bundles = perms.filter((p) => isBundleTier(p.tier)).map((p) => p.permission);
+
+  for (const [id, e] of ents) {
+    if (skipEntity(id, e)) continue;
+    if (isReused(e)) {
+      if (FULL_PERMISSION_CODE.test(e.viewPermission) && !byCode.has(e.viewPermission) && !includes(`${slug}:read`, e.viewPermission)) {
+        entityIssue(`§9.1 has no \`${slug}:read\` → \`${e.viewPermission}\` row; a reused entity's bundle rows use its live names`);
+      }
+      continue;
+    }
+    const owner = /^rename-incoming-from\b/.test(e.reconciliation) ? slug : e.catalogOwner || slug;
+    const tokens = [id, e.catalogCode].filter(Boolean);
+    const lineChecks: [string, string, string, string][] = [["View permission", e.viewPermission, "read", "entity-read"], ["Edit permission", e.editPermission, "write", "entity-write"]];
+    for (const [label, value, verb, tier] of lineChecks) {
+      if (!FULL_PERMISSION_CODE.test(value) || (verb === "write" && e.entityType === "computed")) continue;
+      const prefix = permissionPrefix(value);
+      if (prefix !== owner) prefixIssue(`§3 \`${id}\` \`**${label}:** ${value}\`: its prefix is the entity's master, \`${owner}\``);
+      if (!tokens.some((t) => value.slice(prefix.length + 1) === `${verb}_${t}`)) entityIssue(`§3 \`${id}\` \`**${label}:** ${value}\` is not named \`<owner>:${verb}_<entity>\``);
+      const row = byCode.get(value);
+      if (!row) entityIssue(`§3 \`${id}\` \`**${label}:** ${value}\` has no §8.1 row (tier ${tier})`);
+      else if (row.tier !== tier) entityIssue(`§8.1 \`${value}\` has tier "${row.tier}"; it is ${tier}`);
+    }
+  }
+  const entityList = [...ents];
+  const anyReused = entityList.some(([, e]) => isReused(e));
+  const reusedNames = new Set(entityList.filter(([, e]) => isReused(e)).flatMap(([id, e]) => [id, e.catalogCode, e.viewPermission, e.editPermission]).filter(Boolean));
+  for (const p of perms) {
+    const prefix = permissionPrefix(p.permission);
+    if (isBundleTier(p.tier) && prefix !== slug) prefixIssue(`§8.1 \`${p.permission}\` is a ${p.tier} row: it keeps this module's slug \`${slug}\``);
+    if (isOverrideRow(p.tier, p.permission)) {
+      const entry = overrideEntityNames(p.permission, p.description).map((n) => entityList.find(([id, e]) => id === n || e.catalogCode === n)).find(Boolean);
+      if (!entry) {
+        // Unnamed, it may be a reused entity's live code, which may have any prefix.
+        if (!anyReused && !prefixes.has(prefix)) prefixIssue(`§8.1 \`${p.permission}\`: prefix \`${prefix}\` is not this module's slug or the master of an entity in §3`);
+      } else if (!isReused(entry[1]) && !skipEntity(entry[0], entry[1])) {
+        const owner = /^rename-incoming-from\b/.test(entry[1].reconciliation) ? slug : entry[1].catalogOwner || slug;
+        if (prefix !== owner) prefixIssue(`§8.1 \`${p.permission}\` is an override on \`${entry[0]}\`: its prefix is the entity's master, \`${owner}\``);
+      }
+    }
+    if (!ENTITY_TIERS.has(p.tier)) continue;
+    if (!p.included.includes("✓")) entityIssue(`§8.1 \`${p.permission}\`: its \`included in :admin?\` is ✓`);
+    if (p.tier === "entity-read") {
+      if (!includes(`${slug}:read`, p.permission)) entityIssue(`§9.1 has no \`${slug}:read\` → \`${p.permission}\` row; the read bundle includes every entity the module holds`);
+      continue;
+    }
+    // A reused entity's live write permission already includes what it includes; this spec only adds bundle rows.
+    const read = p.permission.replace(":write_", ":read_");
+    const live = reusedNames.has(p.permission) || reusedNames.has(p.permission.slice(prefix.length + 1).replace(/^write_/, ""));
+    if (!live && read !== p.permission && !includes(p.permission, read)) entityIssue(`§9.1 has no \`${p.permission}\` → \`${read}\` row; a write permission includes its read`);
+    const holders = scope === "basic" ? [`${slug}:manage`] : bundles;
+    if (!holders.some((b) => includes(b, p.permission))) {
+      entityIssue(`§9.1 has no bundle row for \`${p.permission}\`; ${scope === "basic" ? `under basic \`${slug}:manage\` includes every write` : "one of the module's bundles includes every write"}`);
+    }
+  }
+  return issues;
 }
 
 // ---------- SPEC checks ----------
@@ -732,7 +1115,11 @@ type SpecEntity = {
   labelColumn: string;         // `**Label column:**` (backticks stripped; "" = absent)
   lines: Set<string>;        // which `**Key:**` lines the block carries (e.g. "Label column")
   reconciliation: string;      // `**Reconciliation:**` ("" = absent = create-new)
-  editPermission: string;      // `**Edit permission:**` (backticks stripped; "manage" = absent)
+  viewPermission: string;      // `**View permission:**` (backticks stripped; "" = absent)
+  editPermission: string;      // `**Edit permission:**` (backticks stripped; "" = absent)
+  catalogOwner: string;        // `**Catalog owner:**` (backticks stripped; "" = absent)
+  catalogCode: string;         // `**Catalog entity code:**` (backticks stripped; "" = absent)
+  entityType: string;          // `**Entity type:**` (backticks stripped; "" = absent)
   auditLog: string;            // `**Audit log:**` ("no" = absent)
   permCodes: Set<string>;      // `require_permission` / `has_permission` codes in the `**Validation rules**` JSON
   rulesJson: string;           // the `**Validation rules**` fence, verbatim ("" = absent)
@@ -764,7 +1151,7 @@ function parseSpecEntities(lines: string[]): Map<string, SpecEntity> {
     if (l.trim() !== "") afterRules = l.trim() === "**Validation rules**";
     const h = l.match(/^###\s+3\.\d+\s+`([^`]+)`/);
     if (h) {
-      cur = { keyType: null, keyPrefix: null, basedOn: "", labelColumn: "", lines: new Set(), reconciliation: "", editPermission: "manage", auditLog: "no", permCodes: new Set(), rulesJson: "", labelParent: "", fields: [] };
+      cur = { keyType: null, keyPrefix: null, basedOn: "", labelColumn: "", lines: new Set(), reconciliation: "", viewPermission: "", editPermission: "", catalogOwner: "", catalogCode: "", entityType: "", auditLog: "no", permCodes: new Set(), rulesJson: "", labelParent: "", fields: [] };
       out.set(h[1].trim(), cur);
       continue;
     }
@@ -779,7 +1166,11 @@ function parseSpecEntities(lines: string[]): Map<string, SpecEntity> {
       else if (key === "Label column") cur.labelColumn = value.replace(/`/g, "").trim();
       else if (key === "Label parent") cur.labelParent = value.replace(/`/g, "").trim();
       else if (key === "Reconciliation") cur.reconciliation = value;
-      else if (key === "Edit permission") cur.editPermission = value.replace(/`/g, "").trim() || "manage";
+      else if (key === "View permission") cur.viewPermission = value.replace(/`/g, "").trim();
+      else if (key === "Edit permission") cur.editPermission = value.replace(/`/g, "").trim();
+      else if (key === "Catalog owner") cur.catalogOwner = value.replace(/`/g, "").trim();
+      else if (key === "Catalog entity code") cur.catalogCode = value.replace(/`/g, "").trim();
+      else if (key === "Entity type") cur.entityType = value.replace(/`/g, "").trim();
       else if (key === "Audit log") cur.auditLog = value.replace(/`/g, "").trim() || "no";
       continue;
     }
@@ -958,28 +1349,33 @@ function enumHintWarnings(entries: Map<string, SpecEnumEntry[]>): Issue[] {
   return out;
 }
 
-/** The `_process_gates_` table under §9 (living-mode RACI plan): the entity of each gate. */
-function parseProcessGateEntities(lines: string[]): string[] {
-  const start = lines.findIndex((l) => /^_process_gates_\s*$/.test(l.trim()));
+/** The table lines right after a label line such as `_process_gates_`, empty when the label is absent. */
+function tableAfterLabel(lines: string[], label: string): string[] {
+  const start = lines.findIndex((l) => l.trim() === label);
   if (start < 0) return [];
   const block: string[] = [];
   for (const l of lines.slice(start + 1)) {
     if (isTableRow(l)) block.push(l);
     else if (block.length) break;
   }
-  return tableRows(block)
+  return block;
+}
+
+/** The `_process_gates_` table under §9 (living-mode RACI plan): the entity of each gate. */
+function parseProcessGateEntities(lines: string[]): string[] {
+  return tableRows(tableAfterLabel(lines, "_process_gates_"))
     .filter((row) => (row[0] || "").toLowerCase() !== "process_key")
     .map((row) => (row[1] || "").replace(/`/g, "").trim())
     .filter(Boolean);
 }
 
 /** The `## 8.1 Permissions catalog` rows of a spec, parsed by header name; with no `high risk?` column every row reads `-`. */
-function parseSpecPermissions(lines: string[]): { permission: string; tier: string; included: string; highRisk: string }[] {
-  const out: { permission: string; tier: string; included: string; highRisk: string }[] = [];
+function parseSpecPermissions(lines: string[]): { permission: string; tier: string; included: string; highRisk: string; description: string }[] {
+  const out: { permission: string; tier: string; included: string; highRisk: string; description: string }[] = [];
   for (const { header, row } of rowsWithHeaders(subSection(lines, /^##\s+8\.1\b/))) {
     if (!header.includes("permission") || !header.includes("tier")) continue;
     const cell = (name: string, absent: string) => (header.indexOf(name) >= 0 ? (row[header.indexOf(name)] ?? "").replace(/`/g, "").trim() : absent);
-    out.push({ permission: cell("permission", ""), tier: cell("tier", ""), included: cell("included in :admin?", ""), highRisk: cell("high risk?", "-") });
+    out.push({ permission: cell("permission", ""), tier: cell("tier", ""), included: cell("included in :admin?", ""), highRisk: cell("high risk?", "-"), description: header.indexOf("description") >= 0 ? (row[header.indexOf("description")] ?? "") : "" });
   }
   return out;
 }
@@ -988,7 +1384,8 @@ function parseSpecPermissions(lines: string[]): { permission: string; tier: stri
  * Spec §8.1 `high risk?` against the access level: ✓ or - on a `workflow-gate (lifecycle)` row, -
  * on every other row. The admin holds a lifecycle gate through `included in :admin?` ✓ and a §9.1
  * `<slug>:admin` → gate row: every gate under `gated` (high-risk ones too), every gate except the
- * high-risk ones under `raci`, where a high-risk gate is `-` with no hierarchy row.
+ * high-risk ones under `raci`, where a high-risk gate is `-` with no hierarchy row. Under `raci` the
+ * RACI rule holds too, as it does on the blueprint.
  */
 function checkSpecGates(lines: string[], fm: ReturnType<typeof frontmatter>): Issue[] {
   const issues: Issue[] = [];
@@ -1017,7 +1414,102 @@ function checkSpecGates(lines: string[], fm: ReturnType<typeof frontmatter>): Is
       issues.push({ check: "access_scope", detail: `§9.1 rolls \`${p.permission}\` up under \`${admin}\`; under raci a high-risk process gate has no hierarchy row` });
     }
   }
+  if (scope === "raci") {
+    const gates = parseSpecPermissions(lines).filter((p) => p.tier.startsWith("workflow-gate (lifecycle)")).map((p) => p.permission);
+    for (const detail of raciRuleBreaks(raciRealizationRows(lines), gates)) issues.push({ check: "access_scope", detail });
+  }
   return issues;
+}
+
+/**
+ * What depends only on a dropped entity leaves §6, §8 and §9 (analyst Stage 9.5, "Dropped entities"):
+ * no §6 relationship or outbound handoff has it, no §8.1 row names it, no §8.2 rule sits on it, no
+ * living-mode table binds to it, and no `trigger_events [...]` list fires on it. No `grant gates [...]`
+ * list or hierarchy row keeps a permission §8.1 no longer has, and no process is left with no RACI row.
+ */
+function checkDroppedEntities(lines: string[], ents: Map<string, SpecEntity>): Issue[] {
+  const dropped = new Set([...ents].filter(([, e]) => /^dropped\b/.test(e.reconciliation)).map(([id]) => id));
+  if (dropped.size === 0) return [];
+  const droppedCodes = new Set([...ents].filter(([id, e]) => dropped.has(id) && e.catalogCode).map(([, e]) => e.catalogCode));
+  const issues: Issue[] = [];
+  const add = (detail: string) => issues.push({ check: "dropped entity", detail });
+  // A row marked `skipped` writes nothing, so it may keep naming the entity.
+  for (const row of tableRows(topSection(lines, 6))) {
+    if (/^skipped\b/.test((row[6] ?? "").trim())) continue;
+    for (const cell of row.slice(0, 2)) {
+      const id = firstBacktick(cell);
+      if (id && dropped.has(id)) add(`§6 relationship ${row[0]} -> ${row[1]} has \`${id}\`, which is dropped`);
+    }
+  }
+  for (const row of tableRows(subSection(topSection(lines, 6), /^###\s+Outbound handoffs\b/))) {
+    const id = firstBacktick(row[5] || "");
+    if (id && dropped.has(id)) add(`§6 outbound handoff ${row[3]} carries \`${id}\`, which is dropped`);
+  }
+  const permissions = new Set<string>();
+  for (const { header, row } of rowsWithHeaders(subSection(lines, /^##\s+8\.1\b/))) {
+    const code = (row[header.indexOf("permission")] ?? "").replace(/`/g, "").trim();
+    permissions.add(code);
+    for (const m of (row[header.indexOf("description")] ?? "").matchAll(/`([^`]+)`/g)) {
+      if (dropped.has(m[1])) add(`§8.1 \`${code}\` names \`${m[1]}\`, which is dropped`);
+    }
+    const entityToken = code.match(/:(?:read|write)_(.+)$/)?.[1];
+    if (entityToken && (dropped.has(entityToken) || droppedCodes.has(entityToken))) add(`§8.1 \`${code}\` is a permission of \`${entityToken}\`, which is dropped`);
+  }
+  for (const row of tableRows(subSection(lines, /^##\s+8\.2\b/))) {
+    const id = firstBacktick(row[1] || "");
+    if (id && dropped.has(id)) add(`§8.2 rule ${row[0]} is on \`${id}\`, which is dropped`);
+  }
+  for (const ent of parseProcessGateEntities(lines)) {
+    if (dropped.has(ent)) add(`§9 _process_gates_ names \`${ent}\`, which is dropped`);
+  }
+  for (const row of tableRows(tableAfterLabel(lines, "_enforcement rules_"))) {
+    const ent = (row[0] || "").replace(/`/g, "").trim();
+    if (dropped.has(ent)) add(`§9 _enforcement rules_ names \`${ent}\`, which is dropped`);
+  }
+  for (const { header, row } of rowsWithHeaders(tableAfterLabel(lines, "**Permission hierarchy:**"))) {
+    const code = (row[header.indexOf("includes")] ?? "").replace(/`/g, "").trim();
+    if (code && !permissions.has(code)) add(`§9.1 hierarchy row for ${row[header.indexOf("permission")]} includes \`${code}\`, which §8.1 does not have`);
+  }
+  // An event starts with the entity's snake_case singular label (§2), the form the emitter writes.
+  const droppedEventPrefixes = new Set<string>();
+  for (const row of tableRows(topSection(lines, 2))) {
+    if (dropped.has(firstBacktick(row[1] || "") ?? "")) droppedEventPrefixes.add((row[2] || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""));
+  }
+  const raciProcesses = new Set<string>();
+  for (const { header, row } of rowsWithHeaders(tableAfterLabel(lines, "**RACI realization:**"))) {
+    raciProcesses.add((row[header.indexOf("process_key")] ?? "").replace(/`/g, "").trim());
+    const realization = row[header.indexOf("realization")] ?? "";
+    const grants = realization.match(/grant gates \[([^\]]*)\]/);
+    for (const code of (grants?.[1] ?? "").split(",").map((c) => c.replace(/`/g, "").trim()).filter(Boolean)) {
+      if (!permissions.has(code)) add(`§9.1 RACI row for ${row[header.indexOf("actor")]} grants \`${code}\`, which §8.1 does not have`);
+    }
+    const events = realization.match(/trigger_events \[([^\]]*)\]/);
+    for (const event of (events?.[1] ?? "").split(",").map((e) => e.replace(/`/g, "").trim()).filter(Boolean)) {
+      if (droppedEventPrefixes.has(event.split(".")[0])) add(`§9.1 RACI row for ${row[header.indexOf("actor")]} fires on \`${event}\`, whose entity is dropped`);
+    }
+  }
+  for (const { header, row } of rowsWithHeaders(tableAfterLabel(lines, "**Processes:**"))) {
+    const key = (row[header.indexOf("process_key")] ?? "").replace(/`/g, "").trim();
+    if (key && !raciProcesses.has(key)) add(`§9.1 process \`${key}\` has no RACI row left; it goes with the dropped entity`);
+  }
+  return issues;
+}
+
+/**
+ * A `grant overrides [...]` list sits on the persona's first responsible or accountable row, and on
+ * another row only when it has neither (analyst Stage 9.5 Step 3).
+ */
+function checkRaciOverrides(lines: string[]): Issue[] {
+  const rows = rowsWithHeaders(tableAfterLabel(lines, "**RACI realization:**")).map(({ header, row }) => ({
+    actor: (row[header.indexOf("actor")] ?? "").replace(/`/g, "").trim(),
+    raci: (row[header.indexOf("raci")] ?? "").trim(),
+    process: (row[header.indexOf("process_key")] ?? "").replace(/`/g, "").trim(),
+    realization: row[header.indexOf("realization")] ?? "",
+  }));
+  const holdsWork = (raci: string) => raci === "responsible" || raci === "accountable";
+  return rows
+    .filter((r) => r.realization.includes("grant overrides [") && !holdsWork(r.raci) && rows.some((o) => o.actor === r.actor && holdsWork(o.raci)))
+    .map((r) => ({ check: "RACI overrides", detail: `\`${r.actor}\` carries \`grant overrides\` on its ${r.raci} row for ${r.process}; it belongs on the persona's first responsible or accountable row` }));
 }
 
 function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmatter>, opts: CheckOpts): Issue[] {
@@ -1184,15 +1676,24 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
   const gatedCodes = fm.get("access_scope") === "gated"
     ? new Set(parseSpecPermissions(lines).filter((p) => p.tier.startsWith("workflow-gate (lifecycle)")).map((p) => p.permission))
     : new Set<string>();
-  const scopeCodes = (codes: Set<string>) => new Set([...codes].map((c) => (gatedCodes.has(c) ? `${fm.get("system_slug") ?? ""}:admin` : c)));
+  // Every entity has its own write permission, so T1 compares write tiers: two entities share one when
+  // the same bundles include their write permissions. A bundle, or a code no bundle includes, stands for
+  // itself (under `custom`, the hand-made code). An entity's own write permission counts as its write tier.
+  const bundleCodes = parseSpecPermissions(lines).filter((p) => isBundleTier(p.tier)).map((p) => p.permission);
+  const writeTier = (e: SpecEntity) => {
+    const code = FULL_PERMISSION_CODE.test(e.editPermission) ? e.editPermission : `${fm.get("system_slug") ?? ""}:${e.editPermission || "manage"}`;
+    if (bundleCodes.includes(code)) return code;
+    return bundleCodes.filter((b) => hierarchyIncludes(lines, b).has(code)).sort().join(" + ") || code;
+  };
+  const scopeCodes = (e: SpecEntity) => new Set([...e.permCodes].map((c) => (gatedCodes.has(c) ? `${fm.get("system_slug") ?? ""}:admin` : c === e.editPermission ? writeTier(e) : c)));
   for (const r of parseSpecRelationshipRows(lines)) {
     if (r.kind.replace(/`/g, "") !== "parent" || !/^cascade$/i.test(r.del)) continue;
     const child = ents.get(r.from), parent = ents.get(r.to);
     if (!child || !parent || parent.fields.length === 0) continue;
     const signals: string[] = [];
-    if (child.editPermission !== parent.editPermission) signals.push(`edit permission \`${child.editPermission}\` differs from the parent's \`${parent.editPermission}\``);
-    const parentCodes = scopeCodes(parent.permCodes);
-    const own = [...scopeCodes(child.permCodes)].filter((c) => !parentCodes.has(c));
+    if (writeTier(child) !== writeTier(parent)) signals.push(`write tier \`${writeTier(child)}\` differs from the parent's \`${writeTier(parent)}\``);
+    const parentCodes = scopeCodes(parent);
+    const own = [...scopeCodes(child)].filter((c) => !parentCodes.has(c));
     if (own.length) signals.push(`checks ${own.map((c) => `\`${c}\``).join(", ")} the parent does not`);
     if (child.auditLog === "yes" && child.fields.some((f) => f.name === "workflow_state")) signals.push("audit log yes with its own lifecycle");
     if (signals.length) {
@@ -1316,6 +1817,9 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
 
   // §8.1 `high risk?` and the admin roll-up of process gates, by access level.
   issues.push(...checkSpecGates(lines, fm));
+  issues.push(...checkSpecPermissionNames(lines, fm, ents));
+  issues.push(...checkDroppedEntities(lines, parseSpecEntities(lines)));
+  issues.push(...checkRaciOverrides(lines));
 
   // --- RACI-mode decision provenance (the governance-mode gate) ---
   // When the spec carries a RACI matrix (§9.1 "RACI realization:"), the governance-mode

@@ -19,7 +19,7 @@
  * decision-free core that three deploy post-mortems each dropped a piece of:
  *
  *   module (+ provenance, converged on re-run)
- *     → baseline permissions  (read / manage / [admin], each with module_id)
+ *     → baseline permissions  (read / manage / [admin], held per the holder rule)
  *     → baseline hierarchy     (manage→read, [admin→manage])
  *     → baseline roles         (viewer / manager / [admin]: role_name + slug +
  *                               module_id + origin + catalog_role_code, slug
@@ -29,8 +29,9 @@
  *
  * Every row kind is written as ONE set (deploy-lib `ensureMany` / `ensurePairs`):
  * one `in.()` read, ONE `create_*` call carrying every missing row, one re-read
- * for the keys, and one key-array `update_*` to converge a drifted `module_id`
- * (`update_permission` is keyed by `permission_name`, `update_role` by numeric `id`).
+ * for the keys, and one key-array `update_role` to converge a drifted `module_id`
+ * (keyed by numeric `id`). Permissions follow the holder rule instead
+ * (`ensurePermissionRows`, keyed by `permission_name`).
  * The module record's six references are three permission NAMES (`view_permission`,
  * `manage_permission`, `admin_permission`) and three role ids (`default_*_role_id`).
  * Never a loop of single-record creates. Re-running is a pure no-op.
@@ -38,14 +39,15 @@
  * It makes NO plan decisions. It takes the already-resolved §8.1 baseline
  * permission descriptions, §9.1 baseline role slugs, and the spec's access level
  * (`access_scope`) as arguments. Everything decision-bearing stays in the bespoke script via the
- * deploy-lib primitives: non-baseline §8.1 permissions (workflow gates),
- * non-baseline §9.1 hierarchy relationships, persona / RACI roles, the `logo_color`
+ * deploy-lib primitives and `ensurePermissionRows`: non-baseline §8.1 permissions
+ * (per-entity rows, workflow gates), non-baseline §9.1 hierarchy relationships,
+ * persona / RACI roles, the `logo_color`
  * cosmetic fallback, entities, and fields. `scaffoldModule` covers ONLY the
  * universal baseline that every module has and that kept getting half-built.
  *
  * Import it next to deploy-lib.ts:
  *   import { read1, write, runDeploy } from "./deploy-lib";
- *   import { scaffoldModule, syncLabelColumns, verifyScaffold, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
+ *   import { scaffoldModule, ensurePermissionRows, syncLabelColumns, verifyScaffold, verifyPermissionRows, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
  * and copy `lucide-icon-tags.json` next to it (the icon check reads it).
  *
  * `verifyScaffold(cfg)` is the executable self-audit: pass the SAME config back
@@ -249,29 +251,71 @@ function moduleIcon(slug: string, name: string): string {
 }
 
 /**
- * Ensure the baseline permissions exist with `module_id` — as ONE set: one
- * `in.()` read, ONE `create_permission` call for the missing rows, one re-read,
- * then ONE `update_permission` keyed by a `permission_name` ARRAY for any live row
- * whose `module_id` drifted (same `data` for every name, so it is one call).
- * Permissions have no numeric id: `permission_name` is the primary key, and every
- * reference to a permission (hierarchy, role grants, module record) uses the name.
+ * One §8.1 row this deploy provisions. `entityLivesHere`: the row's entity lives in this
+ * module, per the spec's annotations (modeler Stage 2a-scaffold step 2). Leave it off for a
+ * baseline and for a row whose entity lives elsewhere or nowhere.
  */
-async function ensurePermissions(
-  rows: ReadonlyArray<{ permission_name: string; description: string }>, moduleId: number,
+export interface PermissionRow { permission_name: string; description: string; entityLivesHere?: boolean }
+
+/**
+ * The holder rule (modeler Stage 2a-scaffold step 2) for a row another module holds: what this
+ * deploy does with it. "move-and-describe" when its prefix is this module; "move" when its
+ * entity lives here and the holder is not the module its prefix names; otherwise "leave".
+ */
+export function holderAction(
+  row: PermissionRow, moduleSlug: string, holderSlug: string | undefined,
+): "leave" | "move" | "move-and-describe" {
+  const prefix = row.permission_name.slice(0, row.permission_name.indexOf(":"));
+  if (prefix === moduleSlug) return "move-and-describe";
+  if (row.entityLivesHere && holderSlug !== prefix) return "move";
+  return "leave";
+}
+
+/** `module id → module_slug` for the modules that hold these live permission rows. */
+async function holderSlugs(perms: ReadonlyArray<any>): Promise<Map<number, string>> {
+  const ids = [...new Set(perms.map((p) => Number(p.module_id)))];
+  return new Map((await readIn("read_module", "id", ids)).map((m) => [Number(m.id), String(m.module_slug)] as const));
+}
+
+/**
+ * Create every missing §8.1 row, held by this module, and settle the live rows by the holder
+ * rule, as ONE set: one `in.()` read, ONE `create_permission` call for the missing rows, one
+ * re-read, then the moves the rule calls for (`update_permission`, keyed by `permission_name`:
+ * one call per row that also takes its description, one name-array call for the rest). A row
+ * this module already holds converges on its §8.1 description. Permissions have no numeric id:
+ * `permission_name` is the primary key, and every reference to a permission (hierarchy, role
+ * grants, module record) uses the name, so a move leaves those references as they are.
+ */
+export async function ensurePermissionRows(
+  rows: ReadonlyArray<PermissionRow>, moduleId: number, moduleSlug: string,
 ): Promise<void> {
+  if (!rows.length) return;
   const live = await ensureMany(
     "read_permission", "permission_name", (r) => r.permission_name,
-    "create_permission", rows.map((r) => ({ ...r, module_id: moduleId })),
+    "create_permission", rows.map((r) => ({ permission_name: r.permission_name, description: r.description, module_id: moduleId })),
   );
-  const drifted = [...live.values()]
-    .filter((p) => isEmpty(p.module_id) || p.module_id !== moduleId)
-    .map((p) => p.permission_name as string);
-  if (drifted.length) await write("update_permission", { permission_name: drifted, data: { module_id: moduleId } });
+  const held = (r: PermissionRow) => Number(live.get(r.permission_name).module_id) === moduleId;
+  const holders = await holderSlugs(rows.filter((r) => !held(r)).map((r) => live.get(r.permission_name)));
+  const moves: string[] = [];
+  for (const r of rows) {
+    const p = live.get(r.permission_name);
+    if (held(r)) {
+      if (String(p.description ?? "") !== r.description) {
+        await write("update_permission", { permission_name: r.permission_name, data: { description: r.description } }, `permission ${r.permission_name}`);
+      }
+      continue;
+    }
+    const action = holderAction(r, moduleSlug, holders.get(Number(p.module_id)));
+    if (action === "move-and-describe") {
+      await write("update_permission", { permission_name: r.permission_name, data: { module_id: moduleId, description: r.description } }, `permission ${r.permission_name}`);
+    } else if (action === "move") moves.push(r.permission_name);
+  }
+  if (moves.length) await write("update_permission", { permission_name: moves, data: { module_id: moduleId } });
 }
 
 /**
  * Ensure the baseline roles exist with `module_id` + `origin` (+ `catalog_role_code`
- * lineage, VALUE-only) — as ONE set, same shape as `ensurePermissions`. Slugs are
+ * lineage, VALUE-only) — as ONE set, same shape as `ensurePermissionRows`. Slugs are
  * hyphen-normalized (`roles.slug` is `^[a-z0-9_]+$`). Returns normalized `slug → id`.
  */
 async function ensureRoles(
@@ -366,8 +410,9 @@ async function ensureModule(m: ModulePayload, scope: Scope): Promise<number> {
 /**
  * `access_scope: custom` (modeler Stage 2.5): the module's permissions were set up by
  * hand and are left as they are. No permission / role write: read the existing module and
- * return its current references, so the caller can give new entities the module's own view /
- * manage permissions. The module must already exist (a custom module is always live).
+ * return its current references. A new entity's `view_permission` / `edit_permission` come
+ * from its §3 lines, which name these hand-made codes. The module must already exist (a
+ * custom module is always live).
  * A reference the hand-made module leaves empty comes back as `undefined`.
  */
 async function readCustomModule(slug: string): Promise<ScaffoldResult> {
@@ -425,17 +470,17 @@ export async function scaffoldModule(cfg: ScaffoldConfig): Promise<ScaffoldResul
   });
 
   // 1-2. Module (+ provenance), then the baseline permissions as ONE set (one in.() read, one
-  //      create_permission call for the missing rows, one re-read, one name-array converge).
+  //      create_permission call for the missing rows, one re-read, then the holder rule).
   const moduleId = await ensureModule(cfg.module, cfg.scope);
   if (cfg.scope === "custom") return readCustomModule(slug);   // provenance only; no permission / role / access_scope write
   const readName = `${slug}:read`;
   const manageName = `${slug}:manage`;
   const adminName = hasAdmin ? `${slug}:admin` : undefined;
-  await ensurePermissions([
+  await ensurePermissionRows([
     { permission_name: readName, description: cfg.permissions.read },
     { permission_name: manageName, description: cfg.permissions.manage },
     ...(adminName ? [{ permission_name: adminName, description: cfg.permissions.admin! }] : []),
-  ], moduleId);
+  ], moduleId, slug);
 
   // 3. Baseline hierarchy as ONE set: manage→read, plus admin→manage when the admin tier exists.
   await ensureHierarchy([
@@ -561,11 +606,11 @@ export async function verifyScaffold(cfg: ScaffoldConfig): Promise<Finding[]> {
   await checkPermRef("manage_permission", `${slug}:manage`);
   await checkPermRef("admin_permission", hasAdmin ? `${slug}:admin` : null);
 
-  // Baseline permissions exist and carry module_id.
+  // Baseline permissions exist and this module holds them (their prefix is this module).
   const checkPerm = async (name: string): Promise<any | null> => {
     const p = await read1("read_permission", `permission_name=eq.${name}`);
     if (!p) { fail(`permission ${name}`, "missing"); return null; }
-    if (isEmpty(p.module_id) || p.module_id !== mod.id) fail(`permission ${name}.module_id`, `expected ${mod.id}, live ${p.module_id}`);
+    if (p.module_id !== mod.id) fail(`permission ${name}.module_id`, `expected ${mod.id}, live ${p.module_id}`);
     else ok(`permission ${name}`, `module_id ${p.module_id}`);
     return p;
   };
@@ -612,11 +657,44 @@ export async function verifyScaffold(cfg: ScaffoldConfig): Promise<Finding[]> {
   return f;
 }
 
+/**
+ * Re-read the §8.1 rows `ensurePermissionRows` was given and assert the holder rule: the
+ * executable form of the modeler Stage 5 holder check. Every row exists, a row the rule would
+ * still move is a failure, and a row this module holds has its §8.1 description (area 5a). A
+ * row another module holds keeps that module's description. Returns the ok/warn findings for
+ * the report and THROWS on any failure: run it inside `runDeploy` after `verifyScaffold`.
+ */
+export async function verifyPermissionRows(
+  rows: ReadonlyArray<PermissionRow>, moduleId: number, moduleSlug: string,
+): Promise<Finding[]> {
+  if (CHECK_RUN) return [{ severity: "warn", check: "permission self-audit", detail: "skipped in a check run (nothing was written)" }];
+  const f: Finding[] = [];
+  const live = new Map((await readIn("read_permission", "permission_name", rows.map((r) => r.permission_name)))
+    .map((p) => [String(p.permission_name), p] as const));
+  const holders = await holderSlugs([...live.values()].filter((p) => Number(p.module_id) !== moduleId));
+  for (const r of rows) {
+    const id = `permission ${r.permission_name}`;
+    const p = live.get(r.permission_name);
+    if (!p) { f.push({ severity: "fail", check: id, detail: "missing" }); continue; }
+    if (Number(p.module_id) === moduleId) {
+      if (String(p.description ?? "") !== r.description) f.push({ severity: "fail", check: `${id}.description`, detail: `expected ${quote(r.description)}, live ${quote(p.description)}` });
+      else f.push({ severity: "ok", check: id, detail: "held here" });
+      continue;
+    }
+    const holder = holders.get(Number(p.module_id));
+    if (holderAction(r, moduleSlug, holder) !== "leave") f.push({ severity: "fail", check: `${id}.module_id`, detail: `held by ${holder}, the holder rule says ${moduleSlug}` });
+    else f.push({ severity: "ok", check: id, detail: `held by ${holder}` });
+  }
+  throwIfFailed(f, "verifyPermissionRows", "permission");
+  return f;
+}
+
 // ──────────────────────────── entity / field verify ────────────────────────────
 
 /** What the spec says about one entity this deploy created or synced (Stage 5 areas 5, 5a and 6). */
 export interface EntityExpect {
   table_name: string; module_id: number;
+  view_permission?: string; edit_permission?: string;   // the spec's literal codes; omitted when the line is absent (computed, or custom)
   singular_label: string; plural_label: string; description: string;
   label_column?: string;            // omitted: a based entity, or a junction without one (not checked)
   label_parent?: string | null;     // present: live must equal it (null = live has none)
@@ -643,7 +721,8 @@ const AUTO_FIELDS = new Set(["id", "label", "created_at", "updated_at"]);
 /**
  * Re-read the live catalog and assert the entities and fields match what the script
  * sent: the EXECUTABLE form of modeler Stage 5 area 5 (label column, owning module,
- * label parent, key type, `unique_value`, enum entries, entity and field provenance,
+ * `view_permission` / `edit_permission`, label parent, key type, `unique_value`, enum
+ * entries, entity and field provenance,
  * FK targets, no reserved-name fields), 5a (text fidelity, byte for byte) and 6
  * (`select_rule` / `input_type_rule`, compared structurally; a mismatch there is a warning,
  * since Stage 5 offers the user a retry). One read for the
@@ -683,6 +762,8 @@ export async function verifyEntities(
     if (!l) { fail(`entity ${t}`, "not found live"); continue; }
     const before = f.length;
     if (Number(l.module_id) !== e.module_id) fail(`entity ${t}.module_id`, `expected ${e.module_id}, live ${l.module_id}`);
+    if (e.view_permission !== undefined) same(`entity ${t}.view_permission`, e.view_permission, l.view_permission);
+    if (e.edit_permission !== undefined) same(`entity ${t}.edit_permission`, e.edit_permission, l.edit_permission);
     if (e.label_column !== undefined) same(`entity ${t}.label_column`, e.label_column, l.label_column);
     if ("label_parent" in e) same(`entity ${t}.label_parent`, e.label_parent, l.label_parent);
     if (l.id_type !== undefined) same(`entity ${t}.id_type`, e.id_type ?? "auto_increment", l.id_type);

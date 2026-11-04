@@ -69,6 +69,8 @@ Understanding which layer you're working with determines which tools to use:
 | `references/lucide-icon-finder.ts` | Run it (`bun`), don't read it: `<query…>` (one or more words each, most specific first) lists Lucide icon names per query, in that order; `--batch -` takes a JSON object on stdin mapping labels to their queries and answers every label in one call; see `data-modeling.md` → "Icons are Lucide icons" |
 | `references/lucide-icon-checker.ts` | Run it (`bun`), don't read it: `<name…>` confirms Lucide icon names before an icon is written, exit 1 names the unknown ones; see `data-modeling.md` → "Icons are Lucide icons" |
 | `references/vendor-names.ts` | Run it (`bun`), don't read it: `entity:<Name>…` and `field:<Name>…` convert a followed product's record and field names (singular, spelled the product's way) into `table_name` and labels, or `field_name` and label; never convert them by hand |
+| `references/preflight.md` | The environment checks a skill runs before doing work: stay in the repo root, Bun and jq, CLI install and sign-in, and when to read the two question-format files below |
+| `references/muse-questions.md`, `references/dot-questions.md` | How to ask questions where `AskUserQuestion` is not available; `preflight.md` says when to read them |
 
 ---
 
@@ -293,8 +295,7 @@ object (single-record calls only; `--single` is rejected when `data` /
 `body` / `id` / `table_name` is an array). Better still, do **not** read
 a new row's `id` off its own create response at all: the echoed
 representation is not a dependable carrier of the id/natural key.
-Re-read by natural key after the create (the modeler's `ensure` /
-`ensureMany` helpers do exactly this — one `in.(...)` read for a whole
+Re-read by natural key after the create (one `in.(...)` read for a whole
 batch), so the array-vs-object shape never reaches your `jq`.
 
 There are **two ways** to read against `crud`. Pick the one that

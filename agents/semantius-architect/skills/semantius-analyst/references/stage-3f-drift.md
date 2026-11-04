@@ -89,7 +89,7 @@ Use both the naming-pair heuristic AND format / lifecycle-stamp / required-ness 
 
 **Policy path:** `.drift.permission.<entity>.edit_permission`.
 
-**Fires when** the live entity's `edit_permission` differs from the spec's intended `edit_permission`, AND the tier comparison shows a downgrade (admin → manage, manage → narrow), an upgrade (manage → admin), or a cross-module rename (e.g., `hiring_starter:admin` → `ats-candidate-crm:manage`).
+**Fires when** the live entity's `edit_permission` differs from the spec's `**Edit permission:**` code on an entity this spec already deployed (Stage 2a.1), for example after a hand edit. The change kind compares the bundles that include each code: a downgrade (admin → manage, manage → narrow), an upgrade (manage → admin), otherwise a rename. It never fires on a `reuse-from` or `promote-to-master` entity, where the spec carries the live code ("Live names win", `stage-3-collisions.md` 3d).
 
 - **question**: `"`<Entity Plural Label>` is currently edit-gated by `<live_perm>` in the live model. The spec proposes `<spec_perm>` (which is a `<change kind: downgrade | upgrade | rename>`). What should we do?"`
 - **header**: `"Permission tier drift"`
@@ -178,7 +178,7 @@ function rename_in_jsonlogic(node, renames):
 | Rename kind | Apply across |
 |---|---|
 | Field rename on entity E | Every JsonLogic on E. Also every JsonLogic on any OTHER entity that references `E.<old_field>` (the dotted form). |
-| Permission code rename | Every JsonLogic across all entities (permission codes are global). Also every §8.1 Permissions catalog row, §3 `Edit permission:` annotation, §9.1 permission-hierarchy row, §9.1 RACI realization grant list, and §9.1 `process_gates` / enforcement-rule row that names the code. |
+| Permission code rename | Every JsonLogic across all entities (permission codes are global). Also every §8.1 Permissions catalog row, §3 `View permission:` and `Edit permission:` line, §9.1 permission-hierarchy row, §9.1 RACI realization grant list, and §9.1 `process_gates` / enforcement-rule row that names the code. |
 | Enum value rename (3f.2 option 1 won't trigger this; option 2's migration table might) | Every JsonLogic that compares against the renamed enum literal (`{"==": [{"var": "field"}, "<old_value>"]}` patterns). Also the field's `enum_values` and `default`. |
 
 **Post-cascade verification** (catches incomplete walks, runs as part of Stage 11):

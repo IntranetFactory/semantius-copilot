@@ -27,7 +27,7 @@ description: >-
 
 - Do NOT start this skill, or any of its stages, in an agent that another agent started to run on its own (a background worker, subagent, executor, or Task). Those agents cannot ask the user questions, so they cannot run this skill correctly. Running in the cloud is fine when the user is talking to that agent directly.
 - Do NOT write a delegation prompt that tells another agent to run this skill, "build and deploy end to end", or "make the decisions yourself".
-- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the question-format step of the shared preflight. For dot, OpenAI's personal assistant, and other similarly limited tools without a supported interactive question tool, do not stop: read `references/dot-questions.md`, ask questions in chat, and wait for the user's reply before continuing.
+- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the question-format step of the shared preflight. For dot, OpenAI's personal assistant, and other similarly limited tools without a supported interactive question tool, do not stop: read `../use-semantius/references/dot-questions.md`, ask questions in chat, and wait for the user's reply before continuing.
 - An agent's general habit of delegating long or multi-step work does not apply here. This rule overrides it.
 
 **What may be delegated:** only steps that ask nothing and change nothing the user has not confirmed.
@@ -105,7 +105,7 @@ The admin uses the harness task tools (`TaskCreate` / `TaskUpdate` / `TaskList` 
 
 **Preflight produces no chat output** (see Output discipline above). Do not announce it; never write the words "preflight" or "silent" to the user. Sample `$RUN_ID` and set up `$DIAG_LOG` (`diag-admin.log`) first, then run the four shared preflight checks with NO chat narration, writing their results to the log. The only user-facing output is a halt message (a required tool could not be installed) or a setup action the user must see (installing a required tool, getting the CLI on PATH, naming the host, or opening the sign-in link). On all-pass with every tool already installed and the CLI authenticated, say nothing and let your first user-facing line be the download milestone (URL requests only), the first question, or the plan. The `$RUN_ID` sampled here is the one reused by Step 6.2 — never re-sample it.
 
-**Run the shared preflight: [`references/preflight.md`](./references/preflight.md).** The canonical checks live there as the single source of truth shared by the admin and all three sub-skills:
+**Run the pipeline preflight: [`references/pipeline-preflight.md`](./references/pipeline-preflight.md).** It builds on the shared preflight ([`../use-semantius/references/preflight.md`](../use-semantius/references/preflight.md)) and is the single source of truth for the admin and all three sub-skills:
 
 1. **Stay in the repo root** (never `cd`; the CLI reads `.env` from cwd).
 2. **Install the supporting toolchain (Bun, jq, yq)** — auto-install any missing tool, package-manager-first with a static-binary fallback, on Windows / macOS / Linux, including the mikefarah-yq footgun guard.
@@ -387,7 +387,7 @@ Get started (5.5) stays resident below: it is a top-level request type (Step 0) 
 
 Flow:
 
-1. **Run the shared preflight** ([`references/preflight.md`](./references/preflight.md)). This is the install check: it installs the `semantius` CLI, Bun, jq, and yq if any are missing (Windows / macOS / Linux), and settles the connection (asking which host when none is configured, then starting the sign-in and giving the user the link to open). On success the active `org` and `ui_baseurl` are in hand. If a guard halts (a tool could not be installed, the user has not signed in yet), surface that and stop; a user who has no instance yet signs up at https://app.semantius.com, which gives them their instance address — there is nothing to get started against until the platform is reachable.
+1. **Run the pipeline preflight** ([`references/pipeline-preflight.md`](./references/pipeline-preflight.md)). This is the install check: it installs the `semantius` CLI, Bun, jq, and yq if any are missing (Windows / macOS / Linux), and settles the connection (asking which host when none is configured, then starting the sign-in and giving the user the link to open). On success the active `org` and `ui_baseurl` are in hand. If a guard halts (a tool could not be installed, the user has not signed in yet), surface that and stop; a user who has no instance yet signs up at https://app.semantius.com, which gives them their instance address — there is nothing to get started against until the platform is reachable.
 2. **Verify the connection by querying the database.** Confirm the catalog actually reads back, not just that the CLI authenticated:
 
    ```bash

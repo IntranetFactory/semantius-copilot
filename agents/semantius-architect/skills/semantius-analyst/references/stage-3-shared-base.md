@@ -100,13 +100,13 @@ yq -i ".shared_bases.${ENTITY}.${LIVE_TABLE} = \"${OUTCOME}\" \
 
 A role that writes a based entity must also write its base: the platform refuses a write that does not reach every level (`entity-families.md` → Reading).
 
-- **Base in this module:** give the based entity the same `**Edit permission:**` tier as its base (Stage 9 rule 5 checks it).
+- **Base in this module:** give the based entity the same write tier as its base, so one bundle includes both write permissions (Stage 9 rule 5 checks it).
 - **Base in another module:** add a cross-module edit grant as a §9.1 **Permission hierarchy** row, so every holder of the based entity's edit permission also holds the base's. Exact shape (the modeler's Stage 4i wires it; Gate A checks the included permission exists):
 
   ```markdown
   | permission | includes | reconciliation |
   | --- | --- | --- |
-  | `<slug>:manage` | `<base module slug>:manage` | ✨ to create |
+  | `<slug>:manage` | `<base owner slug>:write_<base>` | ✨ to create |
   ```
 
   Use the based entity's own tier on the left and the base's live `edit_permission` on the right.

@@ -8,6 +8,22 @@ Entries below are newest first.
 
 ---
 
+## Shared preflight and question files live in use-semantius
+
+2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. It no longer names the pipeline skills. Removed: Stage 4 and the closing pointer to authoring the missing content, which belong to `semantius-analyst` (`references/modes-audit-extend-rebuild.md`). The maintainer checks moved to `evals/round-trip/README.md`. The extractor changed in comments only.
+
+## Stable permission names: full codes, per-entity tiers, rows the module reaches
+
+2026-11-04. Paired with the architect, analyst and modeler entries on an entity's permissions being named by the catalog, never by what is installed. `version` stays `3.1`, changed in place.
+
+- **§3.** Every owned entity carries `**View permission:**` and `**Edit permission:**` as the live full codes, right after `**Audit log:**`. A computed entity has no edit line, the platform default `edit_permission` `admin` is not emitted, and an empty live column leaves its line out. The extractor no longer takes `edit_permission`'s suffix as a tier, which would have read `write_candidates` as a narrow tier.
+- **§8.1.** The `reconciliation` column is gone. New tiers `entity-read` and `entity-write`, told from a gate by the hierarchy (`write_off_invoice` does not include a `read_off_invoice`). A narrow tier is a bundle that includes a write permission, or a hand-made code an entity's edit permission names. Under `access_scope: custom` the per-entity tiers are not used. `bypass_submit_lock` is `workflow-gate (rule)` by name, under any prefix, because the rule that cites it can sit on a reused entity.
+- **Rows the module reaches.** Permissions were read by `module_id` and hierarchy rows filtered to those, so a later embedder lost its owner-named rows and the modeler would have refused the extracted spec. The extractor now also reads rows other modules hold that it reaches through hierarchy rows, owned entities' columns and owned entities' rules (`LiveData.otherPerms`). The walk stops at another module's `read`, `manage`, `admin` or narrow tier. §9.1 keeps every row between two §8.1 permissions, plus a family edit grant to another module's bundle.
+- **RACI.** The extractor still writes no RACI realization table. The template lint's `NOT_EMITTED_BY_OPTIMIZER` names the header without `grant_module`.
+- **Eval.** `fixture-basic`, `family`, `gated` and `full` move to per-entity permissions. New `fixture-later-embedder` and `fixture-custom`. `check.ts` gains a shape assertion independent of the goldens.
+
+Rules: `references/spec-extract-lib.ts`.
+
 ## Spec §4 headings: `FK table`, `FK field`, `References`
 
 2026-11-03. The extractor writes the new §4 headings, matching the analyst's template. Row content and order do not change. Rules: `references/spec-extract-lib.ts`.

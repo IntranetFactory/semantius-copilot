@@ -12,9 +12,10 @@ Before running any writes, show the user a clear plan. The plan must have two pa
 📦 Module: saas_expense_tracker
   ✨ Will create (new module)
   🔑 Permissions: ✨ saas_expense_tracker:read, ✨ saas_expense_tracker:manage, ✨ saas_expense_tracker:admin
-  🔗 Permission hierarchy: ✨ admin → manage, ✨ manage → read
-  🛠 Admin-tier entities (edit_permission = saas_expense_tracker:admin): departments, budget_periods
-  🛠 Operational entities (edit_permission = saas_expense_tracker:manage): every other entity below
+  🔑 Per-table permissions: ✨ 12 (view and edit for 6 tables)
+  🔗 Permission hierarchy: ✨ admin → manage, ✨ manage → read, ✨ 18 for the per-table permissions
+  🛠 Admin-tier entities (edit permission included by saas_expense_tracker:admin): departments, budget_periods
+  🛠 Operational entities (edit permission included by saas_expense_tracker:manage): every other entity below
 
 🗂 Entities (7 total):
   🔒 users (Semantius built-in, reusing; model declares 3 extra fields: `department_id`, `job_title`, `employee_id`, will add additively with user confirmation)
@@ -25,7 +26,7 @@ Before running any writes, show the user a clear plan. The plan must have two pa
   ✨ budget_lines: will create + 8 fields
   ✨ license_assignments: will create + 7 fields
 
-Total to create: 1 module, 3 permissions, 2 hierarchy rows, 6 entities, ~58 fields
+Total to create: 1 module, 15 permissions, 20 hierarchy rows, 6 entities, ~58 fields
 Plus: 3 additive fields on built-in `users` (pending confirmation)
 
 🧠 Entity-level rules (calculated values and save-time checks):
@@ -46,7 +47,7 @@ Plus: 3 additive fields on built-in `users` (pending confirmation)
   💤 Skipped (other table not installed): `subscriptions → cost_allocation_rules`
 ```
 
-The read-side and UI-rule sub-sections only appear when the model declares them (most models omit them; the sub-sections are omitted from the plan too — don't render empty bullets). The `select_rule` row carries the `⚠️` marker because applying it changes who can see which rows (medium-risk visibility shift); the deployer pauses for explicit confirmation on every `select_rule` create / modify / remove (in guided and expert flow), same posture as a tier flip on `edit_permission`.
+The read-side and UI-rule sub-sections only appear when the model declares them (most models omit them; the sub-sections are omitted from the plan too — don't render empty bullets). The `select_rule` row carries the `⚠️` marker because applying it changes who can see which rows (medium-risk visibility shift); the deployer pauses for explicit confirmation on every `select_rule` create / modify / remove (in guided and expert flow), same posture as a tier flip.
 
 If the module already exists, swap `✨ Will create` for `♻️ Exists (ID: 12), will update module metadata from the new model and diff entities to apply only changes`. Render the field-level deltas inline under each ♻️ entity so the user sees exactly what's about to change, not just a vague "will diff" promise:
 
@@ -67,7 +68,7 @@ If the module already exists, swap `✨ Will create` for `♻️ Exists (ID: 12)
 
 Use `~` for drifted properties (with `old → new`), `+` for additions, and surface `🛑` separately for anything that blocks the fast-path (enum removals, cross-primitive format changes, field deletions, tier flips). The 🛑 deltas route through the normal Stage 3 ambiguity dialog; the `~` and `+` deltas are informational and apply automatically once the plan is approved (or under the clean re-run fast-path, immediately). The `⚠️ select_rule` line is **not** auto-applied even under the fast-path — read-visibility changes always pause for explicit user confirmation (guided and expert flow; same rule as `edit_permission` tier flips).
 
-> **Fast flow, after the go-ahead:** a 🛑 delta that removes or retypes live data (an enum value removal, a cross-primitive format change, a field deletion) is skipped: never remove anything, keep what is deployed, and continue; a permission-tier flip and the `select_rule` pause proceed as the spec says; log each one that proceeds with `log_pick modeler` ([fast-flow.md](../../semantius-admin/references/fast-flow.md), section 5); don't ask.
+> **Fast flow, after the go-ahead:** a 🛑 delta that removes or retypes live data (an enum value removal, a cross-primitive format change, a field deletion) is skipped: never remove anything, keep what is deployed, and continue; a permission-tier flip and the `select_rule` pause proceed as the spec says, except that a flip narrowing who can edit keeps the old bundle's row; log each one that proceeds with `log_pick modeler` ([fast-flow.md](../../semantius-admin/references/fast-flow.md), section 5); don't ask.
 
 ### Plan-summary lines for master-data flows
 
@@ -75,20 +76,23 @@ The Stage 3 plan emits these standardized line types when master-data operations
 
 | Line | Meaning |
 |---|---|
-| `🟢 <entity> → already shared in <master_module>` | Branch A wire-up. Entity exists in a master module; this consumer is being added. Includes the read inclusion (always) and notes whether manage inclusion is also planned (depends on the per-consumer manage prompt). |
-| `🔗 Permission inclusions (cross-module, new)` block | Lists every `permission_hierarchy` row this deploy will create across module boundaries, with `[origin=model_master]` annotations and the manage-option label from Stage 2d's follow-up. |
+| `🟢 <entity> → already shared in <master_module>` | Branch A wire-up. Entity exists in a master module; this consumer is being added. Includes the read inclusion to that entity's view permission (always) and notes whether a write inclusion to its edit permission is also planned (when §9.1 carries it). |
+| `🔗 Permission inclusions (cross-module, new)` block | Counts the `permission_hierarchy` rows this deploy will create across module boundaries: one line per module and target, never one line per table, with `[origin=model_master]` on the rows Stage 4i adds and the manage-option label on a shared-module move. |
 | `🆕 Master module created: <slug>` | A new `module_type = "master"` module will be created (either by promotion at Stage 2d Branch B, or by an upfront master-model deploy). |
 | `🔁 Renaming master module:` block | A master-model deploy is renaming an existing master in place (cascade per Stage 4b-rename: module slug + per-tier permission codes + per-tier role slugs). Old → new on each line. |
 | `📥 Merging master modules:` block | A master-model deploy is consolidating multiple single-entity masters into one domain cluster (Path 2, plan §5.4.5). Lists each source master being merged in and the target. Source masters are left as quiet orphans (never deleted per "No auto-deletion"). |
 | `✨ <slug>:admin / <slug>_admin role` | Three-permission upgrade case: the model now needs `:admin` where the live module only had `:read` / `:manage`. Adds the missing permission, role, hierarchy row, and module FK columns. |
-| `🌱 Seeded <master>_manager with N members from <original>_manager` | Branch B promotion seeds the master's manager role from the original module's manager-role members. Snapshot-time copy; new `<original>_manager` members added later don't auto-inherit master stewardship. |
+| `🌱 Seeded <master>_manager with N members from <original>_manager` | A shared-module move (Stage 2d) seeds the master's manager role from the original module's manager-role members. Snapshot-time copy; new `<original>_manager` members added later don't auto-inherit master stewardship. An adoption never seeds. |
 | `💡 Cluster hint: <entity> → <cluster>` | An entity in this deploy carries an analyst-emitted `**Shared master cluster:**` annotation, and the hint is shaping a Stage 2d follow-up 1 default (existing-master match or new-module name suggestion). Informational; the user can override at the prompt. |
 | `🏷 module_kind = <kind>` | Informational label from frontmatter (`domain` / `master` / `starter` / etc.). No behavior switch. |
 | `🔐 Access level: <plain words>` | The spec's `access_scope`, named in plain words: `basic` "view and edit"; `advanced` "view, edit and admin"; `gated` "the admin takes the restricted steps"; `raci` "business roles take the restricted steps, and admins can step in except on high-risk steps"; `custom` "permissions set up by hand, left as they are". |
 | `👥 Personas to provision: <list>` | Per-persona summary from §9 RACI + frontmatter `persona`. Stage 4k creates each named persona as a tenant role and grants its RACI permissions. Each line names the persona slug and the count of grants. **Shown only under `access_scope: raci`.** |
 | `🏢 Functional ownership: owner = <function>.<role>, contributor = <function>.<role>` | Summary from §9.2 functional ownership table. Stage 4l grants the named default-tier permission to the named default role for each row. |
-| `🔁 Re-prefix: <slug>:<verb> (catalog <module> not installed)` | The permission row in §8.1 carries a `re-prefixed-from <catalog-module>.<verb>` annotation AND the catalog module isn't installed. Stage 4a-scaffold mints the permission under the installing-unit slug; Stage 2i has queued it for future reconciliation. |
-| `🔁 Master-install reconciliation: rename <slug>:<verb> → <catalog-module>:<verb>; migrate <N> grants` | The catalog module IS installed AND a Branch-B promotion will move the entity. Stage 4n will mint the catalog-prefixed sibling permission, create sibling `role_permissions` rows for every grant on every accumulated non-catalog prefix, and re-emit matching `permission_hierarchy` relationships. No deletes. |
+| `🔑 Per-table permissions: ✨ <N> (view and edit for <M> tables)` | The `entity-read` and `entity-write` rows of §8.1, always as a count, never one line each. A table this module only reads counts one permission. Shown at every access level except `custom`. |
+| `🏠 Permissions kept here until their home module is installed: <N>` | §8.1 rows this module will hold whose prefix names a module that is not installed yet (Stage 2a holder rule). A count. Nothing changes for them when that module arrives except who holds them. |
+| `🏠 Permissions moving to their home module: <N> from <module>` | §8.1 rows the holder rule moves here from another module. A count. Names, grants and hierarchy rows do not change. |
+| `✂️ <Module> managers stop editing <Plural Label>; only the new manager group can. Deploying <Module> again restores their access` | A shared-module move with "a new dedicated manager group" (`manage_option: 1`): Stage 4i deletes the old module's hierarchy row to this entity's edit permission. That module's §9.1 still lists the row, so a later deploy of its spec adds it back. |
+| `✂️ <Module> managers stop editing <Plural Label>` | A confirmed tier flip that narrows who can edit: Stage 4b deletes this module's old bundle row to this entity's edit permission. |
 | `⚠️ Skipping <entity>.<state> — ⚠ <annotation kind>` | Per §7 lifecycle row carrying a `⚠ state-machine shape` or `⚠ unresolved gate` annotation. The deployer SKIPS the row (does NOT silently provision). The line is informational + halt-on-execute. |
 | `💤 Skipping relationship <from>.<target_id> → <target_entity>: other table not installed` | A relationship to an entity that is neither live nor created in this deploy creates no field: Stage 2g marks a §6 row dormant, and Stage 4d leaves out a reference / parent FK. |
 
@@ -103,11 +107,10 @@ Example master-data plan block (Branch B promotion + Branch A wire-up + cluster 
   💡 Cluster hint: cost_centers → finance (matched existing master `finance`, recommended)
   🌱 (planned) Seed `parties_manager` with 3 members from `itsm_manager` if option 1 picked
 🔗 Permission inclusions (cross-module, new):
-   itam:read    → parties:read         [origin=model_master, always]
-   itam:manage  → parties:manage       [origin=model_master, pending manage-option pick]
-   itsm:read    → parties:read         [origin=model_master, always]
-   itsm:manage  → parties:manage       [origin=model_master, pending manage-option pick]
-   itam:read    → finance:read         [origin=model_master, Branch A read inclusion]
+   parties: view 1 table, edit 1 table                                        [origin=model_master]
+   itsm: view 1 table in parties, edit pending manage-option pick             [origin=model_master]
+   itam: view 1 table in parties, edit pending manage-option pick             [origin=model_master]
+   itam: view 1 table in finance                                              [origin=model_master, Branch A read inclusion]
 ```
 
 ### Cross-model relationship suggestions (additive, reversible)
@@ -166,13 +169,15 @@ A `select_rule` create / modify or an `edit_permission` tier flip still pauses f
 
 > **Fast flow, after the go-ahead:** an orphan workflow permission is created as designed; log it with `log_pick modeler`; don't ask.
 
+**A tier flip** is any change to who can edit an existing entity: its live `edit_permission` differs from the spec's code, or §9.1 includes its write permission in a different bundle than live does. The deployer adds the new row and syncs the column. When a flip narrows access, confirming it also removes the old bundle's row to that write permission (Stage 4b; SKILL.md, no auto-deletion), and the confirmation question says so.
+
 ### Merge / rename rules (informational)
 
 When the spec carries `rename-incoming-from <existing_module>.<existing_entity> as <new_name>`, the modeler creates `<new_name>` as a brand-new entity in this module. There is no `update_entity` rename — the existing entity stays where it is, untouched. The user has decided (via the analyst) that the two concepts are different and should silo.
 
-When the spec carries `promote-to-master <master_module>.<entity>`, the modeler **reassigns the existing entity to `<master_module>`** via `update_entity` (changes `module_id` only — the entity's `slug`, underlying Postgres table, data, and every `reference_table` pointer at it across the catalog stay byte-for-byte unchanged). Creates `<master_module>` if missing per the spec's `promotion_decisions` frontmatter. Seeds the master's `<master>_manager` role from the original module's `<original>_manager` members, and adds cross-module permission inclusions per the recorded `manage_option`. The original module gets a `permission_hierarchy` row `<original>:read → <master>:read` (always) and `<original>:manage → <master>:manage` (conditional on `manage_option`). **No data migration, no FK rewires, no orphan tables** — this is a metadata-only operation in the catalog.
+When the spec carries `promote-to-master <master_module>.<entity>`, the modeler **reassigns the existing entity to `<master_module>`** via `update_entity` (changes `module_id` only: the entity's `slug`, underlying Postgres table, data, permission columns, and every `reference_table` pointer at it across the catalog stay byte-for-byte unchanged). Creates `<master_module>` if missing per the spec's `promotion_decisions` frontmatter. **No data migration, no FK rewires, no orphan tables, no renamed permissions**: this is a metadata-only operation in the catalog. An adoption (Stage 2d) needs nothing else: the old module keeps its access through its own bundle rows. Only a shared-module move also seeds the master's `<master>_manager` role from the original module's `<original>_manager` members and applies the recorded `manage_option` (Stage 4i).
 
-When the spec carries `reuse-from <module>.<entity>` for a master/shared entity, the modeler adds a `permission_hierarchy` row `<consumer>:read → <master>:read` (always, idempotent) and `<consumer>:manage → <master>:manage` (if the spec's `promotion_decisions` says so).
+When the spec carries `reuse-from <module>.<entity>` for a master/shared entity, the modeler adds a `permission_hierarchy` row `<consumer>:read` → the entity's live `view_permission` (always, idempotent) and `<consumer>:manage` → its live `edit_permission` (if the spec's §9.1 says so).
 
 ---
 
@@ -195,9 +200,10 @@ A base in another module adds `🔗 Writers of Customers also edit Business Part
 - Every planned FK target exists or is being created in this run.
 - Every `**Based on:**` base is live or created in this run **at an earlier level** (no cycle), and no based entity carries a label column, label parent or order column.
 - Every role member is a real user.
-- No circular permission hierarchy. (Load-bearing: today's design only adds rows shaped `<consumer>:read → <master>:read` and `<consumer>:manage → <master>:manage`, which can't cycle. But a future feature that adds inclusions in the other direction, e.g. `<master>:read → <consumer>:read`, could form a cycle. The check stays in place to catch that.)
+- No circular permission hierarchy. (Load-bearing: the design adds rows from a bundle to a per-entity permission and from a write permission to its read, which can't cycle. A row in the other direction would, and this check catches it.)
 - Every default-role slot in every module's scaffold has a planned role (not checked under `access_scope: custom`, where the scaffold is skipped).
 - Every cross-module inclusion has both its including and included permission (by `permission_name`) planned or live.
+- Every code on an entity's `**View permission:**` and `**Edit permission:**` lines names a permission planned or live.
 - Every merged JSON entry has a `source_module` value.
 
 If any check fails, surface as a 🛑 with the broken reference quoted. Catches design bugs before they touch the catalog.

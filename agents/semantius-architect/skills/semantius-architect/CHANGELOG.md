@@ -8,6 +8,52 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Shared preflight and question files live in use-semantius
+
+2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. The checks are `semantius-admin/references/pipeline-preflight.md` on top of `use-semantius/references/preflight.md`, with no change to what runs or in which order; `dot-questions.md` is in `use-semantius/references/`.
+
+## Permissions are named by the catalog, and modules hold them through bundles
+
+A `derived` row's `mastered in` names the catalog master when one exists, and stays `-` only when there is none, in which case the entity gets no permission rows. `finalize_` and `reassign_` take the entity's owner prefix. A module that masters an entity also mints a gate the catalog names another module as realizing, under that module's name. A gate prefix with no `realizing module` column to explain it now fails, and a lifecycle gate named `submit_...` is no longer read as an override.
+
+2026-11-04. An entity embedded by a module whose owner was absent took the installing unit's prefix on its gates and overrides, and a new name when the owner installed later. So the same catalog produced different permissions in different tenants, gate rules kept testing the old name, one local name could cover gates from different owners, and module-wide permissions forced a choice at adoption between lost access and write access to the owner's whole module. Decided by the owner (`plans/stable-permission-names-plan.md` in the domain-map repo). The version stays `3.1`, changed in place, because nothing is live.
+
+1. **Writing Convention 10 is rewritten.** An embedded entity keeps its owner's names. The unit holds them through §9.1, and `re-prefixed` codes are gone, along with the deployer reconciliation the convention described.
+2. **Every entity gets its own permissions.** New §8.1 tiers `entity-read` (`<owner>:read_<entity>`) and `entity-write` (`<owner>:write_<entity>`). `<entity>` is the §3 `catalog code`. The template gains "Which rows an entity gets": read and write for `master`, `embedded_master` and `contributor`; read only for `consumer`, `derived` and `computed`; none for a built-in or an entity with no master; none at all under `custom`.
+3. **`<slug>:read`, `:manage`, `:admin` and narrow tiers are bundles.** New §9.1 rows include the entity permissions, and each `write_` includes its `read_`. The §3 `write tier` column now says which bundle includes the write permission, and may carry a narrow suffix. Under `basic` every write sits under `manage`.
+4. **Allowed §8.1 prefixes** are the module's slug, a §3 `mastered in` module and a §7 realizing module. A gate uses the realizer when the catalog names one, otherwise the master. The overrides `view_all_`, `manage_all_`, `submit_` and `bypass_submit_lock` use the master whatever the row's tier. Bundles keep the module's slug. Stage 10's naming table, Stage 11's hierarchy step, Stage 13, the audit checklist and the pre-save table follow. `override` joins the audit's closed tier list, where it was missing.
+5. **`consistency-check.ts`** gains two blueprint checks (`permission prefix`, `entity permissions`) and the same rule on specs, including `old permission shape`, which refuses a `grant_module` column, `re-prefixed-from`, a bare `**Edit permission:**` and an owned entity with no `**View permission:**` or `**Edit permission:**` line. Live names win on a `reuse-from` or `promote-to-master` entity, so its codes may have any prefix. A §7 table without a `realizing module` column can't confirm a realizer, so a gate prefix other than the master is a warning there, not an error.
+6. **FK scope T1 compares write tiers,** the bundles that include each entity's write permission, because every `write_<entity>` code differs by name. An entity's own write permission counts as its write tier in T2.
+7. **Fixtures.** Every fixture carries the new rows, and the spec fixtures lose `grant_module` and the §8.1 `reconciliation` column. `spec-gated-five-column` and `spec-raci-five-column` are renamed `...-no-high-risk-column`. New: `blueprint-embedded`, `blueprint-bad-prefix`, `blueprint-entity-rows-missing`, `blueprint-custom-entity-rows`, `spec-embedded`, `spec-entity-rows-bad`, `spec-old-shape`, `spec-custom-entity-rows`, `spec-override-prefix-unnamed`.
+
+Catalog blueprints fail the new checks until the generator emits the new rows and they are regenerated (step 3 of the plan).
+
+## `supports_raci`: `raci` is offered only on a blueprint that provides RACI
+
+2026-11-03. A catalog blueprint could be offered `raci` while most of its gates had no process, and Stage 11 then invented the missing processes and approvers from domain knowledge. Nothing said up front whether a blueprint provided RACI. Decided by the owner. The version stays `3.1`, because this only adds a key and no existing field changes meaning.
+
+1. **New frontmatter key `supports_raci`.** `true` only when the file has at least one gate and the RACI rule holds. In a catalog blueprint the generator derives it; the architect works it out at every write. A missing key counts as `false`.
+2. **`decide-access-scope.ts`** gains `--supports-raci` and reads the key under `--blueprint`. Without support it returns `gated` with no question. A request for `raci` gets `gated` and `raci_refused: true`, and the user is told which restricted steps have no approver.
+3. **Stage 11** drafts a matrix only on Create-Greenfield. A blueprint that starts from a file carries its matrix, and rows are drafted only for a gate the run adds. A design written earlier with `false` is not offered `raci` either.
+4. **`consistency-check.ts`** fails a value that disagrees with the file, and `access_scope: raci` without `supports_raci: true`. New fixtures: `blueprint-raci-unsupported`, `blueprint-raci-supports-broken`, `blueprint-gated-supports-no-matrix`.
+
+No live module uses `raci` today, so a live module at `raci` with a `false` blueprint gets no special handling: the check fails it.
+
+## The RACI rule also runs on specs; `⚠ no process` leaves the §8.1 description
+
+2026-11-03. Decided by the owner. The version stays `3.1`: no table changes, and a note under a table is not parsed.
+
+1. **`consistency-check.ts`** tests the RACI rule on a spec under `raci`, as it already did on a blueprint. Until now a spec could reach the modeler with a gate no Accountable row held. New fixture: `spec-raci-unheld-gate`.
+2. **`(⚠ no process)` is no longer part of a §8.1 `description`.** That text deploys verbatim as the live permission's description, and no skill stripped the marker. A catalog blueprint now names these gates in one note under the table. An older file keeps the old text until it is regenerated, and the audit checklist flags it.
+
+## `consistency-check.ts`: dropped entities and override placement
+
+2026-11-03. Two new spec checks back the analyst's Stage 9.5 rules. `dropped entity` fails a spec when a §6 relationship, an outbound handoff `payload`, a §8.1 description, a §8.2 rule, `_process_gates_`, `_enforcement rules_` or a `trigger_events [...]` list still has a dropped entity. In a spec with a dropped entity, it also fails a `grant gates [...]` code or hierarchy `includes` code that §8.1 does not have, and a process with no RACI row left. `RACI overrides` fails a `grant overrides [...]` list on a consulted or informed row of a persona that has a responsible or accountable row. Blueprints are not affected. New fixtures: `spec-raci-dropped-pruned` and `spec-raci-dropped`.
+
+## Blueprint §5: `field_required` and `one_to_one` get a test
+
+2026-11-03. Catalog rows such as `candidates becomes employees` were marked `yes` because the sentence is true of the parent, though the value is a claim about the child. `yes` now needs every `to` row to have a `from`, in every organization and however the row was created. `one_to_one` now needs that a parent can never have a second child. What the columns mean is unchanged, so the format version stays `3.1`. Rules: `references/semantic-blueprint-template.md`.
+
 ## Blueprint §5: `from` is the parent, and the `owner_side` column is gone
 
 2026-11-03. `owner_side` restated what `from` and `to` already say, and a benchmark blueprint carried a wrong value on every row while its spec still came out right. `from` is now always the parent and `to` is the child, which holds the field. A `many_to_many` row has no parent. §5.1 and §5.2 lose the column; rows, verbs and diagrams keep their direction. The format version stays `3.1`. Rules: `references/semantic-blueprint-template.md`, `references/stage-3-entities.md`, `references/audit-checklist.md`, `references/modes-audit-extend-rebuild.md`.

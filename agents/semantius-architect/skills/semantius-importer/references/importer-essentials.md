@@ -1,14 +1,14 @@
 # Importer Essentials (distilled from use-semantius)
 
-The Step 0 hard-gate read for `semantius-importer`: everything the import workflow needs from `use-semantius`, condensed. This file is a distillation, not the authority — **`../use-semantius/` wins on any conflict**. Consult the full references on demand:
+The Step 0 hard-gate read for `semantius-importer`: everything the import workflow needs from `use-semantius`, condensed. This file is a distillation, not the authority — **`../../use-semantius/` wins on any conflict**. Consult the full references on demand:
 
 | Situation | Read |
 |---|---|
-| FK modeling depth (reference vs parent semantics, junctions, delete modes) | `../use-semantius/references/data-modeling.md` |
-| RBAC beyond the module's two standard permissions | `../use-semantius/references/rbac.md` |
-| Schema-evolution risk classes, renames, deletions | `../use-semantius/references/data-modeling.md` → Safe Evolution Patterns |
-| PostgREST syntax beyond this file | `../use-semantius/references/crud-tools.md` |
-| Exotic CLI forms, chaining, daemon/env tuning | `../use-semantius/references/cli-usage.md` |
+| FK modeling depth (reference vs parent semantics, junctions, delete modes) | `../../use-semantius/references/data-modeling.md` |
+| RBAC beyond the module's two standard permissions | `../../use-semantius/references/rbac.md` |
+| Schema-evolution risk classes, renames, deletions | `../../use-semantius/references/data-modeling.md` → Safe Evolution Patterns |
+| PostgREST syntax beyond this file | `../../use-semantius/references/crud-tools.md` |
+| Exotic CLI forms, chaining, daemon/env tuning | `../../use-semantius/references/cli-usage.md` |
 
 ---
 

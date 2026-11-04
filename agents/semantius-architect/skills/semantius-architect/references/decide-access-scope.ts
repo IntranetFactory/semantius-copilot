@@ -10,20 +10,21 @@
  *
  * Usage:
  *   bun decide-access-scope.ts --slug <system_slug> --flow guided|expert|fast
- *       ( --has-reference-data-entities yes|no --has-process-gate yes|no  |  --blueprint <path> )
+ *       ( --has-reference-data-entities yes|no --has-process-gate yes|no --supports-raci yes|no  |  --blueprint <path> )
  *       [--requested-level basic|advanced|gated|raci] [--keep-custom yes|no]
  *       [--answer basic|advanced|gated|raci]
  *
  * Output (stdout): one JSON object
- *   { access_scope, ask, reason, facts }
+ *   { access_scope, ask, reason, raci_refused, facts }
  *   ask = null | { kind: "keep_or_replace" | "level", options: [...], recommended: <value> | null }
  *   While `ask` is set, `access_scope` is null.
+ *   raci_refused = true when the request asked for `raci` and the design does not support it.
  *
  * Exit codes:
  *   0  decided, or a question is pending
  *   1  a live read failed
  *   2  usage error (an unknown flag or value, `--answer` not in `options`,
- *      `--keep-custom` while the module is not `custom`, `--blueprint` plus the two flags)
+ *      `--keep-custom` while the module is not `custom`, `--blueprint` plus the three flags)
  *
  * `--from-fixture <file.json>` is for tests only: it replaces both live reads with
  * `{ "live_raci": boolean, "current_access_scope": "none" | "custom" | "basic" | "advanced" | "gated" | "raci" }`.
@@ -40,6 +41,7 @@ type Current = Scope | "none";
 type Facts = {
   has_reference_data_entities: boolean;
   has_process_gate: boolean;
+  supports_raci: boolean;
   live_raci: boolean;
   flow: Flow;
   current_access_scope: Current;
@@ -47,7 +49,7 @@ type Facts = {
 };
 
 type Ask = { kind: "keep_or_replace" | "level"; options: string[]; recommended: string | null };
-type Decision = { access_scope: Scope | null; ask: Ask | null; reason: string };
+type Decision = { access_scope: Scope | null; ask: Ask | null; reason: string; raci_refused?: boolean };
 
 class UsageError extends Error {}
 class LiveReadError extends Error {}
@@ -59,7 +61,7 @@ const isLevel = (v: string): v is Level => (LEVELS as readonly string[]).include
 // ---------- arguments ----------
 
 const FLAGS = new Set([
-  "--slug", "--flow", "--has-reference-data-entities", "--has-process-gate", "--blueprint",
+  "--slug", "--flow", "--has-reference-data-entities", "--has-process-gate", "--supports-raci", "--blueprint",
   "--requested-level", "--keep-custom", "--answer", "--from-fixture",
 ]);
 
@@ -146,7 +148,7 @@ const cell = (header: string[], row: string[], name: string): string => {
   return i >= 0 ? bare(row[i] ?? "") : "";
 };
 
-function blueprintFacts(path: string): { hasReferenceDataEntities: boolean; hasProcessGate: boolean } {
+function blueprintFacts(path: string): { hasReferenceDataEntities: boolean; hasProcessGate: boolean; supportsRaci: boolean } {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -190,7 +192,10 @@ function blueprintFacts(path: string): { hasReferenceDataEntities: boolean; hasP
       hasProcessGate = true;
     }
   }
-  return { hasReferenceDataEntities, hasProcessGate };
+  // Frontmatter `supports_raci`: a missing key counts as false.
+  const end = lines[0] === "---" ? lines.indexOf("---", 1) : -1;
+  const supportsRaci = lines.slice(1, Math.max(end, 1)).some((l) => /^supports_raci:\s*true\s*$/.test(l));
+  return { hasReferenceDataEntities, hasProcessGate, supportsRaci };
 }
 
 // ---------- live reads ----------
@@ -263,13 +268,16 @@ function decideNew(f: Facts): Decision {
         ? "The design has no process gates and has reference data entities, so it needs an admin level."
         : "The design has no process gates and no reference data entities." };
   }
+  if (f.flow === "fast") {
+    return { access_scope: "gated", ask: null, reason: "The design has process gates; a fast-flow run never picks raci." };
+  }
+  if (!f.supports_raci) {
+    return { access_scope: "gated", ask: null, reason: "The design has process gates and does not support raci." };
+  }
   if (f.flow === "guided") {
     return f.live_raci
       ? { access_scope: "raci", ask: null, reason: "The design has process gates and another module already uses raci." }
       : { access_scope: "gated", ask: null, reason: "The design has process gates and no other module uses raci." };
-  }
-  if (f.flow === "fast") {
-    return { access_scope: "gated", ask: null, reason: "The design has process gates; a fast-flow run never picks raci." };
   }
   return { access_scope: null, ask: { kind: "level", options: ["gated", "raci"], recommended: f.live_raci ? "raci" : "gated" },
     reason: "The design has process gates; in expert flow the user chooses who takes them." };
@@ -282,9 +290,11 @@ function decideExisting(f: Facts, current: Level): Decision {
     return { access_scope: result, ask: null,
       reason: `The module already uses ${current}; it is never lowered, and the design needs at least ${minimum(f)}.` };
   }
-  const fresh = decideNew(f).ask!; // in expert flow the new-module table always asks
-  const options = LEVELS.filter((l) => (fresh.options.includes(l) || l === current) && rank(l) >= rank(current));
-  const recommended = higher(current, fresh.recommended as Level);
+  // In expert flow the new-module table asks, unless the design has gates and does not support raci.
+  const fresh = decideNew(f);
+  const freshOptions: string[] = fresh.ask ? fresh.ask.options : [fresh.access_scope as Level];
+  const options = LEVELS.filter((l) => (freshOptions.includes(l) || l === current) && rank(l) >= rank(current));
+  const recommended = higher(current, (fresh.ask ? fresh.ask.recommended : fresh.access_scope) as Level);
   if (options.length === 1) {
     return { access_scope: options[0], ask: null,
       reason: `The module already uses ${current}; no other access level is possible without lowering it.` };
@@ -294,11 +304,16 @@ function decideExisting(f: Facts, current: Level): Decision {
 }
 
 /** A requested level raises the result (or the recommended option); a lower one is ignored. */
-function applyRequested(f: Facts, d: Decision): Decision {
-  if (!f.requested_level) return d;
+function applyRequested(f: Facts, decision: Decision): Decision {
+  if (!f.requested_level) return decision;
+  let d = decision;
   let req: Level = f.requested_level;
   if (f.flow === "fast" && req === "raci") req = "gated";
   if ((req === "gated" || req === "raci") && !f.has_process_gate) return d;
+  if (req === "raci" && !f.supports_raci) {
+    req = "gated";
+    d = { ...d, raci_refused: true, reason: `${d.reason} The request asked for raci, which the design does not support.` };
+  }
   if (d.ask) {
     if (d.ask.kind !== "level" || !d.ask.options.includes(req)) return d;
     if (rank(req) <= rank(d.ask.recommended as Level)) return d;
@@ -332,7 +347,7 @@ function applyAnswer(d: Decision, answer: string | undefined): Decision {
   if (!d.ask || d.ask.kind !== "level" || !d.ask.options.includes(answer)) {
     throw new UsageError(`--answer ${answer} is not one of the options of a pending access-level question`);
   }
-  return { access_scope: answer as Scope, ask: null, reason: `${d.reason} The user chose ${answer}.` };
+  return { ...d, access_scope: answer as Scope, ask: null, reason: `${d.reason} The user chose ${answer}.` };
 }
 
 // ---------- main ----------
@@ -350,21 +365,25 @@ async function main(): Promise<number> {
   const blueprint = args.get("--blueprint");
   const refFlag = yesNo("--has-reference-data-entities", args.get("--has-reference-data-entities"));
   const gateFlag = yesNo("--has-process-gate", args.get("--has-process-gate"));
+  const raciFlag = yesNo("--supports-raci", args.get("--supports-raci"));
   let hasRef: boolean;
   let hasGate: boolean;
+  let supportsRaci: boolean;
   if (blueprint !== undefined) {
-    if (refFlag !== undefined || gateFlag !== undefined) {
-      throw new UsageError("give either --blueprint or the two --has-* flags, not both");
+    if (refFlag !== undefined || gateFlag !== undefined || raciFlag !== undefined) {
+      throw new UsageError("give either --blueprint or the --has-* and --supports-raci flags, not both");
     }
     const parsed = blueprintFacts(blueprint);
     hasRef = parsed.hasReferenceDataEntities;
     hasGate = parsed.hasProcessGate;
+    supportsRaci = parsed.supportsRaci;
   } else {
-    if (refFlag === undefined || gateFlag === undefined) {
-      throw new UsageError("give --blueprint, or both --has-reference-data-entities and --has-process-gate");
+    if (refFlag === undefined || gateFlag === undefined || raciFlag === undefined) {
+      throw new UsageError("give --blueprint, or all of --has-reference-data-entities, --has-process-gate and --supports-raci");
     }
     hasRef = refFlag;
     hasGate = gateFlag;
+    supportsRaci = raciFlag;
   }
 
   const requested = args.get("--requested-level");
@@ -382,6 +401,7 @@ async function main(): Promise<number> {
   const facts: Facts = {
     has_reference_data_entities: hasRef,
     has_process_gate: hasGate,
+    supports_raci: supportsRaci,
     live_raci: live.liveRaci,
     flow,
     current_access_scope: live.current,
@@ -389,7 +409,7 @@ async function main(): Promise<number> {
   };
 
   const decision = applyAnswer(decide(facts, keepCustom), answer);
-  console.log(JSON.stringify({ access_scope: decision.access_scope, ask: decision.ask, reason: decision.reason, facts }, null, 2));
+  console.log(JSON.stringify({ access_scope: decision.access_scope, ask: decision.ask, reason: decision.reason, raci_refused: decision.raci_refused ?? false, facts }, null, 2));
   return 0;
 }
 

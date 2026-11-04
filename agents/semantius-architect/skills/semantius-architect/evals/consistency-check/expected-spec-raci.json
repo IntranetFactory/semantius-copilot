@@ -1,3 +1,0 @@
-[
-  { "check": "FK scope", "detail": "checks `expense-claims:dispute_expense_claim_line` the parent does not", "warn": true }
-]

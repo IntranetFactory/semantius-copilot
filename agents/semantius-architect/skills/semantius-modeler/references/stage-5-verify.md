@@ -15,7 +15,7 @@ After all creates are done, emit the **structured verification report** ("Struct
    - `module.view_permission` equals `<slug>:read`.
    - `module.manage_permission` equals `<slug>:manage`.
    - `module.admin_permission` is null (basic) OR equals `<slug>:admin`.
-   - **Every permission row declared by this model has `module_id = <module.id>`.** For each `<slug>:*` row from the §8.1 Permissions catalog, `read_permission --single` by `permission_name` and assert `.module_id == <module.id>`. A NULL or mismatched `module_id` is a 🛑 — the permission resolves by name (so hierarchy and role-permission joins still work, masking the defect from a casual smoke test), but module-scoped queries (`?module_id=eq.<id>`) silently miss it, and per-module RBAC audits report drift. Stage 4's scaffold step 2 backfills this column on **every** deploy (both on create and on the exit-0 converge path), so a Stage 5 hit means that backfill did not land — re-issue the `update_permission` to set the column and halt if it still will not take, rather than reporting the deploy as clean.
+   - **Every §8.1 row exists, with the holder the rule gives it** (Stage 2a-scaffold step 2; mechanized by [`scaffold-lib.ts`](./scaffold-lib.ts) `verifyScaffold` for the baselines and `verifyPermissionRows(rows, moduleId, slug)` for every other row). A row whose prefix is this module has `module_id = <module.id>`. A row whose prefix is another module and whose entity lives here is held here, unless the holder's slug is the prefix. Any other owner-named row only has to exist: the first module that needed it holds it. A wrong holder is a 🛑. Stage 4's scaffold step 2 applies the rule on **every** deploy, so a Stage 5 hit means a move did not land: re-issue the `update_permission` and halt if it still will not take, rather than reporting the deploy as clean.
    - `module.default_viewer_role_id` dereferences to the role whose `slug` is the viewer row in the spec's §9.1 baseline-roles table (read verbatim, not reconstructed as `<slug>_viewer` from the module slug), with `module_id == <module.id>` (a role carrying the right slug but a NULL or mismatched `module_id` is an orphan — invisible in the module's governance panel; the role-side analog of the permission `module_id` check above), `origin ∈ {"model", "model_master"}` matching the module's type (a role left at the default `origin = "user"` was created without the provenance stamp — a 🛑), and a `role_permissions` row relating it to `<slug>:read` (verify via `read_role_permission` filtered on the resolved `role_id` + `permission_name`).
    - Same for manager and admin roles.
    - If any reference is null where the model expected a value, or if a non-null reference holds (or dereferences to) the wrong natural key, surface as 🛑. Name what failed in the report's Checks block by display name — never as a bare `id=N` — so the user can recognize it without cross-referencing.
@@ -32,14 +32,17 @@ After all creates are done, emit the **structured verification report** ("Struct
 
 2. **Master promotion (per promoted entity).**
    - Entity's `module_id` matches the master module's id.
-   - Master module's `module_type = "master"`.
+   - Master module's `module_type = "master"`, except on an adoption onto this spec's own module.
+   - Entity's `view_permission` and `edit_permission` still equal the spec's codes: a move changes neither.
    - Count of live records in the entity matches the pre-move count.
    - Every `reference_table = "<entity>"` FK across the catalog still resolves (no orphans).
-   - `<master>_manager` role member count >= seed count.
+   - On a shared-module move: `<master>_manager` role member count >= seed count, and under `manage_option: 1` in guided and expert flow the old module's hierarchy row to the entity's `edit_permission` is gone (Stage 4i). An adoption has neither check: the old module's row stays.
+   - On a confirmed tier flip that narrows who can edit, in guided and expert flow: this module's old bundle row to the entity's `edit_permission` is gone (Stage 4b).
 
 3. **Cross-module hierarchy (per inclusion created).**
    - Row exists with the expected `(including_permission_name, included_permission_name)` pair.
-   - Cross-module bridge rows have `origin = "model_master"` (covers both intra-master chains and consumer-to-master bridges).
+   - A row Stage 4i added has `origin = "model_master"`; a §9.1 row carries the origin 2a-scaffold step 3 gave it.
+   - A bridge's included permission is the entity's own `view_permission` or `edit_permission`.
    - No rows were created with `origin = "user"` overwriting prior admin intent (paranoia check; should be impossible per Stage 4i idempotency).
 
 3a. **Process gates held by the admin (`access_scope: gated` and `raci` only).** For every `workflow-gate (lifecycle)` row in §8.1, look up the live `<slug>:admin` → gate hierarchy row (one `read_permission_hierarchy` with `including_permission_name=eq.<slug>:admin` covers every gate):
@@ -58,6 +61,7 @@ After all creates are done, emit the **structured verification report** ("Struct
 5. **Per-entity field counts and labels.** **Mechanized by [`scaffold-lib.ts`](./scaffold-lib.ts) `verifyEntities(...)`**, run inside `runDeploy` right after `verifyScaffold`, together with areas 5a and 6: it throws on any mismatch below (area 6 rule mismatches come back as warnings instead), so do not re-read live to repeat these checks; fold its findings into the report. When it halts the run, re-run the same deploy command once, without a chat line: the re-run sends the drifted values again. Only when it halts again is the deploy reported as stopped. Still checked here by hand: the lifecycle state field name (`workflow_state`). The checks it runs, for reference:
    - `read_entity` on each owned entity, confirm live `label_column` equals the spec's `**Label column:**` value; being set is not enough. A different value is a 🛑, not a pass: re-point it with `updateEntity(t, { label_column })`, which makes the spec's existing column the label without renaming the current one, and halt if it will not take. Exceptions: a based entity (`**Based on:**`: its `label_column` is set from its base by the platform, so confirm it equals the base's) and an `entity_type: junction` entity whose spec omitted the `**Label column:**` line (valid: the platform composes its `_label` from the parent legs; a null live `label_column` there is expected, not a finding).
    - **Owning `module_id`.** For every entity this deploy owns (`create-new` / `rename-incoming-from` → this module; `promote-to-master` → the master module), assert live `entities.module_id` equals the expected module id. A NULL or mismatched value is a 🛑 — the platform is documented to reject a null `module_id` on create, so a live NULL means the create either omitted it or it was nulled later; the entity then belongs to no module and is invisible to module-scoped queries. Stage 4c sets this on create and converges it on the same-module path, so a Stage 5 hit means that did not land — re-issue the `update_entity` and halt if it still will not take. (Reused/built-in entities are out of scope: they keep their source module's id.)
+   - **`view_permission` and `edit_permission`.** For every entity this deploy owns, the live columns equal the codes on the spec's `**View permission:**` and `**Edit permission:**` lines, byte for byte (a line absent under `custom`, or `**Edit permission:**` on a `computed` entity, is not checked). A mismatch is a 🛑: re-issue `update_entity` and halt if it will not take.
    - `read_field` per entity, confirm field count matches the model (minus auto-generated).
    - Spot-check that `reference_table` targets exist for FK fields (including any that point at built-ins like `users`).
    - **`unique_value` round-trips.** For each field whose §3 Reference / Notes carry the `unique` marker, confirm live `unique_value` is `true`; for every field without it, confirm `false`. A mismatch is a 🛑 — re-issue `update_field` with the model value (adding `unique_value: true` to a populated column fails if duplicates exist; surface that and route to dedup rather than looping). This is the deploy-side guard the analyst/optimizer `unique` round-trip depends on; a silent drop of a declared natural-key uniqueness is exactly the defect it catches.
@@ -68,7 +72,7 @@ After all creates are done, emit the **structured verification report** ("Struct
    - **Entity provenance round-trip (every owned entity).** Beyond `module_id` and `label_parent` above, assert the lineage/class stamp landed (the entity analog of the module provenance check in §1): `catalog_entity_code` is **non-empty** (the catalog code, default `table_name`); `entity_type` matches the spec's `**Entity type:**` and is one of the 6 CHECK values (`unclassified` only when the spec omitted it, never `''`); `catalog_owner_module` matches the spec's `**Catalog owner:**` line (or `''` when the line is absent / the entity was promoted into its catalog home). An empty `catalog_entity_code` or an out-of-set `entity_type` is a 🛑 — the entity deployed but its catalog identity did not, breaking the analyst's re-reconcile and the `use-*` discovery skills exactly as a missing module stamp does. Re-issue `create_entity` (or `update_entity` for the value-only columns; `catalog_entity_code` is write-once, settable only while still empty) and halt if it will not take. Built-in / `reuse-from` entities are out of scope — they keep their own stamp.
    - **Field provenance round-trip (every field this deploy created).** For each field Stage 4d / 4g / 4h created via `create_field` in this run, plus the `label_column` field of every entity this run created (stamped in the post-create pass, see Stage 1 "Label-column description and provenance"), assert live `fields.catalog_field_code` is **non-empty** and equals the spec's `field_name`. Other platform-generated columns (`id`, `label`, `created_at`, `updated_at`) are out of scope. An empty value is a 🛑: the field deployed without its design-time identity, so a later field rename cannot be joined back to the blueprint. `catalog_field_code` is write-once but settable while still empty, so re-issue `update_field` with the value and halt if it will not take. Fields that existed before this deploy are out of scope (their stamp, or its absence, predates this run; never overwrite a non-empty value).
 
-5a. **Text-fidelity round-trip (every entity and every field this deploy touched).** Mechanized by `verifyEntities` (area 5). For each entity, compare live `description`, `singular_label`, `plural_label` against the parsed model values **byte-for-byte**. For each field declared in the model, compare live `description` and `title` against the model byte-for-byte (for the `label_column` field, "the model" is its §3 **Label**, which the platform-derived title from `singular_label` almost never matches — see the Stage 1 "Title correction" note). Any mismatch is a Stage 5 **blocker**, not an advisory: surface the entity / field, quote both strings with their byte counts, **re-issue the offending `create_*` / `update_*` with the model-sourced text, then re-read and re-compare. Do not report the deploy successful while any text-fidelity mismatch remains** — a "recommend and move on" here is exactly how the label-title and field-description drift reached production. Catches every failure mode the "Data fidelity" section enumerates: truncation (live byte-count shorter than model), normalization (live missing backticks / apostrophes / Unicode the model carried), and empty-string-clobber on `update_field` (live empty where model is non-empty). Equivalent round-trip applies to permission `description` against the §8.1 Permissions catalog `description` cell. The check is cheap (every relevant column is already in the `read_entity` / `read_field` / `read_permission` response from earlier verification steps) and is the single load-bearing assertion that catches data-mutation regressions before the user does.
+5a. **Text-fidelity round-trip (every entity and every field this deploy touched).** Mechanized by `verifyEntities` (area 5). For each entity, compare live `description`, `singular_label`, `plural_label` against the parsed model values **byte-for-byte**. For each field declared in the model, compare live `description` and `title` against the model byte-for-byte (for the `label_column` field, "the model" is its §3 **Label**, which the platform-derived title from `singular_label` almost never matches — see the Stage 1 "Title correction" note). Any mismatch is a Stage 5 **blocker**, not an advisory: surface the entity / field, quote both strings with their byte counts, **re-issue the offending `create_*` / `update_*` with the model-sourced text, then re-read and re-compare. Do not report the deploy successful while any text-fidelity mismatch remains** — a "recommend and move on" here is exactly how the label-title and field-description drift reached production. Catches every failure mode the "Data fidelity" section enumerates: truncation (live byte-count shorter than model), normalization (live missing backticks / apostrophes / Unicode the model carried), and empty-string-clobber on `update_field` (live empty where model is non-empty). Equivalent round-trip applies to permission `description` against the §8.1 Permissions catalog `description` cell, for the rows this module holds (`verifyPermissionRows`); a row another module holds keeps that module's description. The check is cheap (every relevant column is already in the `read_entity` / `read_field` / `read_permission` response from earlier verification steps) and is the single load-bearing assertion that catches data-mutation regressions before the user does.
 
 **Comparing JSON columns.** `computed_fields`, `validation_rules`, `select_rule`, and `input_type_rule` are stored as `jsonb`, which does not preserve object key order (a rule sent as `{code, name, message, description, jsonlogic}` reads back with its keys reordered). Compare them structurally (parse both sides, sort object keys recursively, then compare; array order IS significant), never as raw JSON strings. A string compare reports every rule as drifted and makes every re-run re-send them. The same rule applies to the Stage 4 create-or-diff decisions (4c ♻️ sync, 4e, 4f).
 
@@ -115,7 +119,8 @@ Tables (2)
 Access inclusions
   IT Service Management: admin includes edit       ✓
   IT Service Management: edit includes view        ✓
-  IT Service Management view includes Parties view ✓ new
+  IT Service Management: view and edit for 6 tables ✓
+  Parties: view and edit for 1 table               ✓ new
 
 Rules on shared tables
   Vendors: 4 calculated fields, 7 save checks
@@ -146,7 +151,7 @@ Counts
 | Modules | always | `<Module>  ✓ new` / `✓ updated` / `✓ no changes`; a module whose `module_type` is `master` adds `, shared by several modules`. |
 | Roles | every module the deploy wrote roles for; left out under `access_scope: custom` | `<role_name>  ✓ <N> people  <level>`; a role created in this run starts its status with `new, `; a shared module's manager role seeded from another role adds the continuation `(people copied from <role_name>)`. |
 | Tables (N) | always | `<Plural Label>  ✓` then one of: `new, <N> fields` / `<N> fields added` / `<N> fields added, <M> changed` / `no changes` / `moved to <Module>, <N> records kept, <M> relationships updated`. |
-| Access inclusions | every inclusion this run checked; left out under `access_scope: custom` | `<Module>: <level> includes <level>` inside one module, where a process gate (check 3a) is named by its action (`admin includes approve offers`); `<Module> <level> includes <Module> <level>` across modules; status `✓`, plus ` new` when this run created it. A failed check 3 or 3a shows `🛑` on the line, with one indented line saying what is wrong. |
+| Access inclusions | every inclusion this run checked; left out under `access_scope: custom` | `<Module>: <level> includes <level>` inside one module, where a process gate (check 3a) is named by its action (`admin includes approve offers`); `<Module>: view and edit for <N> tables` (`view for <N> tables` when it only reads) as one count line for all of that module's per-table rows, whichever module's permissions they name, never one line each; status `✓`, plus ` new` when this run created it. A failed check 3 or 3a shows `🛑` on the line, with one indented line saying what is wrong. |
 | Rules on shared tables | only when a shared module's table carries merged rules | `<Plural Label>: <N> calculated fields, <M> save checks`; each name clash settled adds one indented line saying what was kept and what was renamed. A failed check 4 shows `🛑` on the table's line, with one indented line per problem. |
 | Checks | always | The fixed lines `Module setup` (check 1), `Tables and fields` (checks 2 and 5, keys and uniqueness included), `Names and descriptions` (5a), `Choice lists` (the enum round-trip in 5), and `Visibility and field display rules` (6, only when the design has any). Each is `✓` or `🛑`; a `🛑` line is followed by one indented line per problem, naming the table and field by label and saying what is wrong (*Assets: Serial Number should not repeat, but it can*). |
 | Counts | always | `modules`, `tables` (created, updated, moved), `fields added`, then `permissions added`, `roles added`, `access inclusions added` on one line, then `warnings (🟡)` and `problems (🛑)`. A count of zero is left off the first three lines; the two on the last line always show. |
@@ -163,14 +168,16 @@ Business roles (3)
   Hiring Manager                   ✓ existed   approve offers, edit
   Sourcer                          ✓ new   publish postings, edit
 
-Permissions kept here until their home module is installed (3)
+Permissions kept here until their home module is installed (19)
+  view and edit: 8 tables
   hire candidates
   approve offers
   view all candidates
 
-Permissions moved to their home module (2)
-  Candidates: hire candidates → ATS Candidate CRM, 3 role grants kept
-  Candidates: view all candidates → ATS Candidate CRM, 2 role grants kept
+Permissions moved to their home module (4)
+  Candidates: view and edit → ATS Candidate CRM
+  Candidates: hire candidates → ATS Candidate CRM
+  Candidates: view all candidates → ATS Candidate CRM
 
 Handoffs to other modules (1 connected, 1 recorded only)
   ✓ Candidates: hired → HCM Lifecycle Workflows
@@ -200,8 +207,8 @@ Business process rules (2)
 |---|---|---|
 | Ownership | Stage 4l applied grants | one line per functional-ownership row: the role, `owns this module` or `helps run it`, the level granted |
 | Business roles | Stage 4k provisioned personas | one line per persona: `new` or `existed`, then the actions and levels it carries |
-| Permissions kept here until their home module is installed | Stage 4a-scaffold re-prefixed permissions | one line per permission, by action |
-| Permissions moved to their home module | Stage 4n ran | one line per permission: table, action, the module it moved to, grants kept |
+| Permissions kept here until their home module is installed | this module holds rows whose prefix names a module that is not installed | the per-table view and edit rows as one count line, `view and edit: <N> tables`, then one line per other permission, by action; the heading counts permissions |
+| Permissions moved to their home module | the holder rule moved rows to this module in this run (Stage 2a-scaffold step 2) | one line per table, `<Plural Label>: view and edit → <Module>`, for its per-table rows, then one line per other permission: table, action, the module it moved to. Names and grants did not change |
 | Handoffs to other modules | Stage 4m ran | `✓` per connected handoff; `🟡` per one recorded only, with the continuation line shown |
 | Relationships not added, other table not installed | a relationship to an entity that is not installed was skipped | `💤 <table> → <other table>` |
 | Steps skipped | a ⚠-flagged lifecycle row was skipped | `⚠️ <table>: <state>: <reason>` |
@@ -268,7 +275,7 @@ Because every Stage 4 write has now settled and Stage 5 is read-only, the value 
 Two integrity gates fire outside Stage 5 and are defined where they fire (not here):
 
 - **Gate A** (pre-write planned-state integrity check): `references/stage-3-plan.md`; fires in Stage 3 before any Stage 4 writes.
-- **Gate B** (steward seed non-empty): `references/stage-4-execute.md`; fires in Stage 4 immediately after 4j.
+- **Gate B** (steward seed non-empty): `references/stage-4-execute.md`; fires in Stage 4 immediately after 4j, on a shared-module move only.
 
 ---
 

@@ -25,7 +25,7 @@ description: >-
 
 - Do NOT start this skill, or any of its stages, in an agent that another agent started to run on its own (a background worker, subagent, executor, or Task). Those agents cannot ask the user questions, so they cannot run this skill correctly. Running in the cloud is fine when the user is talking to that agent directly.
 - Do NOT write a delegation prompt that tells another agent to run this skill, "build and deploy end to end", or "make the decisions yourself".
-- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the question-format step of the shared preflight. For dot, OpenAI's personal assistant, and other similarly limited tools without a supported interactive question tool, do not stop: read `../semantius-admin/references/dot-questions.md`, ask questions in chat, and wait for the user's reply before continuing.
+- If you cannot call a tool that asks the user a question and waits for the answer, STOP at once. Make no writes. Report back: "This skill is interactive and must be run in the user's conversation." Muse chat is the exception: there you ask in chat text and the tap picker, so do not stop; follow the question-format step of the shared preflight. For dot, OpenAI's personal assistant, and other similarly limited tools without a supported interactive question tool, do not stop: read `../use-semantius/references/dot-questions.md`, ask questions in chat, and wait for the user's reply before continuing.
 - An agent's general habit of delegating long or multi-step work does not apply here. This rule overrides it.
 
 **What may be delegated:** only steps that ask nothing and change nothing the user has not confirmed.
@@ -128,7 +128,7 @@ Rationale: these are the user's design artifacts and their git working tree. The
 
 ## Preflight (runs before Step 0, every invocation)
 
-The environment checks are shared across all four Semantius skills and live in one place: **[`../semantius-admin/references/preflight.md`](../semantius-admin/references/preflight.md)**. Do not duplicate them here.
+The environment checks are shared across all four Semantius skills and live in one place: **[`../semantius-admin/references/pipeline-preflight.md`](../semantius-admin/references/pipeline-preflight.md)**. Do not duplicate them here.
 
 - **Orchestrated by `semantius-admin`** — the input carries a handoff header with `Customizations file:` already resolved:
 
@@ -250,13 +250,15 @@ The architect decides the module's access level (frontmatter `access_scope`: `cu
 
 ### What each access level authors (the contract)
 
-| `access_scope` | §8.1 / §9.1 | Owned entities' `**Edit permission:**` | Field-level permissions (Stages 5, 7, 10) | Process gates | RACI (Stage 9.5) |
+| `access_scope` | §8.1 / §9.1 | Owned entities' `**View permission:**` and `**Edit permission:**` | Field-level permissions (Stages 5, 7, 10) | Process gates | RACI (Stage 9.5) |
 |---|---|---|---|---|---|
-| `custom` | no permission or role rows (§8.1 and the §9.1 baseline-roles and hierarchy tables each carry `_(none: permissions set up by hand)_`): the module's permissions were set up by hand and are left as they are | `manage` (the modeler maps it to the module's current manage permission) | off | none | none |
-| `basic` | `<slug>:read` + `<slug>:manage`; viewer + manager roles; the single `manage → read` relationship | `manage` on every owned entity (a catalog entity's `:admin` tier is written as `manage`; the blueprint stays unchanged) | off | not enforced: no gate rules | none |
-| `advanced` | `read` + `manage` + `admin`; viewer + manager + admin roles; `admin → manage → read`; field-level permissions as below (when the blueprint's §8.1 has no `baseline-admin` row, add `<slug>:admin`, the admin role and the `admin → manage` relationship) | per the §3 `write tier` | on | not enforced: no gate rules | none |
-| `gated` | as `advanced`, plus one `workflow-gate (lifecycle)` row per gate, every one included in `<slug>:admin` (an `admin → <gate>` row for each, high-risk gates too) | per the §3 `write tier` | on | enforced: entering a gated state (and a §8.2 `create` rule) gets a `validation_rules` entry checking the gate's own permission with `has_permission`; the admin role holds every gate | none |
-| `raci` | as `advanced`, plus one `workflow-gate (lifecycle)` row per gate, included in `<slug>:admin` except a high-risk gate (an `admin → <gate>` row for each non-high-risk gate, none for a high-risk one) | per the §3 `write tier` | on | enforced: each gate's own permission, checked with `has_permission` (in `living` mode in an `or` with the Accountable check `is_raci_actor`, written only in the §9.1 `_enforcement rules_`, never also in §3); the Accountable role and, except on a high-risk gate, the admin role take the step | realized (Stage 9.5) |
+| `custom` | no permission or role rows (§8.1 and the §9.1 baseline-roles and hierarchy tables each carry `_(none: permissions set up by hand)_`): the module's permissions were set up by hand and are left as they are | the module's hand-made codes: the live module's `view_permission` and `manage_permission` (Stage 2a), omitting a line the module has no value for | off | none | none |
+| `basic` | `<slug>:read` + `<slug>:manage`; viewer + manager roles; the single `manage → read` relationship | the entity's own codes; `<slug>:manage` includes every write permission (a catalog entity's `:admin` tier sits under `manage` too; the blueprint stays unchanged) | off | not enforced: no gate rules | none |
+| `advanced` | `read` + `manage` + `admin`; viewer + manager + admin roles; `admin → manage → read`; field-level permissions as below (when the blueprint's §8.1 has no `baseline-admin` row, add `<slug>:admin`, the admin role and the `admin → manage` relationship) | the entity's own codes; the §3 `write tier` names the bundle that includes the write permission | on | not enforced: no gate rules | none |
+| `gated` | as `advanced`, plus one `workflow-gate (lifecycle)` row per gate, every one included in `<slug>:admin` (an `admin → <gate>` row for each, high-risk gates too) | as `advanced` | on | enforced: entering a gated state (and a §8.2 `create` rule) gets a `validation_rules` entry checking the gate's own permission with `has_permission`; the admin role holds every gate | none |
+| `raci` | as `advanced`, plus one `workflow-gate (lifecycle)` row per gate, included in `<slug>:admin` except a high-risk gate (an `admin → <gate>` row for each non-high-risk gate, none for a high-risk one) | as `advanced` | on | enforced: each gate's own permission, checked with `has_permission` (in `living` mode in an `or` with the Accountable check `is_raci_actor`, written only in the §9.1 `_enforcement rules_`, never also in §3); the Accountable role and, except on a high-risk gate, the admin role take the step | realized (Stage 9.5) |
+
+**Permissions are named by the catalog, at every level but `custom`.** An entity's permissions are never named by what is installed. Each entity has its own read permission and, unless it is read-only, its own write permission, `<owner>:read_<entity>` and `<owner>:write_<entity>`, where `<owner>` is its `mastered in` module, installed or not. An embedded entity keeps its owner's names. `<slug>:read`, `<slug>:manage`, `<slug>:admin` and any narrow tier are bundles that include these through §9.1, so an owner installing later changes no name (rows per entity: `references/semantic-spec-template.md`, §8.1). Stage 3d names the two exceptions, a silo and live names.
 
 Field-level permissions are the `workflow-gate (rule)` / `override` permissions (rolled up under `<slug>:admin`) and `narrow` permissions (rolled up under `<slug>:manage`) that Stages 5, 7 and 10 author. Functional-ownership grants (§9.2) and lifecycle handoffs run from `advanced` up. The lifecycle state machine exists at every access level (every lifecycle entity keeps its `workflow_state` enum field); under `custom`, `basic` and `advanced` its transitions are simply ungated. A gate's §8.1 `high risk?` mark (carried from the blueprint's §7 `high risk?`) changes only who holds the gate under `raci`: the admin role does not, so only the Accountable role takes that step; under `gated` it has no effect. The `persona` frontmatter key is emitted only under `raci` with a RACI matrix.
 
@@ -347,14 +349,14 @@ After Stages 5/6/7/9/10, run a holistic consistency pass over every owned entity
 
 `FK table` is the child and `References` is the parent. For both, read from their §3 blocks:
 
-- **Edit permission:** the `**Edit permission:**` value with backticks removed; no line means `manage`.
-- **Permission codes:** every `<code>` in `"require_permission": "<code>"` or `"has_permission": "<code>"` inside the `**Validation rules**` JSON. Under `access_scope: gated`, a `workflow-gate (lifecycle)` code counts as `<slug>:admin` (the admin role holds every gate there).
+- **Write tier:** the bundle whose §9.1 row includes the entity's `**Edit permission:**` code (`<slug>:manage`, `<slug>:admin` or a narrow tier). Under `access_scope: custom`, the `**Edit permission:**` code itself.
+- **Permission codes:** every `<code>` in `"require_permission": "<code>"` or `"has_permission": "<code>"` inside the `**Validation rules**` JSON. Under `access_scope: gated`, a `workflow-gate (lifecycle)` code counts as `<slug>:admin` (the admin role holds every gate there). An entity's own `**Edit permission:**` code counts as its write tier.
 - **Audit log:** the `**Audit log:**` value; no line means `no`.
 - **Lifecycle:** whether the Fields table has a `workflow_state` row.
 
 The row **fires** when any one holds:
 
-- **T1:** the child's Edit permission differs from the parent's.
+- **T1:** the child's write tier differs from the parent's.
 - **T2:** the child has a permission code the parent does not have.
 - **T3:** the child's Audit log is `yes` and the child has a lifecycle.
 
@@ -376,8 +378,8 @@ When the field already exists live as `parent`, don't fix it. Add one 🟡 §7.2
 
 **Step 2: cross-check.** For each entity, cross-check:
 
-- **`view_permission`** (always `<slug>:read` on the entity record).
-- **`edit_permission`** (`<slug>:manage` default, `<slug>:admin` for admin-tier, `<slug>:<narrow>` for narrow).
+- **`view_permission`** (the entity's `**View permission:**` code, its `entity-read` row in §8.1).
+- **`edit_permission`** (the entity's `**Edit permission:**` code, its `entity-write` row in §8.1, included by the bundle its write tier names).
 - **`select_rule`** (the JsonLogic from Stage 7).
 - **`input_type_rule`** entries (per-field from Stage 6).
 - **`validation_rules`** entries (per-entity).
@@ -388,10 +390,10 @@ Failure modes (all 🔴 blockers, halt save):
 - A `require_permission` or `has_permission` argument (in a §3 rule or a §9.1 `_enforcement rules_` row) references a permission code not in §8.1.
 - A `select_rule` references a column that isn't on this entity.
 - A `select_rule` JsonLogic body contains a **throwing operator** (`require_permission` or `throw_error`). A `select_rule` compiles to a per-row `FOR SELECT` policy evaluated on every read; a throw aborts the entire read instead of hiding the row. Permission checks inside a `select_rule` must use the non-throwing `has_permission` (it returns `false` rather than throwing). See use-semantius `jsonlogic.md`, which calls `require_permission` *"Wrong shape for `select_rule`"*. This is the check whose absence let `require_permission` ship inside a read rule.
-- An entity's `**Edit permission:** admin` annotation but the `baseline-admin` row (`<slug>:admin`) isn't declared in §8.1.
+- An entity's `**View permission:**` or `**Edit permission:**` code has no §8.1 row, or no bundle includes its write permission in §9.1 (skip both under `access_scope: custom`).
 - An `override`-tier `view_all_<plural>` / `manage_all_<plural>` row in §8.1 with no `select_rule` on the matching entity (the row-scope playbook's owner + oversight shape mints both together), or vice versa.
-- A `<slug>:<workflow>` permission declared in §8.1 but never invoked by any `require_permission` or `has_permission` rule (a §3 rule, or in `living` mode a §9.1 `_enforcement rules_` row, the only place a living-mode gate rule is written).
-- A `<slug>:<workflow>` permission invoked by a rule but missing from §8.1.
+- A workflow permission declared in §8.1 but never invoked by any `require_permission` or `has_permission` rule (a §3 rule, or in `living` mode a §9.1 `_enforcement rules_` row, the only place a living-mode gate rule is written).
+- A workflow permission invoked by a rule but missing from §8.1.
 - A `validation_rules` rule references `{"var": "$old.x"}` where `x` isn't on this entity.
 - Bypass-prose in a `select_rule` `description` that doesn't reconcile with the JsonLogic body.
 
@@ -413,13 +415,13 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 | Frontmatter carries `tagline` and `icon_name` (required, carried verbatim from the blueprint); `module_kind` carried verbatim when the blueprint has it, otherwise the key is **omitted** (never `null`); `description` / `license` carried when the blueprint has them (absence is not a finding); `persona` is REQUIRED under `access_scope: raci` when §9 carries a RACI matrix and MUST BE ABSENT under every other access level (see the coherence rows below) | missing / forbidden frontmatter keys |
 | §9 governance section is present; §9.1 is populated unless `access_scope: custom`; §9.2 carries the blueprint's functional ownership from `advanced` up (a `_(none: …)_` placeholder when the blueprint has none, and under `basic` and `custom`) | missing or empty §9 |
 | Frontmatter `access_scope` is present and equals the blueprint's value (one of `custom` / `basic` / `advanced` / `gated` / `raci`) | missing or changed access level |
-| When `access_scope: custom`: §8.1 and §9.1 carry no permission or role rows; every owned entity has `**Edit permission:** manage`; no field-level permission rows and no rule gating on a permission; no RACI realization / Processes / §9.2 ownership rows; no `persona` frontmatter | access_scope incoherence list |
-| When `access_scope: basic`: §8.1 carries exactly `<slug>:read` + `<slug>:manage` (no `baseline-admin` / `workflow-gate` / `override` / `narrow`); no §3 entity has `**Edit permission:** admin` or a narrow tier; §9.1 carries only viewer + manager + the single `manage → read` row (plus, when a based entity's base lives in another module, the cross-module family edit grant: `<slug>:manage` including the base's edit permission; see `stage-3-shared-base.md`); no RACI realization / Processes / §9.2 ownership rows; no `persona` frontmatter | access_scope incoherence list |
+| When `access_scope: custom`: §8.1 and §9.1 carry no permission or role rows; every owned entity's `**View permission:**` and `**Edit permission:**` name the module's hand-made codes (a line is absent when the module has no value for it); no field-level permission rows and no rule gating on a permission; no RACI realization / Processes / §9.2 ownership rows; no `persona` frontmatter | access_scope incoherence list |
+| When `access_scope: basic`: §8.1 carries exactly `<slug>:read` + `<slug>:manage` and the `entity-read` / `entity-write` rows (no `baseline-admin` / `workflow-gate` / `override` / `narrow`); §9.1 carries only viewer + manager + the single `manage → read` row and the bundle rows, with `<slug>:manage` including every write permission (plus, when a based entity's base lives in another module, the cross-module family edit grant: `<slug>:manage` including the base's edit permission; see `stage-3-shared-base.md`); no RACI realization / Processes / §9.2 ownership rows; no `persona` frontmatter | access_scope incoherence list |
 | When `access_scope: advanced`: §8.1 carries `<slug>:read` + `<slug>:manage` + `<slug>:admin` and no `workflow-gate (lifecycle)` row; no rule gates a lifecycle transition; no RACI realization / Processes rows; no `persona` frontmatter | access_scope incoherence list |
 | When `access_scope: gated`: §8.1 carries `<slug>:read` + `<slug>:manage` + `<slug>:admin` plus one `workflow-gate (lifecycle)` row per gated §7 state and per §8.2 `create` rule, each with `included in :admin?` ✓ (high-risk gates too) and an `admin → <gate>` row in §9.1; every other §8.1 row has `high risk?` `-`; every gated §7 state and every §8.2 `create` rule has a §3 `validation_rules` entry whose `has_permission` cites that gate; no RACI realization / Processes rows; no `persona` frontmatter | access_scope incoherence list |
 | When `access_scope: raci`: §8.1 carries one `workflow-gate (lifecycle)` row per gated §7 state and per §8.2 `create` rule; a gate with `high risk?` `-` has `included in :admin?` ✓ and an `admin → <gate>` row in §9.1, a gate with `high risk?` ✓ has `-` and no such row; every other §8.1 row has `high risk?` `-`; in `documentation` mode every gated §7 state and every §8.2 `create` rule has a §3 `validation_rules` entry whose `has_permission` cites that gate; in `living` mode each has exactly one §9.1 `_enforcement rules_` A-gate row instead (`has_permission` in an `or` with `is_raci_actor`), no §3 `validation_rules` entry repeats an A-gate, and each `create` gate has a `create` `_process_gates_` row on the entity's initial state; the RACI realization, Processes and §9.2 ownership rows are present; every process has exactly one accountable row, and every gate is in the `grant gates [...]` list of exactly one accountable row (the RACI rule); `persona` frontmatter is present | access_scope incoherence list |
 | **RACI provenance — mechanically enforced by `consistency-check.ts`.** When the spec carries a RACI matrix, frontmatter MUST carry `raci_mode` (`living`/`documentation`) AND `raci_mode_source` (`computed-default`/`non-interactive`; `raci_mode` is auto-derived from instance state, so this gate never produces `user-answer`), and the §9 `**RACI mode:**` line must match `raci_mode`. The checker fails the save on any missing / invalid / mismatched value. | RACI provenance missing / inconsistent |
-| Every `re-prefixed-from` annotation in §8.1 names a catalog module and a verb; the verb appears on the relevant entity in §3 | malformed re-prefix list |
+| Every §8.1 prefix is this module's slug, a §3 `mastered in` module's slug or a §7 realizing module's slug, except a live code carried under "Live names win" (`references/stage-3-collisions.md`, 3d). At every level but `custom`, every entity has the `entity-read` / `entity-write` rows and §9.1 bundle rows `references/semantic-spec-template.md` (§8.1) gives it. No §3 `**Edit permission:**` is a bare `manage`, `admin` or narrow suffix | permission prefix and row list |
 | §4 rows carry `fk_format` and the delete behavior consumed verbatim from the **blueprint's** §5.1 / §5.2, not re-derived. **Exceptions:** a row whose `FK table` is an `is_a` entity is never `cascade` (use `restrict` / `clear`); a row changed by the Stage 8 FK scope fix is `reference` + `restrict` (both enforced by `consistency-check.ts`) | column-missing list |
 | §6 `Outbound handoffs` / `Inbound handoffs` rows carry the `transition` column; for an Outbound `lifecycle` row (or an Inbound row whose `payload` is a declared §3 entity), `to_state` is one of that entity's `workflow_state` enum values | mismatched-state list |
 | Every `select_rule` column references a real field on the entity | dangling columns list |

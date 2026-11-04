@@ -48,7 +48,7 @@ Rules that go with the table:
 - **Self-check before firing:** every optional-parts question has between 2 and 4 options. If one has 1, or 5 or more, you skipped the table; re-chunk.
 - Optional-parts questions may share a call with other Stage 3 `Q:` tasks (each question carries its own header chip); the ledger's id order decides the batch.
 
-Entities the user does NOT select get the internal annotation `dropped (optional, user declined)` on the spec entry and are skipped from all later stages; at record time (R) write one `.optionals_decided.<slug>` entry per option in the question, `included` or `excluded`, before completing the task. For the K = 1 single-select shape, choosing `"None, skip it"` records the entity as `excluded`; `"None, skip it"` is not a slug and gets no entry. Selected entities proceed to bucket classification.
+Entities the user does NOT select get the internal annotation `dropped (optional, user declined)` on the spec entry and are skipped from all later stages, and what depends only on them leaves §8 and §9 ([`stage-9-governance.md`](stage-9-governance.md), "Dropped entities"); at record time (R) write one `.optionals_decided.<slug>` entry per option in the question, `included` or `excluded`, before completing the task. For the K = 1 single-select shape, choosing `"None, skip it"` records the entity as `excluded`; `"None, skip it"` is not a slug and gets no entry. Selected entities proceed to bucket classification.
 
 Example option (for Career Aspirations):
 - Label: `"Career Aspirations"`
@@ -72,13 +72,13 @@ For every 🛑 cross-module exact-name collision, the widget shape depends on th
 - **multiSelect**: `false`
 - **options** (exactly 2 — do NOT expand this widget at runtime; the alternatives would either contradict the blueprint or require manual catalog work):
   1. label: `"Yes, adopt (Recommended)"`
-     description: `"Reassigns <Plural Label> from `<X Display Name>` to `<Module Display Name>`. The underlying table doesn't move, every record stays in place, every relationship pointing at <Plural Label> still resolves. `<X Display Name>` keeps read access. Then this blueprint's full design (fields, lifecycle, permissions) gets applied as additive deltas."`
+     description: `"Reassigns <Plural Label> from `<X Display Name>` to `<Module Display Name>`. The underlying table doesn't move, every record stays in place, every relationship pointing at <Plural Label> still resolves. `<X Display Name>` keeps the access it has to <Plural Label>, including edit rights, until an admin removes it. Then this blueprint's full design (fields, lifecycle, permissions) gets applied as additive deltas."`
   2. label: `"Cancel"`
      description: `"Stop without changes. <Plural Label> stays in `<X Display Name>`. If you actually want `<X Display Name>` to own <Plural Label>, edit this blueprint's §3 to set its `held_as` to `embedded_master` (or `consumer` if read-only) and re-run."`
 
 > **Fast flow, after the go-ahead:** take "Yes, adopt" (the Recommended option: the table name is exactly the same); log it; don't ask.
 
-**On Yes:** stamp the incoming entity with `**Reconciliation:** promote-to-master <incoming.system_slug>.<entity>`. Add a `promotion_decisions` frontmatter entry for this entity (host_module = incoming `system_slug`, host_module_name = incoming `system_name`, manage_option = 1). The modeler executes the move via `update_entity` and applies the full blueprint design.
+**On Yes:** stamp the incoming entity with `**Reconciliation:** promote-to-master <incoming.system_slug>.<entity>`. Add a `promotion_decisions` frontmatter entry for this entity (host_module = incoming `system_slug`, host_module_name = incoming `system_name`, manage_option = 2). The modeler executes the move via `update_entity` and applies the full blueprint design.
 
 **On Cancel:** halt the run cleanly. No spec written, no catalog changes.
 
@@ -99,17 +99,17 @@ For every 🛑 cross-module exact-name collision, the widget shape depends on th
 - **multiSelect**: `false`
 - **options** (exactly 2):
   1. label: `"Create the shared `<B.label>` placeholder and put <Plural Label> there (Recommended)"`
-     description: `"Sets up `<B.mastered_in>` now as an empty placeholder module owned by `<B.label>`, moves the existing <Plural Label> from `<Existing Module Display Name>` into it via \`update_entity\` (no data movement, just reassigning \`module_id\`), and wires both `<Existing Module Display Name>` and this module to read from there. When `<B.label>` is later deployed as its own blueprint, the analyst's spec scan will auto-detect this placeholder and offer to take ownership."`
+     description: `"Sets up `<B.mastered_in>` now as an empty placeholder module owned by `<B.label>`, moves the existing <Plural Label> from `<Existing Module Display Name>` into it via \`update_entity\` (no data movement, just reassigning \`module_id\`). `<Existing Module Display Name>` keeps the access it has, and this module gets the same. When `<B.label>` is later deployed as its own blueprint, the analyst's spec scan will auto-detect this placeholder and offer to take ownership."`
   2. label: `"Keep our own separate <Plural Label> (rename)"`
      description: `"Create our own <Plural Label> in this module under a different name (e.g. `<this_module_short>_<entity>`). Records won't be combined with `<Existing Module Display Name>`'s. Pick this only if these are actually different concepts despite the matching name."`
 
 > **Fast flow, after the go-ahead:** take option 1, "Create the shared <B.label> placeholder and put <Plural Label> there" (the Recommended option: the table name is exactly the same); log it; don't ask.
 
 **Internal mapping** (do NOT show to the user):
-- Option 1 → `promote-to-master <B.mastered_in>.<entity>` annotation + `promotion_decisions` frontmatter entry capturing the host module (slug = `<B.mastered_in>`, name = `<B.label>`, manage_option = 1 by default). Modeler creates the master shell module if it doesn't exist, then `update_entity` moves the existing entity into it. This module gets cross-module read inclusion.
-- Option 2 → `rename-incoming-from <existing_module>.<entity> as <this_module_short>_<entity>` (silo; full Fields block under the renamed entity in this module).
+- Option 1 → `promote-to-master <B.mastered_in>.<entity>` annotation + `promotion_decisions` frontmatter entry capturing the host module (slug = `<B.mastered_in>`, name = `<B.label>`, manage_option = 2). Modeler creates the master shell module if it doesn't exist, then `update_entity` moves the existing entity into it. Both modules hold the entity's permissions through their own bundles (§9.1), so no permission changes name and the existing module keeps its access.
+- Option 2 → `rename-incoming-from <existing_module>.<entity> as <this_module_short>_<entity>` (silo; full Fields block under the renamed entity in this module; its permissions keep the local prefix, see "Silo" in 3d).
 
-No host-module or manager-scope follow-up — the host is determined by B's blueprint, the manager-scope defaults to `1` (dedicated manager group seeded from both modules).
+No host-module or manager-scope follow-up — the host is determined by B's blueprint, and the manager scope is `2`: both modules' managers keep their edit rights, and nothing is removed.
 
 #### 3b.2 Master-vs-master collision (4-option widget; rare)
 
@@ -160,16 +160,25 @@ Then a follow-up on who manages records:
 - **header**: `"Manager scope"`
 - **multiSelect**: `false`
 - **options**:
-  1. `"A new dedicated manager group (Recommended)"` — description: `"Only people in this group can edit shared <Plural Label>. Existing managers of the colliding modules are seeded into the group automatically and can be adjusted later."`
+  1. `"A new dedicated manager group (Recommended)"` — description: `"Only people in this group can edit shared <Plural Label>. Existing managers of the colliding modules are seeded into the group automatically and can be adjusted later. The manager permission of `<Existing Module Display Name>` stops covering <Plural Label>. Deploying `<Existing Module Display Name>` again restores its managers' edit rights."`
   2. `"New group plus current managers of both modules"` — description: `"Anyone who already manages either module also keeps edit rights on shared <Plural Label>."`
   3. `"New group plus current managers of <Existing Module Display Name> only"` — description: `"Only the module that already had <Plural Label> retains edit rights alongside the new group."`
-  4. `"New group plus current managers of this module only"` — description: `"This module's managers keep edit rights alongside the new group."`
 
 > **Fast flow, after the go-ahead:** take "A new dedicated manager group" (the Recommended option); log it; don't ask.
 
+**Manager scope, internal mapping** (do NOT show to the user). The answer is recorded as `promotion_decisions` `manage_option`. It decides which modules' `<slug>:manage` include the entity's write permission:
+
+| Answer | `manage_option` | §9.1 row from this module's `<slug>:manage` to the write permission | The existing module's row to the write permission |
+|---|---|---|---|
+| A new dedicated manager group | 1 | None | The deployer removes it. This is the one hierarchy row the deployer ever removes, an exception to its no-deletion rule, and the user chooses it here |
+| New group plus current managers of both modules | 2 | Yes | Stays |
+| New group plus current managers of `<Existing Module Display Name>` only | 3 | None | Stays |
+
+Only this question removes a row: 3b.0 and 3b.1 never do.
+
 **Internal mapping** (do NOT show to the user):
-- Option 1 → `promote-to-master <host>.<entity>` annotation + `promotion_decisions` frontmatter entry capturing host and manager-scope choice.
-- Option 2 → `rename-incoming-from <existing_module>.<entity> as <incoming_module>_<entity>`.
+- Option 1 → `promote-to-master <host>.<entity>` annotation + `promotion_decisions` frontmatter entry capturing host and manager-scope choice. Live names win (3d): nothing is renamed, and the spec is rewritten to use the entity's live codes.
+- Option 2 → `rename-incoming-from <existing_module>.<entity> as <incoming_module>_<entity>`. Its permissions keep the local prefix ("Silo" in 3d).
 - Option 3 → `reuse-from <existing_module>.<entity>` (no Fields block; record as a §7.1 blocker only when the user explicitly wants future shape changes coordinated).
 - Option 4 → halt the run.
 
@@ -215,17 +224,22 @@ For every 🛑 Similar-name flag, fire a three-option `AskUserQuestion`, or a **
 
 ### 3d. Modules-not-deployed-yet (external owner absent)
 
-> **Entity-owning-module rule.** Workflow gates and row-scope overrides for entity E are prefixed by E's CURRENT owning module slug, not by the installing unit. The Stage 3d / 3b.0 / 3b.1 logic below routes the decision; the actual emission rules are:
+> **Permission names follow the catalog, never the install.** An entity's read and write permissions, gates and overrides carry the codes §8.1 gives them: `<owner>:read_<entity>`, `<owner>:write_<entity>`, `<owner>:view_all_<plural>`, `<owner>:manage_all_<plural>`, and `<realizer or owner>:<verb>` for a gate (`semantic-spec-template.md`, §8.1). The prefix can name a module that is not installed yet. The Stage 3d / 3b.0 / 3b.1 logic below decides where the entity lives. It changes no permission name, and this module holds the names through its bundles (§9.1):
 >
-> - **Case 1: catalog owner module installed** → consume via the catalog owner (`reuse-from <catalog-module>.<entity>`). Personas grant on catalog-prefixed codes.
-> - **Case 2: catalog owner absent AND entity does NOT exist anywhere in the live catalog** → installing unit becomes the entity's owning module. Emit the entity's full derived governance (workflow gates + row-scope overrides + matching §8.2 rules + boundary-crossing handoffs in the spec's §6 `### Outbound handoffs` / `### Inbound handoffs` sub-sections) prefixed by the installing-unit slug. **Annotate each re-prefixed gate / override with `**Reconciliation:** re-prefixed-from <catalog-module>.<verb>`** so the deployer's Stage 4n knows to reconcile when the catalog owner later installs.
-> - **Case 3: catalog owner absent BUT entity already exists under a non-catalog owner module** → emit `reuse-from <non-catalog-module>.<entity>`. Personas grant on existing non-catalog-prefixed codes. DO NOT mint duplicate gates / overrides; DO NOT emit re-prefixed governance — it's already minted under another unit. This is the second-installer case (3b.1).
+> - **Case 1: catalog owner module installed** → consume via the catalog owner (`reuse-from <catalog-module>.<entity>`). This module's bundles and personas hold the §8.1 codes.
+> - **Case 2: catalog owner absent AND entity does NOT exist anywhere in the live catalog** → the entity lives in the installing unit until its owner installs. Carry the entity's full governance (read and write permissions + workflow gates + row-scope overrides + matching §8.2 rules + boundary-crossing handoffs in the spec's §6 `### Outbound handoffs` / `### Inbound handoffs` sub-sections), every code as §8.1 writes it.
+> - **Case 3: catalog owner absent BUT entity already exists under a non-catalog owner module** → emit `reuse-from <non-catalog-module>.<entity>`. The §8.1 codes are the ones the first installer's spec carried, so this module adds only its own bundle rows and the deployer reuses the rows that exist. This is the second-installer case (3b.1).
+>
+> Two exceptions change what the spec writes:
+>
+> - **Silo (`rename-incoming-from`).** A deliberately separate table keeps the local prefix: each of the entity's §8.1 codes takes this module's slug as its prefix and otherwise stays as written. A shared name would make a grant on one table open the other.
+> - **Live names win (`reuse-from`, and `promote-to-master` of a live entity).** When a live entity's `view_permission` or `edit_permission` (Stage 2c index), or a gate or override its live rules check (Stage 2h index), differs from the §8.1 code, the live code stays and nothing is renamed. Rewrite the spec to use it everywhere the catalog code appears: §3 `**View permission:**` / `**Edit permission:**` on an owned entity, §8.1, rules and RACI lists. This module's §9.1 bundle rows then include the live codes. A hierarchy row whose two sides become one code goes.
 >
 > A module that embeds an entity whose catalog owner is absent ALWAYS deploys (Case 2 or Case 3); there is no "install the master first" prompt. The widget below applies only to `contributor` / `consumer` rows that legitimately can't materialize without the owner; `embedded_master` rows route through 3b.0 / 3b.1 / Case 2 instead.
 
 **Policy path:** `.on_missing_owner` (global default; `embed_locally` / `skip`). The `wait` value is not used — modules deploy standalone. A file that still carries `.on_missing_owner: wait` is coerced to `embed_locally` with a one-line narration: *"Updated your old wait-for-master rule to deploy-anyway — modules now deploy standalone."*
 
-**Fires only for `contributor` and `consumer` rows.** `embedded_master` rows with a missing owner are handled by 3b.0 / 3b.1 / Case 2 above — they always emit re-prefixed governance under the installing unit's slug; no widget fires for them.
+**Fires only for `contributor` and `consumer` rows.** `embedded_master` rows with a missing owner are handled by 3b.0 / 3b.1 / Case 2 above: they always deploy with their full governance under the §8.1 codes, and no widget fires for them.
 
 > **Interaction flow** (the `.interaction_flow` switch, read at Step 0). This block covers only the first 3d question below; the slug-collision follow-up further down names another module's table and is asked in guided and expert flow. **Saved answer** (`.on_missing_owner`): use it. **Otherwise, expert flow off:** apply option 1, "Set up <Plural Label> in this module for now" (`embed_locally`); create no `Q:` task, fire no widget, do not write `.on_missing_owner`, and name the choice in the 3g "Picked for you" line ("<Plural Label> set up in this module until <Missing Module Display Name> is added"). **Expert flow on:** ask as below.
 > **Fast flow, after the go-ahead:** a saved answer still wins; otherwise apply the same guided-flow default, "Set up <Plural Label> in this module for now", with no "Picked for you" line; log it; don't ask.
@@ -246,7 +260,7 @@ When a `contributor` or `consumer` entity (per blueprint §3 `mastered_in`) poin
 **"(Recommended)" placement**: always option 1. There is no "wait for master" option — every module deploys standalone; the catalog-owner-arrival flow (Stage 3b.0) handles the reassignment without data migration.
 
 **Internal mapping**:
-- Option 1 → `create-new` in this module's spec (this module is the entity's current owning module). Add a §7.2 🟡 note: *"<Plural Label> currently lives in this module. When <Missing Module Display Name> is added later, run the analyst on its blueprint and pick 'share via shared module' at the collision prompt to reassign — no data migration needed."*
+- Option 1 → `create-new` in this module's spec (the entity lives in this module until its owner installs). The spec now owns the entity, so it carries `**View permission:**` and `**Edit permission:**`: when the blueprint's row was `consumer`, add the `entity-write` row (same prefix as the read row) and its §9.1 rows (`<slug>:manage` includes it, and it includes the read row). Add a §7.2 🟡 note: *"<Plural Label> currently lives in this module. When <Missing Module Display Name> is added later, run the analyst on its blueprint and pick 'share via shared module' at the collision prompt to reassign — no data migration needed."*
 - Option 2 → `dropped (out of scope)` annotation.
 
 **Slug collision under option 1.** Entity slugs are globally unique. If the blueprint's bare `table_name` is already used by *another* module (e.g. blueprint wants `employees` but `northwind.employees` exists in the live catalog as a sales sample), option 1 can't create with the bare name. Fire a follow-up `AskUserQuestion` (in guided and expert flow):

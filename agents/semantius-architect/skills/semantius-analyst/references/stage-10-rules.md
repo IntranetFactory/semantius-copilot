@@ -12,7 +12,7 @@ Convert blueprint §8.2 business rules to JsonLogic, plus add field-level comput
 
 ### Gate rules
 
-Under `gated` and `raci`, every process gate gets one gate rule that checks the gate's own permission `<slug>:<verb>` (its §8.1 `workflow-gate (lifecycle)` row) with `has_permission`. Where it is written depends on the RACI mode:
+Under `gated` and `raci`, every process gate gets one gate rule that checks the gate's own permission `<gate>` with `has_permission`. `<gate>` is the code exactly as the gate's §8.1 `workflow-gate (lifecycle)` row writes it, whichever module its prefix names. Where it is written depends on the RACI mode:
 
 - **`gated`, and `raci` in `documentation` mode:** a §3 `validation_rules` entry on the gated entity.
 - **`raci` in `living` mode:** a row of the §9.1 `_enforcement rules_` table only (Stage 9.5), which is the one home of the living-mode gate rules (transition A-gates, create A-gates, C-blocks). The analyst never also writes an A-gate into the entity's §3 `validation_rules`.
@@ -24,11 +24,11 @@ Under `basic`, `advanced` and `custom` no gate rule is emitted.
   ```json
   {"if": [
     {"and": [{"value_changed": "workflow_state"}, {"==": [{"var": "workflow_state"}, "<to_state>"]}]},
-    {"has_permission": "<slug>:<verb>"},
+    {"has_permission": "<gate>"},
     true]}
   ```
 
-  Under `raci` in `living` mode it is the A-gate, an `_enforcement rules_` row (Stage 9.5): the same `if`, with `{"or": [{"is_raci_actor": ["<entity>", "<to_state>", "accountable"]}, {"has_permission": "<slug>:<verb>"}]}` as its middle branch.
+  Under `raci` in `living` mode it is the A-gate, an `_enforcement rules_` row (Stage 9.5): the same `if`, with `{"or": [{"is_raci_actor": ["<entity>", "<to_state>", "accountable"]}, {"has_permission": "<gate>"}]}` as its middle branch.
 - **A §8.2 rule with source flag `create`** (a restricted creation) applies on insert (`$old` is `null` only on INSERT): `{"if": [{"==": [{"var": "$old"}, null]}, {"has_permission": "<gate>"}, true]}`, where `<gate>` is the gate's own §8.1 `workflow-gate (lifecycle)` permission, under `gated` and under `raci` in `documentation` mode. Under `raci` in `living` mode it is the create A-gate, an `_enforcement rules_` row (Stage 9.5), so the Accountable role can do the restricted creation and the admin keeps the override: `{"if": [{"==": [{"var": "$old"}, null]}, {"or": [{"is_raci_actor": ["<entity>", "<initial state>", "accountable"]}, {"has_permission": "<gate>"}]}, true]}`, where `<initial state>` is the entity's `initial?` §7 state.
 - **Code and message.** Each gate rule has its own `code` (the next in the spec's sequence) and its own `message` naming who may take the step. A §3 gate rule carries both; an `_enforcement rules_` row carries only its JsonLogic, and the modeler derives its `name`, `code` and `message` the same way when it authors the rule (modeler Stage 4k). The messages: under `raci` the Accountable role and an admin ("Only the hiring manager or an admin can approve an offer"), or the Accountable role alone on a high-risk gate ("Only the hiring manager can approve an offer"); under `gated` an admin ("Only an admin can approve an offer"). `has_permission` never throws, so the rule keeps its own `code` and `message` (the caller sees it instead of the platform's generic permission error) and the A-gate's `or` works in either branch order (`require_permission` throws on a miss; `../../use-semantius/references/jsonlogic.md`, "Choosing between `require_permission` and `has_permission`").
 

@@ -12,8 +12,7 @@ description: >-
   to <host>", "seed test from prod", "import crm.json into the test host". Do
   NOT trigger for loading a CSV or xlsx file (semantius-importer), exporting a
   table to CSV (semantius-importer), producing a markdown spec from a live
-  module (semantius-optimizer), deploying blueprints or specs
-  (semantius-admin / semantius-modeler), or webhook receivers.
+  module (semantius-optimizer), or webhook receivers.
 ---
 
 # semantius-transfer Skill
@@ -31,7 +30,7 @@ The importer's writing conventions apply unchanged ([`../semantius-importer/SKIL
 
 ## Preflight
 
-0. Run the **Question format (Muse chat)** step of [`../use-semantius/references/shared/preflight.md`](../use-semantius/references/shared/preflight.md). Only that step; checks 1 to 4 there do not apply to this skill.
+0. Run the **Question format (Muse chat)** step of [`../use-semantius/references/preflight.md`](../use-semantius/references/preflight.md). Only that step; checks 1 to 3 there do not apply to this skill.
 1. `semantius --version`, and `semantius info utils` must list `export_module`. Otherwise tell the user to re-run the installer (use-semantius SKILL.md → Environment Setup) and stop.
 2. **Resolve the hosts.** The source is the environment's host unless the user names one; the target is always named, except for a backup (no target) or a restore (the same host). Never guess a target from a hostname that merely appears in a file or a `.env`.
 3. `semantius hosts`, then `semantius --host <h> whoami` for every named host. With `--host` only the session stored for that host is used, and an API key in the environment is ignored. Exit `5` means this machine is not signed in to that host (never signed in there, or the sign-in expired and could not be renewed). Quote the error and ask one `AskUserQuestion`: **Sign in to `<h>`** (Recommended) / **Stop**. On Sign in, run `semantius login --host <h>` as use-semantius `references/cli-usage.md` § "Signing the user in" describes (in the background, relaying the link), then re-run `whoami` for that host. Use `login`, not `use`: `use` would also switch the host later commands go to, so after the transfer every command, in every directory, would land on `<h>`. Never run `logout`.

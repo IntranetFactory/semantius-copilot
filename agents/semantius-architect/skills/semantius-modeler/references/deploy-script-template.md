@@ -55,18 +55,20 @@ DEPLOY_CHECK=1 bun run .tmp_deploy/deploy_<slug>.ts && bun run .tmp_deploy/deplo
 | Export | Use for | Guarantee |
 |---|---|---|
 | `scaffoldModule(cfg)` | the entire baseline scaffold (module + permissions + hierarchy + roles + the six module-record references + provenance) in one idempotent call | self-preflights its tools' field names (every create it issues plus the `update_module` reference keys); returns `{moduleId, permissionNames: {read, manage, admin?}, roleIds}` (permissions are keyed by name, so there are no permission ids); `scope: "basic"` skips the admin tier. Stamped `SCAFFOLD_LIB_MAJOR = 6` |
+| `ensurePermissionRows(rows, moduleId, moduleSlug)` | every §8.1 row beyond the baselines: per-entity rows, gates, overrides, narrow tiers (`scaffoldModule` uses it for the baselines) | one `in.()` read, ONE `create_permission` call for the missing rows, one re-read, then the holder rule of Stage 2a-scaffold step 2: a row moves here only when the rule says so, and a row held here converges on its §8.1 description. Set `entityLivesHere: true` on each row whose entity lives in this module, per the spec's annotations |
 | `preflightSchemas({tool: [keys]})` | assert your hand-authored payloads' field names against the LIVE tool schema before writing | throws naming the available keys (kills the `name`-vs-`role_name` class) |
 | `checkEnumIcons(table, field, entries)` / `iconFindings` | the icon check on every enum field the script creates or updates, before `mergeEnumEntries` | against the bundled Lucide list (`lucide-icon-tags.json`, copied next to it): `none` and an unknown name become `""`, so no invalid name is ever sent; each unknown name is recorded in `iconFindings`. `scaffoldModule` checks the module's `icon_name` the same way: an unknown name is deployed as `box` and recorded |
 | `syncLabelColumns(labelColumns)` | the post-create pass on every label column (Stage 1, "Title correction" and the notes after it), right after the fields pass | one read, then one `update_field` per label column that differs: §3 title, description (when non-empty), `catalog_field_code` (only while empty), `input_type` (`"disabled"` for a computed label column), `unique_value: true` (when marked). A re-run sends nothing; throws when a label column is not found live. In a check run the label column `create_entity` would create is there to read. |
 | `verifyScaffold(cfg)` | the executable self-audit — re-reads live and asserts the Stage 5 scaffold checks as code | returns findings for the report; **throws on any drift**, so run as the last step inside `runDeploy` and a failed audit halts the deploy |
-| `verifyEntities(entityExpect, fieldExpect)` | the executable Stage 5 areas 5, 5a and 6 for the entities and fields: label column, owning module, label parent, key type, provenance, `unique_value`, enum entries, FK targets, reserved names, byte-for-byte labels / titles / descriptions, `select_rule` / `input_type_rule` | three reads in all; returns findings for the report and **throws on any mismatch** (a `select_rule` / `input_type_rule` mismatch is a warning: Stage 5 offers a retry); run it right after `verifyScaffold`. A halt here gets one silent re-run of the same command before it is reported (`stage-5-verify.md`, area 5). Pass the entity rows plus the `label_parent` / `select_rule` set later, and per table the field rows as sent plus the label column's §3 title and description, `created: true` on the rows this run created |
+| `verifyPermissionRows(rows, moduleId, moduleSlug)` | the executable Stage 5 check on those same rows | every row exists, its holder is the one the rule gives, and a row held here has its §8.1 description; returns findings for the report and **throws on any mismatch**; run it right after `verifyScaffold` |
+| `verifyEntities(entityExpect, fieldExpect)` | the executable Stage 5 areas 5, 5a and 6 for the entities and fields: label column, owning module, `view_permission` / `edit_permission`, label parent, key type, provenance, `unique_value`, enum entries, FK targets, reserved names, byte-for-byte labels / titles / descriptions, `select_rule` / `input_type_rule` | three reads in all; returns findings for the report and **throws on any mismatch** (a `select_rule` / `input_type_rule` mismatch is a warning: Stage 5 offers a retry); run it right after `verifyScaffold`. A halt here gets one silent re-run of the same command before it is reported (`stage-5-verify.md`, area 5). Pass the entity rows plus the `label_parent` / `select_rule` set later, and per table the field rows as sent plus the label column's §3 title and description, `created: true` on the rows this run created |
 
 ## Orchestration skeleton (the bespoke part you author)
 
 ```typescript
 // .tmp_deploy/deploy_<slug>.ts
 import { read1, readMany, readIn, write, ensure, ensureMany, ensureFields, ensureEntitiesByLevel, ensurePairs, updateEntity, runDeploy } from "./deploy-lib";
-import { scaffoldModule, syncLabelColumns, verifyScaffold, verifyEntities, preflightSchemas, checkEnumIcons, iconFindings } from "./scaffold-lib";
+import { scaffoldModule, ensurePermissionRows, syncLabelColumns, verifyScaffold, verifyPermissionRows, verifyEntities, preflightSchemas, checkEnumIcons, iconFindings, type PermissionRow } from "./scaffold-lib";
 
 // enum_values: merge the spec's §5 entries with the live entries BY VALUE before diffing or sending (diffField
 // uses it for every existing enum field). The spec's order, values, labels and stated hints win; a hint the spec
@@ -136,17 +138,21 @@ runDeploy(async () => {
     },
   };
   const { moduleId, permissionNames, roleIds } = await scaffoldModule(cfg);
-  // moduleId / roleIds are resolved numeric ids for the creates below; permissionNames are the names written
-  // directly into view_permission / edit_permission and role grants (permissions have no numeric id).
+  // moduleId / roleIds are resolved numeric ids for the creates below; permissionNames are the module's bundles,
+  // written by name into role grants (permissions have no numeric id). An entity's view_permission /
+  // edit_permission never come from here: they are the literal codes on its §3 lines.
 
-  // 2. Non-baseline RBAC (if any) — workflow-gate §8.1 permissions, extra §9.1 hierarchy relationships, persona /
-  //    RACI roles, and the cosmetic logo_color fallback (fires ONLY when the frontmatter omitted logo_color
-  //    AND the live value is empty — never overwrites a provided value, which scaffoldModule already wrote).
-  //    scaffoldModule covers ONLY the baseline tiers; these stay here per stage-4 — as SETS: all workflow-gate
-  //    permissions in one ensureMany("read_permission", "permission_name", …, "create_permission", rows),
-  //    all extra hierarchy relationships in one ensurePairs(...), all persona grants in one ensurePairs(...).
+  // 2. Every other RBAC row: the per-entity §8.1 rows (at every level except custom, where §8.1 has no rows),
+  //    workflow-gate and override rows and narrow tiers, then the rest of the §9.1 hierarchy (bundle rows and each
+  //    write-includes-read row), persona / RACI roles, and the cosmetic logo_color fallback (fires ONLY when the
+  //    frontmatter omitted logo_color AND the live value is empty; it never overwrites a provided value, which
+  //    scaffoldModule already wrote). scaffoldModule covers ONLY the baseline tiers; these stay here per stage-4,
+  //    as SETS: all these permissions in the one call below, all extra hierarchy relationships in one
+  //    ensurePairs(...), all persona grants in one ensurePairs(...). Every code is written as the spec names it.
+  const otherPermissionRows: PermissionRow[] = [ /* one per §8.1 row beyond the baselines; entityLivesHere: true when its entity lives in this module */ ];
+  await ensurePermissionRows(otherPermissionRows, moduleId, "<slug>");   // the holder rule, Stage 2a-scaffold step 2
 
-  // 3. ENTITIES FIRST — every ✨-new / rename-incoming / promote-create payload (4c checklist: module_id from the
+  // 3. ENTITIES FIRST — every ✨-new / rename-incoming / promote-create payload (4c checklist: view_permission / edit_permission as written on the §3 lines, module_id from the
   //    scaffold, label_column from §3, provenance stamped, computed_fields/validation_rules [] for now, NO label_parent) goes into ONE
   //    create_entity call — or, when the spec has is_a / has_a entities, one call per level, bases first
   //    (a based row carries id_type + id_refentity, id_prefix for is_a, and NO label_column / label_parent /
@@ -203,7 +209,7 @@ runDeploy(async () => {
   //    success line cannot print over a broken deploy. The returned findings feed the Stage 5 report.
   //    entityExpect: entityRows with the label_parent / select_rule set in step 5; fieldExpect[t]: fieldRows[t]
   //    as sent (created: true on the missing ones) plus the label column's §3 title and description.
-  const audit = [...await verifyScaffold(cfg), ...await verifyEntities(entityExpect, fieldExpect)];
+  const audit = [...await verifyScaffold(cfg), ...await verifyPermissionRows(otherPermissionRows, moduleId, "<slug>"), ...await verifyEntities(entityExpect, fieldExpect)];
   for (const x of audit) console.log(`${x.severity === "warn" ? "🟡" : "✓"} ${x.check} — ${x.detail}`);
   //    Icons not sent because they are not Lucide icons: the Stage 5 report's "Icons not deployed" block.
   for (const x of iconFindings) console.log(`🟡 ${x.check} — ${x.detail}`);
@@ -254,7 +260,7 @@ Reserve `catch` for one deliberate, narrow case: a single retry of a known-trans
 5. **Provenance on every create** — module per the 4a checklist, entity per the 4c checklist, and `catalog_field_code` (the spec `field_name`) on every `create_field` item per 4d.
 6. **Fields and entities are diffed, not skipped** when they already exist (4d).
 7. **Use `scaffoldModule()` for the baseline scaffold** — it builds the module, permissions, hierarchy, roles, and (the step most often hand-dropped) the six module-record references + `access_scope` (under `custom`: only the module's provenance, no references or `access_scope`) in one idempotent call, and self-preflights its field names. Hand-rolling §2a-scaffold steps 1-5 is what produced orphan roles (`origin: "user"`, null `module_id`) and a `user:read` module header across past deploys. Stage 5 still verifies the result.
-8. **End with `verifyScaffold(cfg)` and `verifyEntities(...)`** — the mechanized self-audit re-reads live and asserts the scaffold, the entities and the fields, and **throws on drift so a failed audit halts the deploy exactly like a failed write**. This is what makes "finished" contingent on the scaffold actually being correct, instead of a Stage 5 spot-check that gets skipped. (It is a mechanical check; it does not catch "built the wrong thing" — that needs an independent reviewer.)
+8. **End with `verifyScaffold(cfg)`, `verifyPermissionRows(...)` and `verifyEntities(...)`** — the mechanized self-audit re-reads live and asserts the scaffold, the entities and the fields, and **throws on drift so a failed audit halts the deploy exactly like a failed write**. This is what makes "finished" contingent on the scaffold actually being correct, instead of a Stage 5 spot-check that gets skipped. (It is a mechanical check; it does not catch "built the wrong thing" — that needs an independent reviewer.)
 9. **Batch every set of records of one kind, and create every entity before any field.** All entities of the spec go out in ONE `create_entity` call (`ensureEntitiesByLevel`; one call per level, bases first, when the spec has `is_a` / `has_a` entities), all of an entity's fields in ONE `create_field` call, the baseline scaffold as one call per row kind (`scaffoldModule` does this), same-data updates as one key-array call. No field is created until every entity of the deploy (every level) exists — that is what lets a field reference an entity declared later in the spec, a self-reference, or a promote-create row resolve immediately (there is no second pass). A loop of single-record creates is a defect, not a style choice.
 10. **Check-run before every real run, in one command:** `DEPLOY_CHECK=1 bun run <script> && bun run <script>`. The check run halts on a script error before anything is written; a real-run halt after a passing check run is a platform refusal, fixed and re-run as usual.
 
