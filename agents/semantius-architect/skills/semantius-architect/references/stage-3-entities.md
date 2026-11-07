@@ -140,7 +140,7 @@ Why both: `mastered in` is the slug the analyst uses for cross-module FK resolut
 
 A §5.3 row goes in §5.3b (incoming) only when the field sits on the external entity, meaning the entity holding the field is not listed in this blueprint's §3. Every other row goes in §5.3a (outgoing), including many-to-many, and including a field on a §3 entity with `held_as` `consumer` or `contributor`. Direction means where the relationship's field sits and which way it points. The field sits on `to`, the child.
 
-For §5.1 and §5.2, the architect emits the resolved `delete_mode` and `fk_format` directly into the §5 row so the analyst consumes verbatim, except rows changed by the analyst's Stage 8 FK scope fix.
+For §5.1 and §5.2, the architect emits the resolved `delete_mode` and `fk_format` directly into the §5 row so the analyst consumes verbatim.
 
 #### Key type (the optional §3 `**Key types:**` sub-block)
 

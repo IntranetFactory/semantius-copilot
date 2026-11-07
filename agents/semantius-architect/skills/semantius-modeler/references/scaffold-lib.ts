@@ -111,14 +111,14 @@ function dataKeys(tool: string, schema: any): Set<string> {
 }
 
 /**
- * Read a crud tool's LIVE input schema via `semantius info crud <tool>` and
+ * Read a crud tool's LIVE input schema via `semantius tools crud <tool>` and
  * return the set of accepted `data` field names (see `dataKeys` for the shapes;
  * top-level properties for tools that aren't `{data}`-wrapped). Throws loud if
- * the info command fails or its output can't be parsed — "can't verify" halts,
+ * the tools command fails or its output can't be parsed — "can't verify" halts,
  * per the loud-failure contract.
  */
 async function toolDataKeys(tool: string): Promise<Set<string>> {
-  const proc = Bun.spawn(["semantius", "info", "crud", tool], {
+  const proc = Bun.spawn(["semantius", "tools", "crud", tool], {
     stdout: "pipe", stderr: "pipe",
   });
   const [out, err] = await Promise.all([
@@ -127,10 +127,10 @@ async function toolDataKeys(tool: string): Promise<Set<string>> {
   ]);
   const code = await proc.exited;
   if (code !== 0) {
-    throw new Error(`preflight: \`semantius info crud ${tool}\` failed (exit ${code}): ${err}`);
+    throw new Error(`preflight: \`semantius tools crud ${tool}\` failed (exit ${code}): ${err}`);
   }
   const brace = out.indexOf("{", out.indexOf("Input Schema:"));
-  if (brace < 0) throw new Error(`preflight: no input schema in \`semantius info crud ${tool}\` output`);
+  if (brace < 0) throw new Error(`preflight: no input schema in \`semantius tools crud ${tool}\` output`);
   let schema: any;
   try {
     schema = JSON.parse(out.slice(brace));

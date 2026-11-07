@@ -159,6 +159,7 @@ function blueprintFacts(path: string): { hasReferenceDataEntities: boolean; hasP
   const lines = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
 
   // §3: an entity this module provisions (master / embedded_master), entity_type catalog, not a built-in.
+  // `catalog` and its `:admin` write tier are defined in use-semantius (data-modeling.md → "Classifying an entity").
   let hasReferenceDataEntities = false;
   for (const { header, row } of rowsWithHeaders(topSection(lines, 3))) {
     // A §3 header that names this column `role` reads the same: file format 3.1 accepts either name.

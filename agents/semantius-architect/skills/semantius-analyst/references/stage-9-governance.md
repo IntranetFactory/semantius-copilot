@@ -4,10 +4,10 @@
 
 ## Stage 9: Cross-tier FK reconciliation (validation-only)
 
-The blueprint carries authoritative `write tier` per §3 row and authoritative `fk_format` per §5.1 / §5.2 row, so Stage 9 is a **validation-only** sweep:
+The blueprint carries authoritative `write tier` per §3 row and authoritative `fk_format` per §5.1 / §5.2 row, so Stage 9 is a **validation-only** sweep. The class and the write tier are `use-semantius` concepts (`references/data-modeling.md` → "Classifying an entity", `references/rbac.md` → "Choosing an entity's permissions"); this stage checks the blueprint's values against them:
 
 1. **Confirm every entity's `write tier`** from §3 lines up with §8.1 permissions: a `:manage` row has a `<slug>:manage` permission; a `:admin` row has a `<slug>:admin` permission; a narrow tier has its `narrow` row; a `:read` row is reference-only (no write tier). At every level but `custom`, also confirm each entity's own rows against "Which rows an entity gets" in `semantic-spec-template.md` (§8.1): its `entity-read` and `entity-write` rows, and its §9.1 bundle rows. Mismatch → 🔴 blocker (the architect should have caught it).
-2. **FK shapes** are checked and fixed by the Stage 8 FK scope fix (it needs the Stage 10 rules).
+2. **FK shapes** are checked by the Stage 8 FK scope check (it needs the Stage 10 rules).
 3. (Covered by rule 2.)
 4. **Validate `label_parent` is internally consistent.** For every entity carrying a `**Label parent:**` line (derived in Stage 4): the named field must be a real `reference`/`parent` FK declared on that entity in §3, and must NOT target a `junction` entity; and the line must NOT appear on a `junction` entity. A violation is a 🔴 blocker (a failure here means the derived spine name and the field list disagree). The `label_parent` graph across entities must be acyclic; a suspected cycle is a 🔴 blocker.
 5. **Validate key types.** For every entity carrying a `**Key type:**` line (carried from the blueprint's §3 `**Key types:**` sub-block): the value is one of `bigint` / `text` / `uuid` / `typeid` / `is_a` / `has_a` (never `computed`, which the platform refuses for a new entity; `auto_increment` is written by omitting the line); `typeid` and `is_a` REQUIRE a `**Key prefix:**` line and any other type forbids one; the prefix matches `^[a-z](?:[a-z_]{0,61}[a-z])?$`; no two entities of the spec share a prefix; and a prefix on an entity this spec provisions is not already used by another live entity (the Stage 2c index carries `id_prefix`). Each violation is a 🔴 blocker; a live prefix collision is resolved by picking a different prefix (tell the user plainly: the short prefix shown at the start of every record id is already used by `<other Plural Label>`).
@@ -20,7 +20,7 @@ The blueprint carries authoritative `write tier` per §3 row and authoritative `
    - **writers of a based entity also write its base.** Same module: the same bundle includes the based entity's write permission and its base's (the same write tier). Base in another module: a cross-module §9.1 Permission hierarchy row `` | `<slug>:<tier>` | `<base edit_permission>` | ✨ to create | `` (shape in `stage-3-shared-base.md` → Permissions).
    The file-level part is enforced by `consistency-check.ts`.
 
-This stage does not rewrite FK shapes; the Stage 8 FK scope fix does.
+This stage does not rewrite FK shapes, and neither does the Stage 8 FK scope check.
 
 ---
 

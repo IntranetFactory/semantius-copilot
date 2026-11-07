@@ -548,7 +548,7 @@ SEMANTIUS_SKILLS_SRC='C:\other\skills' ./update.sh   # other skills checkout
   `SKILL.md` is required, checked before anything is deleted) **replaces**
   `agents/semantius-architect/skills/<skill>/`; `agents/semantius-agent/skills/<skill>/`
   gets the same minus `AGENT_EXCLUDED_SKILLS` in `update.sh` (`semantius-admin`, `-analyst`,
-  `-architect`, `-modeler`; a name no longer upstream stops the script before anything is
+  `-architect`, `-modeler`, `-optimizer`; a name no longer upstream stops the script before anything is
   deleted). A mirror, not a merge, so files and whole skills dropped upstream disappear
   here too. Prints the source's git revision. Ships with `pnpm deploy-semantius-agent` and
   `pnpm deploy-semantius-architect`; `pnpm bundle` checks the bundle limits.
@@ -579,9 +579,12 @@ SEMANTIUS_SKILLS_SRC='C:\other\skills' ./update.sh   # other skills checkout
   - Run directly in the Claude Code plugin, `semantius-optimizer` no longer offers the analyst's
     Extend mode. Only `semantius-architect`'s `INSTRUCTIONS.md` keeps that offer.
 
-  `semantius-optimizer` stays whole in this agent, spec export included, as a read-only export
-  (Martin Amm, 2026-11-03). `update.sh` does not touch either agent's `INSTRUCTIONS.md`, so change
-  `semantius-agent`'s by hand whenever `AGENT_EXCLUDED_SKILLS` changes.
+  `semantius-optimizer` was kept whole in this agent as a read-only spec export (Martin Amm,
+  2026-11-03) and is excluded from it since 2026-11-06 (asked for by Martin Amm); the
+  "Tested 2026-11-04" run above predates that. Its welcome-card prompt ("Show me a diagram of
+  module") and its `INSTRUCTIONS.md` entries went with it. `update.sh` does not touch either
+  agent's `INSTRUCTIONS.md` or `welcome.jsonc`, so change `semantius-agent`'s by hand whenever
+  `AGENT_EXCLUDED_SKILLS` changes.
 
   Agent names and skill names are separate: the agent `semantius-agent` was called
   `semantius-admin` until 2026-11-03, and the agent `semantius-architect` began as a copy

@@ -293,7 +293,7 @@ The Task column is the exact subject of the stage task (Task tracking, above); s
 | 5. Workflow perms | W3 / W4 / W4n / W5 workflow-permission scan | After fields | **emits nothing** under `basic` / `custom` | (same task) | `references/stage-5-workflow-perms.md` |
 | 6. Input-type | Conditional input-type scan | After Stage 5 | n/a | (same task) | `references/stage-6-input-type.md` |
 | 7. Select rule | Row-level read-access scan | After Stage 6 | **no select_rule** under `basic` / `custom` | (same task) | `references/stage-7-select-rule.md` |
-| 8. Consistency gate | Audit-log settle + FK scope fix + view / edit-rules cross-check | After 5/6/7/9/10 | n/a | (same task) | **resident** (Verification gates) |
+| 8. Consistency gate | Audit-log settle + FK scope check + view / edit-rules cross-check | After 5/6/7/9/10 | n/a | (same task) | **resident** (Verification gates) |
 | 9 + 9.5 Governance | Tier and key validation + RACI / persona reconciliation | After Stage 8 inputs | **RACI only under `raci`**; `basic`: viewer + manager only | (same task) | `references/stage-9-governance.md` |
 | 10. Rules | Computed fields + validation rules (families F1-F15) | After governance | **drop permission-gated rules** under `basic` / `custom` | (same task) | `references/stage-10-rules.md` |
 | 11. Write | Frontmatter, section deltas, write the spec, close-out | After all stages pass | n/a | `Match › Write the file and double-check it` | `references/stage-11-write.md` (pre-save gates resident) |
@@ -340,12 +340,11 @@ After Stages 5/6/7/9/10, run a holistic consistency pass over every owned entity
 
 **Step 0: settle the audit log.** Write every owned entity's `**Audit log:**` line now (rule: `semantic-spec-template.md`, `**Audit log:**` bullet). Step 1 reads it.
 
-**Step 1: FK scope fix (fixes, never asks).** Look at every §4 row where:
+**Step 1: FK scope check (reports, never changes).** Look at every §4 row where:
 
 - `Kind` is `parent` (junction legs say `junction` and are skipped),
 - `Delete behavior` is `cascade`,
-- `References` has its own §3 block with a Fields table in this spec, and
-- the `FK field` is not already a live field (in the Stage 2 index) with format `parent`.
+- `References` has its own §3 block with a Fields table in this spec.
 
 `FK table` is the child and `References` is the parent. For both, read from their §3 blocks:
 
@@ -360,21 +359,11 @@ The row **fires** when any one holds:
 - **T2:** the child has a permission code the parent does not have.
 - **T3:** the child's Audit log is `yes` and the child has a lifecycle.
 
-Why: `parent` says the child shares the parent's permission model and dies with it. A child with its own permissions, or audit-logged records with their own lifecycle (feedback, offers, applications), must survive routine deletion of the parent (`../use-semantius/references/data-modeling.md`, divergent-permission-scope rule).
+Why: a `cascade` deletes the children without checking the child's own delete permission, so anyone who may delete the parent removes children they may not delete. A child with its own permissions, or audit-logged records with their own lifecycle (feedback, offers, applications), would then go with a routine deletion of the parent; `restrict` refuses the parent's deletion while children exist (`../use-semantius/references/data-modeling.md`, divergent-permission-scope rule). This is the rare case: most children share their parent's permissions, and `parent` + `cascade` is right. The check therefore changes nothing; it only reports.
 
-For each row that fires, make exactly these edits:
+For each row that fires, add one 🟡 §7.2 entry and change nothing else: "`<child>`.`<field>` is a `parent` of `<parent>` with delete behavior `cascade`, but the child has its own permissions or history (<T1, T2 or T3>); consider `restrict`, so that deleting the parent cannot remove records the deleter may not delete." The format stays `parent`; setting the delete behavior is the user's decision. When the field already exists live as `parent`, the entry is the same and the change is an `update_field` of `reference_delete_mode`.
 
-1. In the child's §3 Fields row for that field, change Format `` `parent` `` to `` `reference` ``.
-2. In the same row's Reference / Notes cell, replace `↳` with `→`; if the parentheses after the target say `cascade`, change it to `restrict`; delete any `parent label:` annotation.
-3. In the §4 row, set `Kind` to `reference`, `fk_format` to `reference`, and `Delete behavior` to `restrict`.
-4. In the child's §3 **Relationships** sentence for that relationship, change `cascade on delete` to `restrict on delete`. Change nothing else in the sentence.
-5. Leave `Required`, `relationship_label` and `**Label parent:**` as they are.
-
-Keep a list of the fixed rows (child, field, parent) for the Closing message.
-
-When the field already exists live as `parent`, don't fix it. Add one 🟡 §7.2 entry instead: "`<child>`.`<field>` is kept with its `<parent>` but has its own permissions or history; changing it to restrict needs a migration of the live field."
-
-`consistency-check.ts` reports every row that still fires (check `FK scope`); fix each one the same way and re-run it.
+`consistency-check.ts` reports every row that fires (check `FK scope`, always a warning).
 
 **Step 2: cross-check.** For each entity, cross-check:
 
@@ -422,7 +411,7 @@ Before writing the file, run these checks. ANY failure halts save and prints a s
 | When `access_scope: raci`: §8.1 carries one `workflow-gate (lifecycle)` row per gated §7 state and per §8.2 `create` rule; a gate with `high risk?` `-` has `included in :admin?` ✓ and an `admin → <gate>` row in §9.1, a gate with `high risk?` ✓ has `-` and no such row; every other §8.1 row has `high risk?` `-`; in `documentation` mode every gated §7 state and every §8.2 `create` rule has a §3 `validation_rules` entry whose `has_permission` cites that gate; in `living` mode each has exactly one §9.1 `_enforcement rules_` A-gate row instead (`has_permission` in an `or` with `is_raci_actor`), no §3 `validation_rules` entry repeats an A-gate, and each `create` gate has a `create` `_process_gates_` row on the entity's initial state; the RACI realization, Processes and §9.2 ownership rows are present; every process has exactly one accountable row, and every gate is in the `grant gates [...]` list of exactly one accountable row (the RACI rule); `persona` frontmatter is present | access_scope incoherence list |
 | **RACI provenance — mechanically enforced by `consistency-check.ts`.** When the spec carries a RACI matrix, frontmatter MUST carry `raci_mode` (`living`/`documentation`) AND `raci_mode_source` (`computed-default`/`non-interactive`; `raci_mode` is auto-derived from instance state, so this gate never produces `user-answer`), and the §9 `**RACI mode:**` line must match `raci_mode`. The checker fails the save on any missing / invalid / mismatched value. | RACI provenance missing / inconsistent |
 | Every §8.1 prefix is this module's slug, a §3 `mastered in` module's slug or a §7 realizing module's slug, except a live code carried under "Live names win" (`references/stage-3-collisions.md`, 3d). At every level but `custom`, every entity has the `entity-read` / `entity-write` rows and §9.1 bundle rows `references/semantic-spec-template.md` (§8.1) gives it. No §3 `**Edit permission:**` is a bare `manage`, `admin` or narrow suffix | permission prefix and row list |
-| §4 rows carry `fk_format` and the delete behavior consumed verbatim from the **blueprint's** §5.1 / §5.2, not re-derived. **Exceptions:** a row whose `FK table` is an `is_a` entity is never `cascade` (use `restrict` / `clear`); a row changed by the Stage 8 FK scope fix is `reference` + `restrict` (both enforced by `consistency-check.ts`) | column-missing list |
+| §4 rows carry `fk_format` and the delete behavior consumed verbatim from the **blueprint's** §5.1 / §5.2, not re-derived. **Exceptions:** a row whose `FK table` is an `is_a` entity is never `cascade` (use `restrict` / `clear`) (enforced by `consistency-check.ts`) | column-missing list |
 | §6 `Outbound handoffs` / `Inbound handoffs` rows carry the `transition` column; for an Outbound `lifecycle` row (or an Inbound row whose `payload` is a declared §3 entity), `to_state` is one of that entity's `workflow_state` enum values | mismatched-state list |
 | Every `select_rule` column references a real field on the entity | dangling columns list |
 | No throwing operator inside any `select_rule` (`require_permission` / `throw_error` abort the per-row read; permission checks must use the non-throwing `has_permission`) | throwing-select_rule list |
@@ -478,8 +467,6 @@ One line; no "next step" hint in admin-orchestrated mode (the admin narrates whe
 **Stand-alone** (no handoff header):
 
 > *Done. Wrote the design to `semantius/specs/<slug>-semantic-spec.md` (<plain-English summary>). When you're ready, ask me to deploy it.*
-
-**Kept records.** When the Stage 8 FK scope fix changed at least one row, append one sentence to the end of either line above (same line, admin-orchestrated or stand-alone): *"<Parent Plural Label> that still have <Child Plural Label> can't be deleted now, so those records are kept."* One clause per parent, joined with "; " (e.g. *"Interviews that still have Scorecards can't be deleted now, so those records are kept; Applications that still have Offers can't be deleted now, so those records are kept."*). A fast run has no close-out and logs nothing for the fix: it is a rule, not a pick.
 
 **Never** emit raw `reconciliation_summary: {...}` curly-brace data, "Tell the admin to invoke the modeler," or any skill-name references. Use the plain-English translation table from §3g (create-new → "new", promote-to-master → "adopted from <module>", reuse-from → "reusing existing from <module>", dropped → "skipped", reuse-from semantius_builtin.* → "reusing platform built-in").
 

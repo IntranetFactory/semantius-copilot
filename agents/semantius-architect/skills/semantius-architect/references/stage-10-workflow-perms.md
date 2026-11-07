@@ -28,7 +28,7 @@ Walk these six families against every entity:
 
 #### The scan-table artifact (mandatory)
 
-Produce one table per model. **Every entity in §3 gets a row.** Reference / lookup entities (Stage 9 admin-tier) and pure junctions usually all-`none`, but they still get a row so the reviewer can see they were considered.
+Produce one table per model. **Every entity in §3 gets a row.** Reference / lookup entities (`catalog`) and pure junctions usually all-`none`, but they still get a row so the reviewer can see they were considered.
 
 | Entity | W1 lifecycle approval | W2 lifecycle closure | W3 submit-then-lock | W4 ownership scope | W5 reassignment | W6 high-weight create | Proposed permissions |
 |---|---|---|---|---|---|---|---|
@@ -113,7 +113,7 @@ Loop on feedback until confirmed. Then run the permission step below. The confir
 
 Runs as the last step of Stage 10, after the user confirmed the gate scan. The other architect paths run it at the points named in [modes-audit-extend-rebuild.md](modes-audit-extend-rebuild.md) (Customize, Extend, Rebuild) and in SKILL.md (Catalog-Clone). A deterministic script decides the module's access level, the frontmatter `access_scope`; never decide it yourself.
 
-**The access levels:**
+**The access levels** (the same levels, and how a hand-built module adds a gate, are in `use-semantius` `references/rbac.md` → "Restricted steps (gates)"):
 
 | `access_scope` | Permissions | Process gates |
 |---|---|---|

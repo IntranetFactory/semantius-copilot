@@ -15,9 +15,6 @@
       "prompts": [       
         {
           "display": "What modules are installed?"
-        },
-        {
-          "display": "Show me a diagram of module [blank]"
         }
       ]
     },

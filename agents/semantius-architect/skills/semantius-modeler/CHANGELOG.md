@@ -8,6 +8,14 @@ Entries below are newest first.
 
 ---
 
+## An absent entity type is reported as a warning
+
+2026-11-06. Asked for by Martin Amm: the modeler still stamps `unclassified` when a spec entity has no `**Entity type:**` line, and now reports each such entity as a warning in the plan and the final summary, pointing at `use-semantius` → "Classifying an entity". The file format is unchanged; `version` stays `3.1`.
+
+## Tool schemas are read with `semantius tools`
+
+2026-11-06. Asked for by Martin Amm: the skill reads a tool's parameters with `semantius tools <server> [<tool>]`, which prints the description and compact input schema without the server instructions, and no longer uses `semantius info`. The file format is unchanged; `version` stays `3.1`. The wrong-field-names guard and the preflight in `scaffold-lib.ts` call `semantius tools crud <tool>`.
+
 ## Shared preflight and question files live in use-semantius
 
 2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. The checks are `semantius-admin/references/pipeline-preflight.md` on top of `use-semantius/references/preflight.md`; a standalone modeler runs the shared checks and skips yq and the customizations path. `dot-questions.md` is in `use-semantius/references/`.

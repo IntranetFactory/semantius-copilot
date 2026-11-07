@@ -8,6 +8,24 @@ Entries below are newest first. Each entry follows the maintainer template: what
 
 ---
 
+## Every enum entry gets an icon that fits
+
+2026-11-07. Asked for by Martin Amm: Stage 4's icon check wording follows `use-semantius` "Enum values and labels": every entry of every enum gets an icon that fits its meaning, and an entry no icon fits has none. The gate and the `icon: none` line are unchanged. The file format is unchanged; `version` stays `3.1`.
+
+## Class and write tier meaning comes from use-semantius
+
+2026-11-06. Asked for by Martin Amm: the spec template's `**Entity type:**` line and Stage 9 point at `use-semantius` for what each class and write tier means. The analyst still validates the blueprint's values and carries them verbatim. The file format is unchanged; `version` stays `3.1`.
+
+## FK scope check reports and never changes
+2026-11-06. Stage 8 Step 1 no longer rewrites a `parent` field. A `parent` + `cascade` child with its own permissions, or an audit log and a lifecycle, now gets one 🟡 §7.2 entry suggesting `restrict`; the format, the delete behavior and the close-out message are untouched.
+
+Why: the divergent-permission case is rare, and the old fix changed the format to `reference`, which made the field optional and took the child out of the parent's child listing. Only the delete mode protects the child's permissions (a cascade deletes children without checking their own delete permission), and choosing it is the user's decision.
+
+1. Stage 8 Step 1 is the "FK scope check": it reports rows that fire (T1, T2, T3) and edits nothing, live fields included.
+2. The "Kept records" sentence of the close-out is gone (flows.md rows 76 and 131).
+3. §4 rows are consumed verbatim from the blueprint with no exception.
+4. `references/stage-4-fields.md` no longer says `parent` defaults to cascade, and `clear` applies to a `reference` only.
+
 ## Shared preflight and question files live in use-semantius
 
 2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. The checks are `semantius-admin/references/pipeline-preflight.md` on top of `use-semantius/references/preflight.md`, with no change to what runs or in which order. The rules for auditing a spec extracted from a live module, and authoring what such a spec cannot hold, are now here: `references/modes-audit-extend-rebuild.md`.

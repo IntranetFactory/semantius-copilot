@@ -8,6 +8,15 @@ The entries below are written in reverse chronological order (newest first). Eac
 
 ---
 
+## Classification and write tier are defined in use-semantius
+
+2026-11-06. Asked for by Martin Amm: the entity classes, the derivation ladder and the class-to-write-tier table now live in `use-semantius` (`data-modeling.md` → "Classifying an entity", `rbac.md` → "Choosing an entity's permissions"), so an entity built without the architect is classified and permissioned by the same rules. Stage 9 applies them to the blueprint and keeps what is blueprint-specific: carry-forward from the upstream catalog, the built-ins, the `embedded_master` pending qualifier, the §5 and §7 readings, the user-facing confirmation and the fast-flow rule. The audit checklist, the blueprint template, the extend and rebuild modes and the consistency-check wording point at `use-semantius` instead of restating the ladder and the table. The file format is unchanged; `version` stays `3.1`.
+
+## FK scope check only warns
+2026-11-06. The `FK scope` check of `consistency-check.ts` is always a warning and suggests `parent` + `restrict`; it was an error in the analyst's pre-save run and suggested `reference` + `restrict`. The blueprint template and `stage-3-entities.md` no longer name an exception for rows changed by the analyst.
+
+Why: see the analyst entry "FK scope check reports and never changes".
+
 ## Shared preflight and question files live in use-semantius
 
 2026-11-04. Asked for by Martin Amm: the pipeline skills consume shared files from `use-semantius` and no longer provide them to the generic skills, so a generic skill never depends on a pipeline skill. The file format is unchanged; `version` stays `3.1`. The checks are `semantius-admin/references/pipeline-preflight.md` on top of `use-semantius/references/preflight.md`, with no change to what runs or in which order; `dot-questions.md` is in `use-semantius/references/`.

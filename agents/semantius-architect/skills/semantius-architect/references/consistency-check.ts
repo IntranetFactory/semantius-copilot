@@ -1668,9 +1668,9 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
       issues.push({ check: "family", detail: `§4 \`${r.from}\`.\`${r.field}\` → \`${r.to}\`: \`${r.from}\` is an is_a entity, so its delete behavior cannot be cascade (use restrict or clear)` });
     }
   }
-  // FK scope (analyst Stage 8 FK scope fix): a `parent` + `cascade` child with its own permission
-  // scope, or audit-logged with its own lifecycle, must be `reference` + `restrict`. An error only in
-  // the analyst's pre-save run (`--require-icons`); a warning for the modeler and optimizer.
+  // FK scope (analyst Stage 8 FK scope check): a `parent` + `cascade` child with its own permission
+  // scope, or audit-logged with its own lifecycle, is reported with a suggestion to use
+  // `parent` + `restrict`. Always a warning: the delete behavior is the user's decision.
   // Under `gated` every §8.1 `workflow-gate (lifecycle)` code counts as `<slug>:admin` (the admin
   // holds every gate), so a child and parent gated on their own lifecycle gates share one scope.
   const gatedCodes = fm.get("access_scope") === "gated"
@@ -1697,7 +1697,7 @@ function checkSpec(text: string, lines: string[], fm: ReturnType<typeof frontmat
     if (own.length) signals.push(`checks ${own.map((c) => `\`${c}\``).join(", ")} the parent does not`);
     if (child.auditLog === "yes" && child.fields.some((f) => f.name === "workflow_state")) signals.push("audit log yes with its own lifecycle");
     if (signals.length) {
-      issues.push({ check: "FK scope", detail: `§4 \`${r.from}\`.\`${r.field}\` → \`${r.to}\`: ${signals.join("; ")}; use reference + restrict (analyst Stage 8 FK scope fix)`, warn: !opts.requireIcons });
+      issues.push({ check: "FK scope", detail: `§4 \`${r.from}\`.\`${r.field}\` → \`${r.to}\`: ${signals.join("; ")}; consider parent + restrict (analyst Stage 8 FK scope check)`, warn: true });
     }
   }
   // RACI process gates are not available on based entities (platform 90249).

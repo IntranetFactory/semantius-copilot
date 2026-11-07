@@ -12,7 +12,7 @@ Convert blueprint §8.2 business rules to JsonLogic, plus add field-level comput
 
 ### Gate rules
 
-Under `gated` and `raci`, every process gate gets one gate rule that checks the gate's own permission `<gate>` with `has_permission`. `<gate>` is the code exactly as the gate's §8.1 `workflow-gate (lifecycle)` row writes it, whichever module its prefix names. Where it is written depends on the RACI mode:
+Gate permissions, their naming and the rule shape are defined in `use-semantius` (`references/rbac.md` → "Restricted steps (gates)"). Under `gated` and `raci`, every process gate gets one gate rule that checks the gate's own permission `<gate>` with `has_permission`. `<gate>` is the code exactly as the gate's §8.1 `workflow-gate (lifecycle)` row writes it, whichever module its prefix names. Where it is written depends on the RACI mode:
 
 - **`gated`, and `raci` in `documentation` mode:** a §3 `validation_rules` entry on the gated entity.
 - **`raci` in `living` mode:** a row of the §9.1 `_enforcement rules_` table only (Stage 9.5), which is the one home of the living-mode gate rules (transition A-gates, create A-gates, C-blocks). The analyst never also writes an A-gate into the entity's §3 `validation_rules`.

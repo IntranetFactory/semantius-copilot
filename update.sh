@@ -19,7 +19,7 @@ shopt -s nullglob
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_SRC="${SEMANTIUS_SKILLS_SRC:-/c/dev/semantius-agent/semantius-plugin/skills}"
-AGENT_EXCLUDED_SKILLS=(semantius-admin semantius-analyst semantius-architect semantius-modeler)
+AGENT_EXCLUDED_SKILLS=(semantius-admin semantius-analyst semantius-architect semantius-modeler semantius-optimizer)
 die() { echo "update.sh: $*" >&2; exit 1; }
 
 # Git Bash: accept a Windows path (C:\dev\...) for SEMANTIUS_SKILLS_SRC.

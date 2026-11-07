@@ -60,9 +60,10 @@ Understanding which layer you're working with determines which tools to use:
 | `references/data-modeling.md` | Layer 1, entities, fields, modules, relationships, safe evolution; § "Enum values and labels" |
 | `references/entity-families.md` | Layer 1, subtypes and extensions (`id_type: is_a` / `has_a`, `id_refentity`): when to use them, create order, reads and writes across levels, limits, deletes, error codes. Read before the first `create_entity` of such an entity |
 | `references/jsonlogic.md` | Layer 1, JsonLogic rules: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, dynamic `input_type_rule` (conditional readonly/hidden/required) |
+| `references/rollup-fields.md` | Layer 1, rollup fields: a `sum`, `count`, `min`, `max` or `avg` over child records that the database keeps current; definition keys, filter subset, format fit, hidden child rows, change and removal |
 | `references/select-rule.md` | Layer 1, row-level security: `select_rule`, who sees which rows, REPLACE-vs-AND semantics, admin-lockout risk |
 | `references/rbac.md` | Layer 1, permissions, roles, user assignments, hierarchy |
-| `references/crud-tools.md` | Layer 1 typed tools + Layer 2 postgrestRequest/sqlToRest reference; § "Bulk operations" (array `data` / `id`, one call per set of records) |
+| `references/crud-tools.md` | Quick reference for the Layer 1 typed tools (required fields, keys, order, errors), Layer 2 postgrestRequest/sqlToRest reference; § "Bulk operations" (array `data` / `id`, one call per set of records) |
 | `references/cube-queries.md` | Layer 3, CubeJS query DSL, date filtering, analysis modes |
 | `references/cube-tools.md` | Layer 3, discover/validate/load/chart tool signatures |
 | `references/webhooks.md` | Receiving records from external systems through signed webhook receivers: setup, signing, logs |
@@ -83,13 +84,16 @@ Understanding which layer you're working with determines which tools to use:
 → Ask for it, see "Asking the user to pick a value" below
 
 **Managing schema, create/modify entities, fields, modules?**
-→ Layer 1, read `references/data-modeling.md`, follow mandatory creation order
+→ Layer 1, read `references/data-modeling.md`, follow mandatory creation order. Every entity you create carries its class (`entity_type`) and the permissions its write tier gives (`references/data-modeling.md` → "Classifying an entity", `references/rbac.md` → "Choosing an entity's permissions")
 
 **Several kinds of one thing ("emails and calls are both activities"), or something a record can also be ("a business partner can also be a customer")?**
 → Layer 1, read `references/entity-families.md` before creating anything: it decides between `is_a`, `has_a`, an enum field and separate entities, and changes the creation order (one `create_entity` call per level, bases first). The choice is locked at creation, so confirm with the user
 
 **Computed fields, validation rules, or conditional field behavior (readonly/hidden/required depending on the record)?**
 → Layer 1, read `references/jsonlogic.md`, entity-level and field-level JsonLogic, operators, cross-entity lookups
+
+**A total, count, minimum, maximum or average over child records (an order's total from its lines, open tickets per customer)?**
+→ Layer 1, read `references/rollup-fields.md`. A value aggregated from other records is a rollup field, never a `computed_fields` rule
 
 **Only some users may do one thing to a record (delete it, close it, approve it, change one field)?**
 → Layer 1, read `references/jsonlogic.md` § *Detecting the operation*. An entity's `edit_permission` covers insert, update and delete together, so a gate on one operation or transition is a validation rule that tests `$mode` (or the changed field) and then checks who the caller is: an owner match such as `$old.owner_user_id == $user_id` needs no permission, while `has_permission` needs one, created with `references/rbac.md`
@@ -108,6 +112,9 @@ Understanding which layer you're working with determines which tools to use:
 
 **Querying across multiple tables, aggregating, trending over time, top-N, metrics?**
 → Layer 3, use `cube`, read `references/cube-queries.md` + `references/cube-tools.md`
+
+**About to build a script, diagram, document, report or export from the model?**
+→ Find the built-in tool first, see "Find the built-in tool before building" under Core CLI Commands
 
 **Writing shell scripts or chaining CLI commands?**
 → Read `references/cli-usage.md`
@@ -190,9 +197,9 @@ The plugin's sample prompts use `[blank]` where the user puts a name from the li
 ```bash
 semantius                              # List all servers and tools
 semantius -d                           # List with descriptions
-semantius info <server>               # Show tools for a server
-semantius info <server> <tool>        # Get tool JSON schema
-semantius grep "<pattern>"            # Search tools by glob
+semantius tools <server>              # Show tools and parameters for a server
+semantius tools <server> <tool>       # Get tool description and JSON schema
+semantius search_tools "<words>"      # Find tools by name or description
 semantius call <server> <tool> '{}'   # Call tool with inline JSON
 semantius call <server> <tool>        # Call tool — reads JSON from stdin
 ```
@@ -206,7 +213,20 @@ semantius call crud getCurrentUser '{}'     # inline JSON, never blocks
 
 Never invoke a no-argument `semantius call ...` bare on Windows/PowerShell without one of the two forms above.
 
-Both `info <server> <tool>` and `info <server>/<tool>` work interchangeably.
+Both `tools <server> <tool>` and `tools <server>/<tool>` work interchangeably.
+
+### Find the built-in tool before building
+
+The CLI's tool list is the inventory of what the platform can do, and it grows. This skill names only some of it. Before you write a script, diagram, document, report or export that reads the model, check whether a tool already produces it. A built-in tool knows the module's relationships, entity types, external references and rules; rebuilding the result from `read_entity` / `read_field` duplicates that and gets details wrong.
+
+```bash
+semantius search_tools "<words>"      # tools whose name or description contains any word, best match first
+semantius tools <server> <tool>       # the signature of a candidate
+```
+
+Search with the artifact the user named and its synonyms (diagram, erd, spec, document, export, report), not with a tool name you already know. Add `--all` to include the remote servers. Use the tool's output as the deliverable; build by hand only when no tool fits.
+
+A generator returns its artifact as text (for example a markdown document or a Mermaid code block), not JSON: it arrives on stdout as-is, so do not pipe it through `jq`. To keep it, redirect stdout to a file. Render it to an image only when the user asks for one.
 
 ---
 
@@ -268,12 +288,13 @@ Full detail: `references/crud-tools.md` § `getCurrentUser`.
    - Before `create_role` → run `read_role` first
    - If the read returns results, use those IDs instead of creating duplicates. Only create if it returns empty.
    - For a bulk create, **one** `read_*` with an `in.(...)` filter covers every item (`"filters": "field_name=in.(description,cost)&table_name=eq.services"`); never one `--single` read per record.
-2. **Schema first**, Module → Permissions → **all** Entities → Fields. Never skip steps, and create every entity of a model before any of its fields, so each field's `reference_table` (self-references included) already exists. **Exception:** with `is_a` / `has_a` entities, create bases before the entities based on them, one `create_entity` call per level; fields still come after every level (`references/entity-families.md`).
-3. **Never create auto-generated fields**, `id`, `label`, `created_at`, `updated_at`, and the `label_column` field are created automatically by `create_entity`. On an `is_a` / `has_a` entity also never create a field of its base: create only the entity's own fields. Leave `field_order` out of `create_field` too: the platform appends new fields in array order, while a hand-picked value can silently tie with an auto-created field (the label field sits at 20). Set it only when the user wants a specific position, after reading the entity's live `field_order` values.
+2. **Schema first**, follow "Mandatory Creation Order" in `references/data-modeling.md`, the single source for the order, the `is_a` / `has_a` exception, and how every entity is classified and read back.
+3. **Never create auto-generated fields**, `id`, `created_at`, `updated_at` and the `label_column` field are created automatically by `create_entity`. On an `is_a` / `has_a` entity also never create a field of its base: create only the entity's own fields. Leave `field_order` out of `create_field` too: the platform appends new fields in array order, while a hand-picked value can silently tie with an auto-created field (the label field sits at 20). Set it only when the user wants a specific position, after reading the entity's live `field_order` values.
 4. **`reference_table` mandates relational format**, Any field with `reference_table` MUST use `format: "reference"` or `format: "parent"`. No exceptions.
 5. **Warn before risky changes**, Renaming `table_name`/`field_name`, deleting entities/fields requires explicit user confirmation.
 6. **Surface a UI link whenever it helps the user**, after schema changes *and* after record operations (create / find / update). Pattern: `{ui_baseurl}/{module_slug}/{table_name}`, append `/{id}` for one record. See "Linking to the web UI" above for the rules (derive `ui_baseurl` from `getCurrentUser`; use the lowercase `module_slug`).
 7. **Always batch: one call per set of records, never a loop of single calls.** Whenever more than one record of the same kind is pending (several fields for an entity, several permissions for a module, several `role_permission` rows, several ids to update or delete, several rows for a table), send them **in one call**: pass an array in `data` to `create_*` (`'{"data": [{...}, {...}]}'`), or an array in `id` (`table_name` for entities, `permission_name` for permissions) to `update_*` / `delete_*` (`'{"id": [4, 5, 6]}'`, the same `data` applied to every id). Array items do **not** need the same keys (a key omitted from one item takes the column default). One call is one request and one transaction (all-or-nothing); the response is always an array of the affected records. Keep a call to roughly 100 rows / ids. Issuing N single-record calls where one array call would do is a mistake. The one ordering exception is entities of a family: one `create_entity` call per level, bases first. `postgrestRequest` also takes an array `body`, but under raw PostgREST rules (identical keys per item, or `?columns=` on the path with omitted keys becoming NULL). See `references/crud-tools.md` § "Bulk operations".
+8. **Aggregates over child records are rollups**, A value summed, counted or otherwise aggregated from child records is a field with a `rollup` definition, never a `computed_fields` rule or a value the client maintains. See `references/rollup-fields.md`.
 
 ## Response handling: exit code is not enough
 

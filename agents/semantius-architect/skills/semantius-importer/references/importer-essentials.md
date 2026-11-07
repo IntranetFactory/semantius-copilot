@@ -17,7 +17,7 @@ The Step 0 hard-gate read for `semantius-importer`: everything the import workfl
 ```bash
 semantius call crud <tool> '{...}'   # inline JSON
 ... | semantius call crud <tool>     # stdin (no JSON argument = read stdin)
-semantius info crud <tool>           # live JSON schema for any tool
+semantius tools crud <tool>          # live JSON schema for any tool
 ```
 
 - **Prefer stdin for any payload carrying free text** (titles, descriptions, enum values, CSV-derived strings): piping bypasses shell quoting entirely. The Bun pattern is `Bun.spawn([...], {stdin: "pipe"})`, write JSON, close.
@@ -49,19 +49,21 @@ Every `crud` tool returns a JSON **array** by default — including `create_*`/`
 
 ```bash
 semantius call crud create_module '{"data": {"module_name": "CRM", "module_slug": "crm", "description": "Customer Relationship Management"}}'
-semantius call crud create_permission '{"data": [{"permission_name": "crm:read", "description": "Read CRM data", "module_id": <id>}, {"permission_name": "crm:manage", "description": "Manage CRM data", "module_id": <id>}]}'
-semantius call crud update_module '{"id": <module_id>, "data": {"view_permission": "crm:read", "manage_permission": "crm:manage"}}'
+semantius call crud create_permission '{"data": [{"permission_name": "crm:read", "description": "Read CRM data", "module_id": <id>}, {"permission_name": "crm:manage", "description": "Manage CRM data", "module_id": <id>}, {"permission_name": "crm:admin", "description": "Administer CRM settings", "module_id": <id>}]}'
+semantius call crud update_module '{"id": <module_id>, "data": {"view_permission": "crm:read", "manage_permission": "crm:manage", "admin_permission": "crm:admin", "access_scope": "advanced"}}'
 ```
 
-- `module_slug`: required, `^[a-z0-9_-]+$`. Permission names are always `<module_slug>:<action>` (slug, never display name).
+- `module_slug`: always pass it, `^[a-z0-9][a-z0-9_-]*$`. Permission names are always `<module_slug>:<action>` (slug, never display name).
 - `view_permission` / `manage_permission` / `admin_permission` hold the permission **name** (text FK to `permissions.permission_name`); write the name directly. The FK means a permission must exist before a module names it, hence create the module on the `user:read` default, create the permissions, then wire. Skipping the `update_module` wiring leaves the module on the `user:read` default.
 - `description` is a ≤40-char tagline.
 
 ### Entity
 
 ```bash
-semantius call crud create_entity '{"data": {"table_name": "products", "singular_label": "Product", "plural_label": "Products", "description": "...", "label_column": "product_name", "module_id": 3, "view_permission": "catalog:read", "edit_permission": "catalog:manage"}}'
+semantius call crud create_entity '{"data": {"table_name": "products", "singular_label": "Product", "plural_label": "Products", "description": "...", "label_column": "product_name", "module_id": 3, "entity_type": "operational_record", "view_permission": "catalog:read", "edit_permission": "catalog:manage"}}'
 ```
+
+- `entity_type`, `view_permission` and `edit_permission` come from the entity's class and write tier; the rules are in `use-semantius` (`data-modeling.md` → "Classifying an entity", `rbac.md` → "Choosing an entity's permissions"). Never leave the class at `unclassified`.
 
 - `table_name` is **plural snake_case**. `module_id` is required and non-null. `singular_label`/`plural_label` are grammatically symmetric bare nouns ("Product"/"Products", never "Product Name").
 - **Auto-created on `create_entity`** — never `create_field` these: `id`, `label`, the `<label_column>` field, `created_at`, `updated_at`. `_label` and `<fk>_label` are read-time projections (absent from the fields catalog, never writable, never import targets). The computed `label` is likewise **not a PostgREST column**: `select=label` fails with `42703` (verified live) — to verify labels, select the `<label_column>` field instead.
@@ -88,14 +90,14 @@ Properties the importer uses:
 | `format` | Open vocabulary; the importer passes the csvschema verdict through (`string`, `multiline`, `integer`, `number`, `date`, `date-time`, `boolean`, `enum`, `email`, `url`, ...; also `rating`, `color`, `icon`, see data-modeling.md). `enum` requires `enum_values` (never `select`). Monetary values: `number` + `precision`. |
 | `precision` | `number` only; digits after the decimal (default 2). |
 | `input_type` | `default`, `required` (mandatory, enforced by the platform), `readonly`, `disabled`, `hidden`. **There is no `required` column and no `is_nullable`** — sending either fails. Never target live `readonly`/`disabled` fields with an import. |
-| `field_order` | Display order. **Omit it**: the platform appends each new field after the entity's existing ones in array order, so the CSV column order becomes the display order. Set it only when the user asks for a specific position, after reading the entity's live `field_order` values: the auto-created fields already hold positions (the label field sits at 20), and a tie renders in an unpredictable order without any error. Choose a value strictly between the two live neighbors the field should sit between (e.g. 25 between 20 and 30), or above the highest value below 990000 to put it last. Values from 990000 up are reserved for system columns; every other field stays below 990000. |
+| `field_order` | Display order. **Omit it**: the platform appends each new field after the entity's existing ones in array order, so the CSV column order becomes the display order. Set it only when the user asks for a specific position, after reading the entity's live `field_order` values: the auto-created fields already hold positions (the label field sits at 20), and a tie renders in an unpredictable order without any error. Choose a value strictly between the two live neighbors the field should sit between (e.g. 25 between 20 and 30), or above the highest value below 900000 to put it last. The automatic numbering ignores values from 900000 up (`created_at` and `updated_at` sit at 999998 and 999999); keep every other field below 900000. |
 | `width` | `"default"` unless a layout need exists. |
 | `unique_value` | `true` enforces DB-level uniqueness (the "mark this field unique" answer; the import then skips rows whose value already exists). On an existing field it fails when live duplicates exist. |
 | `searchable` | `true` adds the field to full-text search. |
-| `default_value` | Only when the platform auto-default is wrong (e.g. a required enum whose starting value is not `enum_values[0]`, the first entry's value). Always a value, never a label. |
+| `default_value` | Always on a required enum (its automatic default is `''`, which a required enum refuses), and when the zero value is wrong. Always a value, never a label. |
 | `reference_table` (+ `reference_delete_mode`) | **Mandates `format: "reference"` or `"parent"`** — never combine `reference_table` with a scalar format. Delete modes: `restrict`, `clear`, `cascade`. |
 
-**Nullability is computed from `format`**: only `reference`, `date`, `date-time` accept NULL; every other format is NOT NULL with an auto-default (`''`, `0`, `false`, first enum value; `0` for `rating` means not rated). This drives the empty-cell policy in schema-mapping.md section 7.
+**Nullability is computed from `format`**: only `reference`, `date`, `date-time` accept NULL; every other format is NOT NULL with a zero-value default when `default_value` is blank (`''`, `0`, `false`, `[]` for `array`, `{}` for other JSON; `0` for `rating` means not rated; an `enum` defaults to `''`, which a required enum refuses; `uuid`, `time`, `duration` and `binary` have no zero value). This drives the empty-cell policy in schema-mapping.md section 7.
 
 ## 4. Updates
 
