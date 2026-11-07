@@ -20,7 +20,7 @@
  * container's key-flip remount can never strand an answer.
  */
 import { CheckIcon, CircleIcon, SquareIcon } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +82,34 @@ export function parseQuestions(input: unknown): AskUserQuestionItem[] | null {
     parsed.push({ question, header, options: opts, multiSelect: multiSelect === true });
   }
   return parsed;
+}
+
+/** `**bold**` / `__bold__` and `*italic*` / `_italic_` (single `_` only at word
+ * boundaries, so snake_case stays literal). Alternation order makes the double
+ * markers win over the single ones. */
+const INLINE_FORMAT = /\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|(?<![\w])_(.+?)_(?![\w])/g;
+
+/** Turn the model's inline markdown into `<strong>`/`<em>` elements (nesting
+ * supported). Built as React nodes rather than HTML strings, so model text can
+ * never inject markup. Display only: answers are still keyed by the raw text. */
+function renderInline(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(INLINE_FORMAT)) {
+    const start = match.index ?? 0;
+    if (start > last) nodes.push(text.slice(last, start));
+    const bold = match[1] ?? match[2];
+    nodes.push(
+      bold !== undefined ? (
+        <strong key={start}>{renderInline(bold)}</strong>
+      ) : (
+        <em key={start}>{renderInline(match[3] ?? match[4])}</em>
+      ),
+    );
+    last = start + match[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
 }
 
 /** Ephemeral per-question selection. */
@@ -221,7 +249,7 @@ export function AskUserQuestionCard({
         ) : null}
 
         <div className="flex flex-col gap-2 p-3">
-          <p className="font-medium text-sm">{question.question}</p>
+          <p className="text-sm">{renderInline(question.question)}</p>
           {question.multiSelect ? (
             <p className="-mt-1 text-muted-foreground text-xs">Select all that apply.</p>
           ) : null}
@@ -247,9 +275,9 @@ export function AskUserQuestionCard({
                   <Unchecked className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 )}
                 <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="font-medium text-sm">{option.label}</span>
+                  <span className="font-medium text-sm">{renderInline(option.label)}</span>
                   {option.description ? (
-                    <span className="text-muted-foreground text-xs">{option.description}</span>
+                    <span className="text-muted-foreground text-xs">{renderInline(option.description)}</span>
                   ) : null}
                 </span>
               </Button>
@@ -366,12 +394,12 @@ function AnsweredCard({ questions, answer }: { questions: AskUserQuestionItem[];
         const value = answer.cancelled ? "" : answer.answers[q.question];
         return (
           <div key={index} className="flex flex-col gap-1">
-            <p className="text-muted-foreground text-xs">{q.question}</p>
+            <p className="text-muted-foreground text-xs">{renderInline(q.question)}</p>
             {value ? (
               splitAnswer(q, value).map((choice, choiceIndex) => (
                 <p key={choiceIndex} className="flex items-start gap-1.5 text-sm">
                   <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                  <span>{choice}</span>
+                  <span>{renderInline(choice)}</span>
                 </p>
               ))
             ) : (

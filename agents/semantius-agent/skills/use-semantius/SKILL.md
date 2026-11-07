@@ -2,7 +2,11 @@
 name: use-semantius
 description: >-
   Use this skill for anything involving the Semantius platform via the semantius CLI. us1-9d4f2a7b   Trigger when the user wants to: create, read, update, or delete entities,
-  fields, modules, permissions, roles, users, or business records; build or query
+  fields, modules, permissions, roles, users, or business records; build or set up
+  something new that needs its own records, however it is phrased (a module, app,
+  platform, system, tracker, tool, or "a way to see and manage X", e.g. "build my
+  SaaS management platform"; adding a field, entity or permission to an existing
+  module is not a build); build or query
   a semantic data model, including subtypes and extensions of an entity (emails
   and calls as kinds of activities, customers and suppliers as business
   partners) and enum values with labels; set up RBAC; insert or import data into Semantius
@@ -19,7 +23,7 @@ description: >-
 
 **Semantius** is a low-code platform that lets you define a semantic data model, entities, fields, relationships, and access rules, and instantly get a fully managed PostgreSQL database with a REST API, auto-generated UI, and an analytics layer behind it. You define *what* your data looks like (Layer 1), and Semantius handles storage, querying (Layer 2), and cross-table analytics (Layer 3).
 
-`semantius` is the official CLI that gives shell and agent access to three servers: `crud` (schema management + record operations), `cube` (CubeJS-compatible analytics), and the built-in `utils` (CSV introspection, moving entities and modules between hosts).
+`semantius` is the official CLI that gives shell and agent access to servers. `crud` (schema management + record operations) and the built-in `utils` (CSV introspection, moving entities and modules between hosts) are always available; the plan can add more, such as `cube` (CubeJS-compatible analytics). `semantius` lists the servers the instance has.
 
 ---
 
@@ -58,6 +62,7 @@ Understanding which layer you're working with determines which tools to use:
 |------|-------------|
 | `references/cli-usage.md` | CLI commands and their tiers, credentials and hosts, options, shell patterns, chaining, installation; § "Moving Entities and Modules Between Hosts" |
 | `references/data-modeling.md` | Layer 1, entities, fields, modules, relationships, safe evolution; § "Enum values and labels" |
+| `references/build-module.md` | A request to build or set up something new that needs its own records: the default deliverable, the sample-data question and size, what not to produce unasked, verification, the final response |
 | `references/entity-families.md` | Layer 1, subtypes and extensions (`id_type: is_a` / `has_a`, `id_refentity`): when to use them, create order, reads and writes across levels, limits, deletes, error codes. Read before the first `create_entity` of such an entity |
 | `references/jsonlogic.md` | Layer 1, JsonLogic rules: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, dynamic `input_type_rule` (conditional readonly/hidden/required) |
 | `references/rollup-fields.md` | Layer 1, rollup fields: a `sum`, `count`, `min`, `max` or `avg` over child records that the database keeps current; definition keys, filter subset, format fit, hidden child rows, change and removal |
@@ -82,6 +87,9 @@ Understanding which layer you're working with determines which tools to use:
 
 **The request lacks a value it needs ("add a field": to which kind of record)?**
 → Ask for it, see "Asking the user to pick a value" below
+
+**Asked to build or set up something new that needs its own records, however it is phrased (a module, app, platform, system, tracker, tool, "a way to see and manage X"; adding a field, entity or permission to an existing module is not a build)?**
+→ Read `references/build-module.md`. Follow the leading products when the domain is well known, in the order of a build. Default: module, entities, fields, relationships, permissions, roles and the UI links. Ask about sample data first (5 to 10 rows per parent entity, never seeded without a yes). No spec, diagram, report, export or analytics unless asked
 
 **Managing schema, create/modify entities, fields, modules?**
 → Layer 1, read `references/data-modeling.md`, follow mandatory creation order. Every entity you create carries its class (`entity_type`) and the permissions its write tier gives (`references/data-modeling.md` → "Classifying an entity", `references/rbac.md` → "Choosing an entity's permissions")
@@ -111,10 +119,10 @@ Understanding which layer you're working with determines which tools to use:
 → One call, never a loop: an array in `data` for `create_*`, an array in `id` / `table_name` for `update_*` / `delete_*`, an array `body` (uniform keys) for `postgrestRequest` POST. Golden Rule 7 and `references/crud-tools.md` § "Bulk operations"
 
 **Querying across multiple tables, aggregating, trending over time, top-N, metrics?**
-→ Layer 3, use `cube`, read `references/cube-queries.md` + `references/cube-tools.md`
+→ Layer 3, use `cube`, read `references/cube-queries.md` + `references/cube-tools.md`. Answer only the question asked, briefly; an analytics request never changes the schema or creates a module. When nothing matches, say there is no data for it and stop, without offering to build a module
 
 **About to build a script, diagram, document, report or export from the model?**
-→ Find the built-in tool first, see "Find the built-in tool before building" under Core CLI Commands
+→ Only when the user asked for that artifact; a build request alone is not one. "Show me the data model", an ERD or a schema picture asks for the diagram. Then find the built-in tool first, see "Find the built-in tool before building" under Core CLI Commands
 
 **Writing shell scripts or chaining CLI commands?**
 → Read `references/cli-usage.md`
@@ -177,6 +185,8 @@ The plugin's sample prompts use `[blank]` where the user puts a name from the li
 
 ## Environment Setup
 
+**0. Not the Semantius agent?** Before anything else, read `references/preflight.md` and run it. It also sets the question format for every question this skill asks.
+
 **1. Is semantius installed?** Run `semantius --version`. If the shell cannot find it (POSIX `command not found` / exit code 127, PowerShell `CommandNotFoundException`), it may be installed but not yet on this session's PATH. Look in `%LOCALAPPDATA%\Programs\Semantius\semantius.exe` (Windows) or `/usr/local/bin/semantius` and `~/.local/bin/semantius` (Linux / macOS). If it is there, call it by that full path wherever these skills write `semantius` (`references/cli-usage.md` § "Installing from an agent"). If it is in none of those places, STOP: run no semantius command, and tell the user it is not installed, with the install command for their shell from `references/cli-usage.md` § "Installation" and the guide at **https://www.semantius.com/docs/cli/use-semantius/**.
 
 **2. Is it connected?** Follow `references/cli-usage.md` § "Checking the connection". In short:
@@ -230,7 +240,9 @@ A generator returns its artifact as text (for example a markdown document or a M
 
 ---
 
-## The Two Servers
+## The Servers
+
+Only `crud` and `utils` are always there. Run `semantius` to see which others the instance has, and use only the ones listed.
 
 ### `crud`: Schema Management + Record Operations (Layers 1 & 2)
 
@@ -295,6 +307,8 @@ Full detail: `references/crud-tools.md` § `getCurrentUser`.
 6. **Surface a UI link whenever it helps the user**, after schema changes *and* after record operations (create / find / update). Pattern: `{ui_baseurl}/{module_slug}/{table_name}`, append `/{id}` for one record. See "Linking to the web UI" above for the rules (derive `ui_baseurl` from `getCurrentUser`; use the lowercase `module_slug`).
 7. **Always batch: one call per set of records, never a loop of single calls.** Whenever more than one record of the same kind is pending (several fields for an entity, several permissions for a module, several `role_permission` rows, several ids to update or delete, several rows for a table), send them **in one call**: pass an array in `data` to `create_*` (`'{"data": [{...}, {...}]}'`), or an array in `id` (`table_name` for entities, `permission_name` for permissions) to `update_*` / `delete_*` (`'{"id": [4, 5, 6]}'`, the same `data` applied to every id). Array items do **not** need the same keys (a key omitted from one item takes the column default). One call is one request and one transaction (all-or-nothing); the response is always an array of the affected records. Keep a call to roughly 100 rows / ids. Issuing N single-record calls where one array call would do is a mistake. The one ordering exception is entities of a family: one `create_entity` call per level, bases first. `postgrestRequest` also takes an array `body`, but under raw PostgREST rules (identical keys per item, or `?columns=` on the path with omitted keys becoming NULL). See `references/crud-tools.md` § "Bulk operations".
 8. **Aggregates over child records are rollups**, A value summed, counted or otherwise aggregated from child records is a field with a `rollup` definition, never a `computed_fields` rule or a value the client maintains. See `references/rollup-fields.md`.
+9. **Deliver the smallest result that satisfies the request.** A build request is schema, permissions, roles and UI links, not a spec, report or analytics run. Sample data is offered, capped and seeded only after an explicit yes; specs, diagrams, exports and analytics are produced only when asked. Verification is one read of the new entities (class and permissions, and row counts when seeded), not an analysis. An analytics request answers only the question asked and writes nothing to the schema. Smallest means narrowest scope, never a compressed rendering of a result: when the answer is an artifact, deliver the whole artifact (Golden Rule 10). See `references/build-module.md`.
+10. **Generated artifacts are used exactly as the tool returned them.** What a tool returns (a diagram, spec, document, report, export or CSV schema) is the artifact; the bytes are not raw material to summarize. A diagram is pasted into the reply verbatim: the status line, every `classDef` and `class` line and the node order, because the styling states which entities were selected and which are only referenced. A document is saved by redirecting stdout to a file and handed over as that file. The tool's output already carries its own ```` ```mermaid ```` fence; do not add a second one. Length is no reason to shorten it; if the output was truncated, redirect stdout to a file, read the file in parts and paste it in full. Never retype, condense, re-style, re-order or tidy it, and never put a hand-made version beside it. Quoting part of an artifact counts as retyping: to answer a question about it, use prose, or paste the whole artifact. A subset or a view across several modules is not a reason to edit the diagram: call the tool with `module_slugs` and/or `table_names`. A table or prose that adds information (fields from `read_field`, an explanation) may sit outside the artifact; a second diagram, or a table that only restates the diagram's nodes and arrows, may not. If the tool fails, report the failure; do not draw a substitute by hand.
 
 ## Response handling: exit code is not enough
 

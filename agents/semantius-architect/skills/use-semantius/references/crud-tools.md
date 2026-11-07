@@ -56,7 +56,7 @@ Read this before the first call. For the full schema of one tool run `semantius 
 
 ### Order for a new module
 
-The order is "Mandatory Creation Order" in `data-modeling.md`; follow it as written.
+The order is "Mandatory Creation Order" in `data-modeling.md`; follow it as written. For a request to build a whole module, read `build-module.md` first: it sets the scope around that order.
 
 ### Naming rules
 
