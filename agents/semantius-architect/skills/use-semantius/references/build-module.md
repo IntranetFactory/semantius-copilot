@@ -26,7 +26,7 @@ Each field, entity and permission is then created under the rules that already g
 
 ## Order of a build
 
-`preflight.md` runs first (`SKILL.md` → "Environment Setup"). Steps 1 to 4 need only this file, plus `entity-families.md` when the outline contains such a case; read nothing else before them.
+`preflight.md` runs first (`SKILL.md` → "Environment Setup"). Steps 1 to 4 need only this file, plus `entity-families.md` when the outline contains an `is_a` / `has_a` family; read nothing else before them.
 
 1. Outline the entities, after taking the shape of the leading products when the domain is well known, and tell the user what you are building (above).
 2. Settle any choice locked at creation (next section).
