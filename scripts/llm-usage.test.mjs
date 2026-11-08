@@ -19,6 +19,7 @@ import {
   llmRequestFromCompletion,
   llmRequestFromTurn,
   reconcileWithResponseUsage,
+  responseActiveMs,
   roundUsd,
   ZERO_LLM_TOTALS,
 } from '../core/src/llm-usage.js';
@@ -207,6 +208,23 @@ const turn = (purpose, id, u, extra = {}) => ({
   );
   const sorted = (o) => j(Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))));
   check('totals: empty prev, no rows -> zeros, empty breakdown', sorted(addLlmRequests({}, [])) === sorted({ ...ZERO_LLM_TOTALS, cost_by_purpose: {} }));
+}
+
+// ---------------------------------------------------------------------------
+// responseActiveMs (session_state.active_ms: server time per response)
+
+{
+  check('active ms: finish minus start', responseActiveMs(1_000, 4_250) === 3_250);
+  check('active ms: fractional timestamps rounded', responseActiveMs(1_000.4, 2_000.2) === 1_000);
+  check('active ms: no start stamp (response began before the hook existed) -> 0, not a guess', responseActiveMs(undefined, 9_000) === 0 && responseActiveMs(null, 9_000) === 0);
+  check('active ms: junk start stamp -> 0', responseActiveMs('1000', 9_000) === 0 && responseActiveMs(NaN, 9_000) === 0 && responseActiveMs(Infinity, 9_000) === 0);
+  check('active ms: clock step backwards never goes negative', responseActiveMs(5_000, 4_000) === 0);
+  const before = Date.now();
+  const live = responseActiveMs(before - 250);
+  check('active ms: finish defaults to now', live >= 250 && live < 5_000, String(live));
+  // Two responses with the user's think time between them: only the work counts.
+  const worked = responseActiveMs(0, 8_000) + responseActiveMs(600_000, 604_500);
+  check('active ms: wait between responses is excluded from the sum', worked === 12_500, String(worked));
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);

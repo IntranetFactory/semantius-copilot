@@ -1512,6 +1512,15 @@ Costs tab's LLM column and `pnpm llm-audit` read the same object. Tokens are Ope
 own counts (`usage.reported`, never the context-size estimate — see "Server-tool usage is
 not context size"); cost is OpenRouter's billed `usage.cost`.
 
+`requests_total.active_ms` is the milliseconds the server worked: the session's runtime
+minus the time it waited for the user. It is NOT summed from the ledger — the `first_at` ..
+`last_at` window includes the user's think time (and the pause after an `AskUserQuestion`),
+and the ledger's per-call `ms` covers model calls only, missing tool and sandbox time. It is
+`session_state.active_ms` (see below), the agent's own response timer, copied in by the admin
+read. It is omitted, not 0, when the session record has expired or predates the timer.
+Added 2026-11-08, asked for by Martin Amm (he wanted a worked-time figure next to the
+window, which counts waiting for the user as runtime).
+
 **Written as calls happen, not at the end of a response** (`backend-b/src/usage.ts`, from
 Flue's per-call events): `turn_request` writes a `pending` entry; `turn` replaces it with
 the completed entry keyed by its generation id (idempotent — the same call written twice
@@ -1964,7 +1973,7 @@ task tools); both now return `{ output: … }`.
 `total_tokens`, `cost_total` (OpenRouter billed USD, nano-dollar rounded),
 `cost_by_purpose` (`cost_total` split by request purpose — agent, compaction,
 compaction_prefix, unobserved — always summing to it), `tool_calls_count`,
-`llm_calls_count`. The Durable Object's own count, an independent cross-check of the
+`llm_calls_count`, `active_ms`. The Durable Object's own count, an independent cross-check of the
 request ledger (see "The request ledger") — the ledger is the itemized list, and the
 full spend including title calls is `requests_total`. Accumulated in the agent's
 unconditional `useResponseFinish`: the LLM fields are sums over the response's observed
@@ -1973,7 +1982,17 @@ calls (one per Flue `turn` event, compaction included, drained from the isolate-
 eviction loses rows — their cost comes back as an `unobserved` row reconciled against
 `response.usage` — and an aborted submission's rows fold into the next response), tool
 calls from `response.toolCalls.length`. Title side calls are NOT in here — they are in
-the request ledger only. The authoritative copy lives
+the request ledger only. `active_ms` is the sum over responses of finish time minus start
+time (`useResponseStart` stamps `started_at` on the response metadata, `useResponseFinish`
+reads it back — `responseActiveMs` in `core/src/llm-usage.js`); each response also carries
+its own `duration_ms` in its metadata (added alongside without being asked for — it is the
+same figure `active_ms` sums, kept per response). Time waiting for the user falls between two
+responses (an `AskUserQuestion` ends its response), so it is never counted. Limits: it is
+not retroactive (a response that started before the timer shipped has no `started_at` and
+adds 0, so older sessions undercount); a response re-attempted after a Durable Object
+restart counts the restart's downtime as worked, since `started_at` is read back from the
+original attempt; a response that fails before `useResponseFinish` runs is not counted
+(untested whether Flue fires it for failed submissions). The authoritative copy lives
 in `usePersistentState('sessionState')` (the DO record stream); each response also
 (a) attaches `session_state` to the response metadata (visible via `?view=history`
 and the Raw JSON view) and (b) fire-and-forget merges state/data/payload into THE

@@ -58,11 +58,15 @@ Understanding which layer you're working with determines which tools to use:
 
 ## Reference Files
 
+`<skill-folder>` in a command in this skill is the directory this `SKILL.md` was read from, as an absolute path.
+
 | File | When to read |
 |------|-------------|
 | `references/cli-usage.md` | CLI commands and their tiers, credentials and hosts, options, shell patterns, chaining, installation; § "Moving Entities and Modules Between Hosts" |
 | `references/data-modeling.md` | Layer 1, entities, fields, modules, relationships, safe evolution; § "Enum values and labels" |
 | `references/build-module.md` | A request to build or set up something new that needs its own records: the default deliverable, the sample-data question and size, what not to produce unasked, verification, the final response |
+| `references/seed-data.md` | Writing generated rows (the sample data of a build, or any request for made-up records): the seed script, mapping children to parents by label, the checks, values and rows that read as records, clearing what was seeded |
+| `references/seed-lib.ts` | Copy it next to the seed script and import it; don't retype it and don't read it, `seed-data.md` lists its functions and shows how: bulk insert, parent lookup by label, relationship read-back, count, distinctness, scale and computed-column guards, clearing a seed, seeded random generator |
 | `references/entity-families.md` | Layer 1, subtypes and extensions (`id_type: is_a` / `has_a`, `id_refentity`): when to use them, create order, reads and writes across levels, limits, deletes, error codes. Read before the first `create_entity` of such an entity |
 | `references/jsonlogic.md` | Layer 1, JsonLogic rules: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, dynamic `input_type_rule` (conditional readonly/hidden/required) |
 | `references/rollup-fields.md` | Layer 1, rollup fields: a `sum`, `count`, `min`, `max` or `avg` over child records that the database keeps current; definition keys, filter subset, format fit, hidden child rows, change and removal |
@@ -74,7 +78,7 @@ Understanding which layer you're working with determines which tools to use:
 | `references/webhooks.md` | Receiving records from external systems through signed webhook receivers: setup, signing, logs |
 | `references/lucide-icon-finder.ts` | Run it (`bun`), don't read it: `<query…>` (one or more words each, most specific first) lists Lucide icon names per query, in that order; `--batch -` takes a JSON object on stdin mapping labels to their queries and answers every label in one call; see `data-modeling.md` → "Icons are Lucide icons" |
 | `references/lucide-icon-checker.ts` | Run it (`bun`), don't read it: `<name…>` confirms Lucide icon names before an icon is written, exit 1 names the unknown ones; see `data-modeling.md` → "Icons are Lucide icons" |
-| `references/vendor-names.ts` | Run it (`bun`), don't read it: `entity:<Name>…` and `field:<Name>…` convert a followed product's record and field names (singular, spelled the product's way) into `table_name` and labels, or `field_name` and label; never convert them by hand |
+| `references/vendor-names.ts` | Run it (`bun`), don't read it: `entity:<Name>…` and `field:<Name>…` convert a product's record and field names (singular, spelled the product's way) into `table_name` and labels, or `field_name` and label, only when the user asks to follow that product's names; never convert them by hand |
 | `references/preflight.md` | The environment checks a skill runs before doing work: stay in the repo root, Bun and jq, CLI install and sign-in, and when to read the two question-format files below |
 | `references/muse-questions.md`, `references/dot-questions.md` | How to ask questions where `AskUserQuestion` is not available; `preflight.md` says when to read them |
 
@@ -89,7 +93,7 @@ Understanding which layer you're working with determines which tools to use:
 → Ask for it, see "Asking the user to pick a value" below
 
 **Asked to build or set up something new that needs its own records, however it is phrased (a module, app, platform, system, tracker, tool, "a way to see and manage X"; adding a field, entity or permission to an existing module is not a build)?**
-→ Read `references/build-module.md`. Follow the leading products when the domain is well known, in the order of a build. Default: module, entities, fields, relationships, permissions, roles and the UI links. Ask about sample data first (5 to 10 rows per parent entity, never seeded without a yes). No spec, diagram, report, export or analytics unless asked
+→ Read `references/build-module.md`. Follow the leading products when the domain is well known, in the order of a build. Default: module, entities, fields, relationships, permissions, roles and the UI links. Ask about sample data first (5 to 10 rows per parent entity, never seeded without a yes; seeded as `references/seed-data.md` says). No spec, diagram, report, export or analytics unless asked
 
 **Managing schema, create/modify entities, fields, modules?**
 → Layer 1, read `references/data-modeling.md`, follow mandatory creation order. Every entity you create carries its class (`entity_type`) and the permissions its write tier gives (`references/data-modeling.md` → "Classifying an entity", `references/rbac.md` → "Choosing an entity's permissions")
@@ -117,6 +121,9 @@ Understanding which layer you're working with determines which tools to use:
 
 **Creating, updating, or deleting several records of the same kind (many fields, many permissions, many rows)?**
 → One call, never a loop: an array in `data` for `create_*`, an array in `id` / `table_name` for `update_*` / `delete_*`, an array `body` (uniform keys) for `postgrestRequest` POST. Golden Rule 7 and `references/crud-tools.md` § "Bulk operations"
+
+**Adding made-up sample or demo records to tables?**
+→ Read `references/seed-data.md`: one seed script on `references/seed-lib.ts`, children mapped to parents by label, never by id or position. Only after an explicit yes to the sample-data question (`references/build-module.md`)
 
 **Querying across multiple tables, aggregating, trending over time, top-N, metrics?**
 → Layer 3, use `cube`, read `references/cube-queries.md` + `references/cube-tools.md`. Answer only the question asked, briefly; an analytics request never changes the schema or creates a module. When nothing matches, say there is no data for it and stop, without offering to build a module
@@ -307,8 +314,8 @@ Full detail: `references/crud-tools.md` § `getCurrentUser`.
 6. **Surface a UI link whenever it helps the user**, after schema changes *and* after record operations (create / find / update). Pattern: `{ui_baseurl}/{module_slug}/{table_name}`, append `/{id}` for one record. See "Linking to the web UI" above for the rules (derive `ui_baseurl` from `getCurrentUser`; use the lowercase `module_slug`).
 7. **Always batch: one call per set of records, never a loop of single calls.** Whenever more than one record of the same kind is pending (several fields for an entity, several permissions for a module, several `role_permission` rows, several ids to update or delete, several rows for a table), send them **in one call**: pass an array in `data` to `create_*` (`'{"data": [{...}, {...}]}'`), or an array in `id` (`table_name` for entities, `permission_name` for permissions) to `update_*` / `delete_*` (`'{"id": [4, 5, 6]}'`, the same `data` applied to every id). Array items do **not** need the same keys (a key omitted from one item takes the column default). One call is one request and one transaction (all-or-nothing); the response is always an array of the affected records. Keep a call to roughly 100 rows / ids. Issuing N single-record calls where one array call would do is a mistake. The one ordering exception is entities of a family: one `create_entity` call per level, bases first. `postgrestRequest` also takes an array `body`, but under raw PostgREST rules (identical keys per item, or `?columns=` on the path with omitted keys becoming NULL). See `references/crud-tools.md` § "Bulk operations".
 8. **Aggregates over child records are rollups**, A value summed, counted or otherwise aggregated from child records is a field with a `rollup` definition, never a `computed_fields` rule or a value the client maintains. See `references/rollup-fields.md`.
-9. **Deliver the smallest result that satisfies the request.** A build request is schema, permissions, roles and UI links, not a spec, report or analytics run. Sample data is offered, capped and seeded only after an explicit yes; specs, diagrams, exports and analytics are produced only when asked. Verification is one read of the new entities (class and permissions, and row counts when seeded), not an analysis. An analytics request answers only the question asked and writes nothing to the schema. Smallest means narrowest scope, never a compressed rendering of a result: when the answer is an artifact, deliver the whole artifact (Golden Rule 10). See `references/build-module.md`.
-10. **Generated artifacts are used exactly as the tool returned them.** What a tool returns (a diagram, spec, document, report, export or CSV schema) is the artifact; the bytes are not raw material to summarize. A diagram is pasted into the reply verbatim: the status line, every `classDef` and `class` line and the node order, because the styling states which entities were selected and which are only referenced. A document is saved by redirecting stdout to a file and handed over as that file. The tool's output already carries its own ```` ```mermaid ```` fence; do not add a second one. Length is no reason to shorten it; if the output was truncated, redirect stdout to a file, read the file in parts and paste it in full. Never retype, condense, re-style, re-order or tidy it, and never put a hand-made version beside it. Quoting part of an artifact counts as retyping: to answer a question about it, use prose, or paste the whole artifact. A subset or a view across several modules is not a reason to edit the diagram: call the tool with `module_slugs` and/or `table_names`. A table or prose that adds information (fields from `read_field`, an explanation) may sit outside the artifact; a second diagram, or a table that only restates the diagram's nodes and arrows, may not. If the tool fails, report the failure; do not draw a substitute by hand.
+9. **Deliver the smallest result that satisfies the request.** A build request is schema, permissions, roles and UI links, not a spec, report or analytics run. Sample data is offered, capped and seeded only after an explicit yes; specs, diagrams, exports and analytics are produced only when asked. Verification is one read of the new entities (class and permissions) and, when seeded, the real seed run's output (every table at its count, each child relationship read back, each computed and rollup column checked) and a rollup value if the module has rollups, not an analysis. An analytics request answers only the question asked and writes nothing to the schema. Smallest means narrowest scope, never a compressed rendering of a result: when the answer is an artifact, deliver the whole artifact (Golden Rule 10). See `references/build-module.md`.
+10. **Generated artifacts are used exactly as the tool returned them.** What a tool returns (a diagram, spec, document, report, export or CSV schema) is the artifact; the bytes are not raw material to summarize. A diagram is pasted into the reply verbatim: the status line, every `classDef` and `class` line and the node order, because the styling states which entities were selected and which are only referenced. A document is saved by redirecting stdout to a file and handed over as that file. The tool's output already carries its own ```` ```mermaid ```` fence; do not add a second one. Length is no reason to shorten it; if the output was truncated, redirect stdout to a file, read the file in parts and paste it in full. Never retype, condense, re-style, re-order or tidy it, and never put a hand-made version beside it. Quoting part of an artifact counts as retyping: to answer a question about it, use prose, or paste the whole artifact. A subset or a view across several modules is not a reason to edit the diagram: call the tool with `module_slugs` and/or `table_names`. Every time an artifact is sent, including a repeat later in the session, it is pasted from a tool result in that same turn: run the generator again for a different selection, read the saved file for the same one. Never reproduce it from an earlier message. A table or prose that adds information (fields from `read_field`, an explanation) may sit outside the artifact; a second diagram, or a table that only restates the diagram's nodes and arrows, may not. If the tool fails, report the failure; do not draw a substitute by hand.
 
 ## Response handling: exit code is not enough
 
@@ -324,14 +331,16 @@ The typed Layer-1 tools return arrays too: `read_entity`,
 `read_module`, and the **`create_*` / `update_*` / `delete_*`** tools all
 emit `[{...}]`, not a bare object — and a bulk call (array `data`, array
 `id`) emits every affected record in that array. So `jq -r '.id'` on a
-`create_role` response fails with `Cannot index array with string` —
+`read_role` response fails with `Cannot index array with string` —
 index the array: `jq -r '.[0].id'`, or pass `--single` to get a bare
 object (single-record calls only; `--single` is rejected when `data` /
-`body` / `id` / `table_name` is an array). Better still, do **not** read
-a new row's `id` off its own create response at all: the echoed
-representation is not a dependable carrier of the id/natural key.
-Re-read by natural key after the create (one `in.(...)` read for a whole
-batch), so the array-vs-object shape never reaches your `jq`.
+`body` / `id` / `table_name` is an array).
+
+**Never read a new row's `id` off its own create response.** The echoed
+representation is not a dependable carrier of the id/natural key, and a
+position in a bulk response is not a mapping back to your input. Re-read
+by natural key after the create (one `in.(...)` read for a whole batch)
+and take the id from that read.
 
 There are **two ways** to read against `crud`. Pick the one that
 matches the intent of the call:

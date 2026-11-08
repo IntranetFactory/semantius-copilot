@@ -9,29 +9,30 @@ A build request means: create the module, its entities, fields, relationships, p
 1. The module with its entities, fields and relationships, modeled like the leading products when the domain is well known, and created in the order below.
 2. The module's permissions, permission hierarchy, roles and default-role wiring (`rbac.md`). They are part of every module, never an extra.
 3. Sample data, only after the user says yes (next section).
-4. One verification read of the new entities (see "Verify, then stop").
+4. Verification (see "Verify, then stop").
 5. The final response (see "Final response").
 
 ## Model it like the leading products
 
-When the request is similar to a well-known domain, the module follows how the leading products of that domain model it, not an invented shape. When it is not (a one-off internal process, a niche tool no product category covers), skip this section and model from the user's description. Before the first write:
+When the request is similar to a well-known domain, the module follows how that domain is actually modeled, not an invented shape. When it is not (a one-off internal process, a niche tool no product category covers), skip this section and model from the user's description. Before the first write:
 
-1. **Pick two or three leading products** for the domain (a SaaS management platform: Zylo, Flexera, Productiv; a service desk: ServiceNow, Jira Service Management; a CRM: Salesforce, HubSpot). Look up how they structure it; do not answer from memory when a search is available.
-2. **Take their shape:** the set of records, the fields a user expects on each, the lifecycle states, and the roles that use it. Keep what two or more of them agree on; skip what only one has unless the user needs it.
-3. **Name things their way.** Convert each followed product's record and field names with `vendor-names.ts` (`SKILL.md` → Reference Files), never by hand.
-4. **Build only what the user's goal needs.** The products are the benchmark for naming and structure, not a feature checklist. Leave out modules of theirs the request does not touch.
-5. **Say what you followed.** The final response names the products used as the reference and any deliberate difference.
+1. **Pick two or three leading products** for the domain (a SaaS management platform: Zylo, Flexera, Productiv; a service desk: ServiceNow, Jira Service Management; a CRM: Salesforce, HubSpot) and take their shape from what you know of the category: the set of records, the fields a user expects on each, the lifecycle states, and how the records relate. Do not search to confirm a shape you already hold. Search only when the domain is niche or vertical and your knowledge is thin, the category is newer than your knowledge, the user names a product to mirror, or the model depends on a regulated standard whose exact identifiers matter (control IDs, tax codes, statutory leave types; never invent these). When you search, make one pass per product, for its shape only (its API or data-model reference, not feature or pricing pages), and then stop.
+2. **Keep what the products agree on, plus the mechanism the user's goal turns on.** The mechanism is the one or two details that make the module better than a spreadsheet, even when only one product has it (a request to never miss a renewal needs a notice deadline computed from the auto-renew flag and the notice period). Skip what only one product has otherwise.
+3. **Name things by our rules,** not the products' (`data-modeling.md` → "Entity Naming Rules" and "Field Naming Rules"). A product's own names are used only when the user asks to follow them.
+4. **Build only what the user's goal needs.** The products are the benchmark for structure, not a feature checklist. Leave out modules of theirs the request does not touch.
+5. **Tell the user what you are building, then go on.** Two or three lines, shown before the first question and with no question of their own: what the module will contain (left out when the scope question follows, since that question lists the entities), whether its shape comes from your knowledge of the category or from a search, and the mechanism from step 2. Call a product verified only when a search in this session returned it; otherwise say the module follows common practice in the category. The final response repeats the mechanism and names the products used as the reference and any deliberate difference.
 
 Each field, entity and permission is then created under the rules that already govern it (`SKILL.md` → Quick Decision Guide); this file adds no second set of rules for them.
 
 ## Order of a build
 
-1. Outline the entities, after picking reference products when the domain is well known (above).
+1. Outline the entities, after taking the shape of the leading products when the domain is well known, and tell the user what you are building (above).
 2. Settle any choice locked at creation (next section).
 3. Confirm the scope, only when more than 4 entities are relevant (after that).
 4. Ask the sample-data question, with the exact total for the confirmed scope. Every question is asked on its own, one at a time, and the build waits for each answer.
-5. Create the module in the order of `data-modeling.md` → "Mandatory Creation Order": module, permissions, module wiring, permission hierarchy, roles, grants, default-role wiring, entities, fields.
-6. Seed the sample data, when the user said yes.
+5. Create the module in the order of `data-modeling.md` → "Mandatory Creation Order": module, permissions, module wiring, permission hierarchy, roles, grants, default-role wiring, entities, fields, `label_parent` where an entity has one.
+   Icons are checked before they are written: run `bun "<skill-folder>/references/lucide-icon-checker.ts" <names>` (it must exit 0) before the write that carries them. The module's own `icon_name` is checked before `create_module`; every enum and field icon is checked together, in one call, before the first `create_field`. An enum entry takes its icon from the "Enum icons" table (`data-modeling.md` → "Enum values and labels"), any other icon from `lucide-icon-finder.ts`, never from memory (`data-modeling.md` → "Icons are Lucide icons").
+6. Seed the sample data, when the user said yes, as `seed-data.md` says.
 7. Verify, then answer (below).
 
 No write happens before step 5.
@@ -78,6 +79,8 @@ Consent rules. Sample data is never written without an explicit yes to this ques
 | People rosters | at most 10 |
 
 - Five parents give 15 to 20 children, not one child per real-world item. A 500-seat company still gets about 20 rows.
+- A parent's stored figure that its children itemize stays at the scale of the seeded rows, between their number and twice it: 3 to 6 seats purchased over 3 seat rows, never 120 (`assertItemized`, before the first write).
+- Parents get different numbers of children (1 to 5), not exactly 3 each: a rollup that counts them would be identical on every parent and halt the seed (`seed-data.md` → "Rows that read as records").
 - A larger dataset is created only when the user names a row count or asks for volume testing (a company size such as "500 people" is not a row count); state the number in the question.
 - Realistic labels, not hundreds of synthetic records. Spread every enum across its values, vary names, companies and cities; a column that repeats one value on every row reads as a defect.
 
@@ -85,20 +88,22 @@ Which tables get rows:
 
 - Only entities this build created. Never write sample rows into an existing entity.
 - Never into built-in tables: `users`, `roles`, `permissions`, `permission_hierarchy`, `role_permissions`, `user_roles`, `modules`, `entities`, `fields`, `webhook_receivers`, `webhook_receiver_logs`. Sample users cannot sign in and pollute the audit trail.
-- A required relationship into an existing entity takes a real id read from that entity (`GET /users?select=id&limit=20`), never an invented record. When it has no rows, skip the field if it is optional, or seed fewer rows with a stated reason.
+- A required relationship into an existing entity takes a real record read from that entity (`GET /users?select=id,<label column>&limit=20`): a child uses a chosen row's own `id` and names that row's label, never a bare list of ids and never an invented record. When it has no rows, skip the field if it is optional, or seed fewer rows with a stated reason.
 
-How to write them:
+How to write them: read `seed-data.md` and follow it. In short:
 
-- Parents first, children after; take each parent's `id` from the insert response. An entity whose key type is `bigint` or `text` needs an `id` on every row.
-- One `postgrestRequest` POST per table with an array `body` (Golden Rule 7). Rows in one array carry the same keys.
-- No probe or test inserts. If a row violates a rule, fix the row, not the rule.
+- One seed script, built on `seed-lib.ts`, is the only write path: a check run (`--check`) first, then the real run, one POST per table (Golden Rule 7). No probe or test inserts. If a row violates a rule, fix the row, not the rule.
+- Parents first, children after. A child names its parent by label and the script looks the id up by that label (`idsByKey`). Never type an id, map by array position or take an id from an insert response. `assertParents` reads every child back with its `<fk>_label` and halts on a wrong parent.
+- A row's state is decided first; its dates and notes follow from it. A terminal state never carries an ongoing note ("seat still billing").
+- Every `computed` and `rollup` column of a seeded table is read back at the very end of the script (`assertComputedVary`): one value on every row halts the run. Such a column never goes in a row and is never patched.
+- An entity whose key type is `bigint` or `text` needs an `id` on every row.
 
 ## Verify, then stop
 
-After the build, verify once. The check catches the mistakes that matter: an entity left `unclassified` or a missing permission.
+After the build, verify once. The checks catch the mistakes that matter: an entity left `unclassified`, a missing permission, a seeded child that names the wrong parent, a figure out of scale with its child rows, and a computed column with one value on every row.
 
 - **The module's entities:** one `read_entity` for all of them with `entity_type`, `view_permission` and `edit_permission` (`data-modeling.md` → "Agent Workflow Tips" → "Verify the class and the permissions after creating entities"). Fix what it shows and read again.
-- **Only when sample data was seeded:** the row count per table, and with rollups one parent row to show the computed values. An empty module has no rows to check.
+- **Only when sample data was seeded:** the output of the real run. It ends `Seed finished: <n> write call(s) applied with no errors.`, shows every table at its count and a `✓ <table>.<fk>: all <n> row(s) name the intended parent` line for each child table that holds a relationship (`… name the intended parents` for a connecting record) and a `✓ <table>.<column>: <n> distinct value(s)` line for each computed or rollup column; with rollups, also one parent row to show the computed values. A run that ends `CHECK RUN passed`, `SEED HALTED` or `Clear finished`, or that lacks one of those lines, is not verified: fix the cause and run it again. Two cases need no distinct-value line: a one-row table, which prints `one row, so … cannot be compared`, and a column left out as constant by design (`seed-data.md` → "Computed and rollup columns"), which the final response names. An empty module has no rows to check.
 
 Then stop adding value.
 
@@ -116,8 +121,8 @@ When the user did ask for one, produce exactly that, with the built-in tool (`SK
 
 ## Final response
 
-- One line: what was built, and, when the module follows leading products, which ones (with any deliberate difference).
+- One line: what was built, the mechanism the user's goal turned on, and, when the module follows leading products, which ones (with any deliberate difference), saying a search verified them only when one did.
 - The UI links: the module (`{ui_baseurl}/{module_slug}`), then each entity list (`{ui_baseurl}/{module_slug}/{table_name}`). Take `ui_baseurl` from `getCurrentUser`, never hardcode the host (`SKILL.md` → "Linking to the web UI").
-- When sample data was seeded: one line with the row counts per table.
+- When sample data was seeded: one line with the row counts per table, naming any computed or rollup column left out of the check as constant by design.
 - Two or three next steps, including any entities left out of the confirmed scope, such as "Add your first record", "Import a CSV", "Assign roles", "Ask me for a reminder when you want one".
 - No "what the data says" section, unless the user asked for analytics.

@@ -5,7 +5,7 @@
   "models": [
     //"z-ai/glm-5.3-flash",
     //"z-ai/glm-5.3",
-    "deepseek/deepseek-v4.1-flash-1017",
+    //"deepseek/deepseek-v4.1-flash-1017",
     "deepseek/deepseek-v4.1-flash-1017@max",
     //"openai/gpt-6-luna",
     //"openai/gpt-6-luna@xhigh",

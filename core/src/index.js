@@ -25,6 +25,7 @@ export {
   requestEntryFromTurn,
   reconcileWithResponseUsage,
   addLlmRequests,
+  responseActiveMs,
   ZERO_LLM_TOTALS,
   roundUsd,
 } from './llm-usage.js';

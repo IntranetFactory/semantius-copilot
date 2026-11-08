@@ -236,6 +236,8 @@ semantius call crud create_role_permission '{
 }'
 ```
 
+The three role ids come from one `read_role` with `"filters": "slug=in.(crm_viewer,crm_manager,crm_admin)"`, matched by `slug`, never by the position of a row in the `create_role` response.
+
 ### 5. Assign Roles to Users
 
 ```bash

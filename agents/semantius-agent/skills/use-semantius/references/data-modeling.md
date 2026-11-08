@@ -17,8 +17,8 @@ This file covers the schema mechanics: modules, entities, fields, relationships,
 - [Mandatory Creation Order](#mandatory-creation-order)
 - [Modules](#modules)
 - [Entities](#entities): naming, built-ins, key fields, auto-generated fields, provenance columns
-- [Fields](#fields): formats, `width`, `input_type`, `unique_value`, `default_value`, `cube_type`, all properties
-- [Relationships](#relationships): `reference`, `parent`, junctions, cross-module references
+- [Fields](#fields): naming, formats, `width`, `input_type`, `unique_value`, `default_value`, `cube_type`, all properties
+- [Relationships](#relationships): relationship labels, `reference`, `parent`, junctions, cross-module references
 - [Safe Evolution Patterns](#safe-evolution-patterns)
 - [Updating and Deleting Entities](#updating-and-deleting-entities)
 - [Agent Workflow Tips](#agent-workflow-tips): including full-text search
@@ -34,15 +34,15 @@ This section is the single source for the creation order. Other files point here
 **Always follow this sequence, never skip steps:**
 
 ```
-Module → Permissions (one call) → update_module (wire permission refs) → Permission hierarchy (one call) → Roles (one call) → Role grants (one call) → update_module (default roles) → ALL Entities (one call; one per level, bases first, with is_a / has_a) → Fields (one call per entity)
+Module → Permissions (one call) → update_module (wire permission refs) → Permission hierarchy (one call) → Roles (one call) → Role grants (one call) → update_module (default roles) → ALL Entities (one call; one per level, bases first, with is_a / has_a) → Fields (one call per entity) → update_entity (label_parent, where an entity has one)
 ```
 
-**Batch every step that writes more than one record of a kind** (Golden Rule 7): both baseline permissions in one `create_permission`, every entity of the model in one `create_entity`, all of an entity's fields in one `create_field`. `data` is an array on every `create_*`; items may have different keys; the response is an array. And **create every entity before any field**: a field's `reference_table` (another entity of the model, or the entity itself) must exist when the field is created, which the entities-first order guarantees — no second pass for cross-references or self-references.
+**Batch every step that writes more than one record of a kind** (Golden Rule 7): both baseline permissions in one `create_permission`, every entity of the model in one `create_entity`, all of an entity's fields in one `create_field`. `data` is an array on every `create_*`; items may have different keys; the response is an array. And **create every entity before any field**: a field's `reference_table` (another entity of the model, or the entity itself) must exist when the field is created, which the entities-first order guarantees — no second pass for cross-references or self-references. `label_parent` is written after the fields (step 8), because the platform checks that the field it names exists.
 
 **Exception: a model with `is_a` / `has_a` entities** creates its entities in **one `create_entity` call per level, bases first**: plain entities and family roots first, then the entities based on them, and so on. The fields still come only after every level exists. A based entity named before its base fails with `23503`. Full rules: `entity-families.md`.
 <!-- Family variant: `entity-families.md` → "Creating a family". This block summarizes; that section governs families. -->
 
-1. **Resolve/create module**, `read_module`, then `create_module` if needed. (Chicken-and-egg: the module's `view_permission` / `manage_permission` are FKs to `permissions.permission_name`, and each request is its own transaction, so they must name permissions that already exist when `create_module` runs. Create the module with the default `user:read` (or no permission reference at all) and wire its own permissions back in step 3.)
+1. **Resolve/create module**, `read_module`, then `create_module` if needed (its `icon_name`, if set, passes `lucide-icon-checker.ts` first; see "Icons are Lucide icons"). The module's id for the later steps comes from `read_module` by `module_slug`, never from the `create_module` response. (Chicken-and-egg: the module's `view_permission` / `manage_permission` are FKs to `permissions.permission_name`, and each request is its own transaction, so they must name permissions that already exist when `create_module` runs. Create the module with the default `user:read` (or no permission reference at all) and wire its own permissions back in step 3.)
 2. **Resolve/create permissions**, one `read_permission` with `permission_name=in.(<slug>:read,<slug>:manage,<slug>:admin)`, then one `create_permission` call carrying the missing ones. A hand-built module has all three: `catalog` entities are written at the admin level (see "Classifying an entity" below and `rbac.md` → "Choosing an entity's permissions")
 3. **Wire the module's permission references with `update_module`.** `create_module` leaves `view_permission` at the platform default (`user:read`) and `manage_permission` / `admin_permission` null, and `access_scope` at `custom`. Once the permissions exist, point the module at them and set `access_scope` to `advanced` (view, edit and admin), or `gated` when the module has a restricted step (`rbac.md` → "Restricted steps (gates)") — skip this and the module header shows `user:read` and the manage/admin pickers are empty:
    ```bash
@@ -52,7 +52,11 @@ Module → Permissions (one call) → update_module (wire permission refs) → P
 4. **Create the permission hierarchy**, one `create_permission_hierarchy` call: `<slug>:manage` includes `<slug>:read`, and `<slug>:admin` includes `<slug>:manage` (`rbac.md` → "Set Up Permission Hierarchy").
 5. **Create the roles and their grants**, one `create_role` call (viewer, manager and admin, each with `module_id`), then one `create_role_permission` call, then `update_module` to set `default_viewer_role_id` / `default_manager_role_id` / `default_admin_role_id` with ids from `read_role` (`rbac.md` → "Create Roles", "Grant Permissions to Roles").
 6. **Create the entities**, one `create_entity` call whose `data` array carries every entity of the model (each with `module_id`, `entity_type`, `view_permission` and `edit_permission`; classify first, see "Classifying an entity" below); one `read_entity` with `table_name=in.(...)` first. Every item carries `entity_type`, `view_permission` and (except on `computed`) `edit_permission`, chosen together from the entity's class and write tier: the platform default `unclassified` is a defect, not a class. Classify without asking, state the result in the summary, and check it with the read-back in "Agent Workflow Tips" → "Verify the class and the permissions after creating entities" (`rbac.md` → "Choosing an entity's permissions" gives the tiers). With `is_a` / `has_a` entities, one call per level instead, bases first (see the exception above).
-7. **Add fields**, per entity, one `create_field` call whose `data` array carries every domain attribute of that entity (not the auto-generated ones); the FK targets all exist by now
+7. **Add fields**, per entity, one `create_field` call whose `data` array carries every domain attribute of that entity (not the auto-generated ones); the FK targets all exist by now. Icons first: every enum and field icon goes through `lucide-icon-checker.ts` in one call before the first `create_field` (see "Icons are Lucide icons")
+8. **Set `label_parent`**, only on an entity whose records are identified through a parent (see `label_parent` under "Key Entity Fields") and never on a junction, with `update_entity` once its fields exist. `create_entity` cannot carry it: the field it names does not exist yet, and the write fails with `90226`. `update_entity` applies one `data` to every listed table, so each different field name is its own call:
+   ```bash
+   semantius call crud update_entity '{"table_name": "order_lines", "data": {"label_parent": "order_id"}}'
+   ```
 
 ---
 
@@ -163,6 +167,7 @@ Classify from the entity's purpose, not its name: a `budget` is an `operational_
 ### Entity Naming Rules
 
 - **`table_name` is always plural snake_case**, `products`, `orders`, `order_lines`, not `product`, `order`, `orderLine`
+- **Name the concept in full.** A singular noun that explains itself; `table_name` is its plural. `support_request` → `support_requests`, `sales_opportunity` → `sales_opportunities`, not `ticket` or `opp`.
 - **Never end a `table_name` in `_ext`.** `<table_name>_ext` is the storage table of an `is_a` / `has_a` entity, so the platform reserves it (`90250`); see `entity-families.md`.
 - **Never create a `users` entity**, Semantius has a built-in `users` table. Any module that needs to reference users must use `reference_table: "users"` pointing at the existing table. Creating a competing `users` or `user` entity will conflict with the built-in table and break authentication.
 
@@ -264,7 +269,7 @@ Platform meta-schema. **Never declare in a domain model.** The deployer manages 
 | `edit_mode` | Optional. Controls how records open for editing: `auto` (default, system decides), `sidebar`, `modal`, or `page`. Set only when the user has a specific UX requirement. |
 | `cube_mode` | Optional. OLAP cube generation: `auto` (default, include in cube) or `disabled`. Set to `disabled` to exclude the entity from cube queries. |
 | `audit_log` | Optional boolean, default `false`. When `true`, every INSERT / UPDATE / DELETE on this entity is recorded by the platform. Enable on entities where change history matters (contracts, financial records, policy data); leave off for high-volume or ephemeral data where audit noise outweighs the value. |
-| `label_parent` | Optional. Names the **one** FK field that is this entity's identity spine — the parent whose composed `_label` prefixes this record's `_label`. Must name a `reference`/`parent` FK; must **not** target a junction and must **not** be set on a junction or on an `is_a` / `has_a` entity (it comes from the base: overwritten on create, an update is refused with `90242`). Omit for self-identifying records (then `_label` is just the local label). A spec carries it and a deploy stamps it. |
+| `label_parent` | Optional. Names the **one** FK field that is this entity's identity spine — the parent whose composed `_label` prefixes this record's `_label`. Must name a `reference`/`parent` FK; must **not** reference its own entity (`90228`), must **not** target a junction and must **not** be set on a junction or on an `is_a` / `has_a` entity (it comes from the base: overwritten on create, an update is refused with `90242`). Omit for self-identifying records (then `_label` is just the local label). Never on `create_entity`: set it with `update_entity` after the fields exist ("Mandatory Creation Order", step 8). |
 
 ### Auto-Generated Fields: NEVER Create These Manually
 
@@ -352,6 +357,14 @@ or removing a rule is medium-risk.
 ## Fields
 
 > ⚠️ **The #1 field-creation trap: there is no `required` column.** To make a field mandatory, set **`input_type: "required"`** — never `"required": true`. To make it unique, set **`unique_value: true`**. Sending a `required` key to `create_field` fails: the live tool schema has no such field (confirm any time with `semantius tools crud create_field`). Likewise **never send `is_nullable`** — the platform computes nullability from `format`. These are the most common "wrote it from memory" errors; the rest of this section gives the full property list.
+
+### Field Naming Rules
+
+- **snake_case, descriptive, no abbreviations:** `customer_email_address`, not `cust_email`.
+- **Include the noun the field describes:** `invoice_total_amount`, not `total`.
+- **A field that holds a relationship is `<target_singular>_id`:** `account_id`, `assigned_user_id`, `parent_case_id`.
+- **Fixed names win:** the lifecycle state field is `workflow_state` (see `default_value` below); reserved names are in the 🛑 note under "Field Format Quick Reference".
+- **Only when the user asks to follow a product's names** (to move data to and from it): spell each name the way the product does and convert it with `vendor-names.ts` (`SKILL.md` → Reference Files), never by hand. When your knowledge of the product falls short, read its own API or data-export reference, and use only names those pages confirm.
 
 ### Field Format Quick Reference
 
@@ -632,9 +645,9 @@ Three separate `create_field` calls for the three fields would be three round tr
 | `default_value` | string | Override for the platform's auto-default. Only set when the auto-default is wrong for the domain. See `### default_value` above for the auto-default table per format. Stored as text: a number or boolean is converted (`1` → `"1"`, `true` → `"true"`), a JSON array or object to its JSON (`{}` → `"{}"`). |
 | `reference_table` | string | Target entity's `table_name` for `reference`/`parent` fields |
 | `reference_delete_mode` | string | `restrict`, `clear`, or `cascade`. On an `is_a` entity never `cascade` (`90249`): set `restrict` or `clear` explicitly, on `parent` fields too. |
-| `relationship_label` | string | Optional verb describing the relationship (e.g. `"employs"`, `"contains"`). Applies to `reference` and `parent` fields. Used as the diagram edge label in ER diagrams and in navigation breadcrumbs. Always optional, omit when the direction is obvious from the field name. |
-| `singular_label_parent` | string | Optional override for the parent entity's singular label, used by `parent` fields only. Useful when one entity has multiple `parent` fields pointing at the same table (e.g. `billing_address_id` vs `shipping_address_id`, both → `addresses`) and the default labels are ambiguous. |
-| `plural_label_parent` | string | Optional override for the parent entity's plural label, used by `parent` fields only. Pair with `singular_label_parent`. |
+| `relationship_label` | string | Verb for the relationship, set on every `reference` and `parent` field in the same `create_field` call that creates it; omitted, the platform writes `has`. Read it as `<Referenced Entity> <label> <Holding Entity>` (e.g. `"employs"` on `employees.department_id`). Used as the arrow label in module diagrams and in navigation labels. See "Relationship labels". |
+| `singular_label_parent` | string | `parent` fields only. The noun in the add button of this field's child list on the parent's page: `"Permission"` gives "Add Permission". |
+| `plural_label_parent` | string | `parent` fields only. The title of the button on the parent's page that opens this field's child list: `"Permissions"` gives "Permissions…". Empty, the button uses the child entity's plural label (an Entity page shows "Fields…"). Set the pair on every junction leg, and when one child has two or more `parent` fields to the same parent. See "Relationship labels". |
 | `cube_type` | string | OLAP cube participation: `disabled`, `auto` (default), `dimension`, `measure`. See `### cube_type Values` above. |
 | `catalog_field_code` | string | Core provenance column: stable design-time field identity (the blueprint field name, e.g. `status`), the field-rename join key. Write-once: set on create or filled once while empty, then never changed. Empty = not generated from a catalog spec. See "Platform provenance / meta columns" above. |
 
@@ -661,6 +674,16 @@ The platform manages nullability from the format; there is no `is_nullable` flag
 | Lifecycle-bound child with divergent permission scope, accepting that deleting the parent deletes the child without the child's own permission check (high-risk) — overrides the two rows above | `parent` | `cascade` |
 
 **Divergent-permission-scope rule.** This is the rare case: most children share their parent's permissions, and `parent` + `cascade` is right. A cascade deletes the children without checking the child's own delete permission (a Postgres referential action does not apply row-level security); `restrict` refuses the parent's deletion while any child exists, so each child is removed first through its own delete permission. When a child has its own conditional permission gate (a `validation_rules` rule whose JsonLogic invokes `has_permission` or `require_permission` (see `jsonlogic.md`) against a workflow permission that the parent does not require, or a §3 `**Edit permission:**` annotation that differs from the parent's tier), keep `format: parent` and set `reference_delete_mode: restrict` (recommended for audit-logged decision evidence like scorecards or signed offers). Use `cascade` only when the user explicitly accepts that deleting the parent deletes the child without that check. `clear` never works on a `parent`: the column is NOT NULL, so every delete of the parent would fail. A child that must survive its parent is not a `parent`: use `reference` with `clear` (first row). Never change a `parent` to a `reference` to protect the child's permissions; that makes the field optional and removes it from the parent's child listing. A junction is the exception: every leg stays `parent`, including a leg to an entity another module owns, because a junction row is only a relationship and its permission comes from the module that created it.
+
+### Relationship labels
+
+Set `relationship_label` on every `reference` and `parent` field, in the same `create_field` call that creates the field. A field created without one gets `has`, and a module whose arrows all read `has` shows nothing about its relationships.
+
+- **Voice.** The referenced entity speaks. Read the label as `<Referenced Entity> <label> <Holding Entity>`, the direction of the arrow in the module diagram: `accounts` → `opportunities` is `owns`, `users` → `tasks` (the owner) is `manages`. A sentence that does not parse means the label is written from the wrong side.
+- **Specific verbs.** `has`, `references`, `belongs to` and `relates to` add nothing; use a domain verb such as `owns`, `employs` or `supports`. A self-reference takes `parent of`, `manages` or `reports to`.
+- **One verb per field.** Fields from one entity to the same entity take different verbs: `tasks.creator_id` → `users` is `created`, `tasks.assignee_id` → `users` is `assigned`.
+- **Junction legs.** Read the label through the junction to the other end, and set `singular_label_parent` and `plural_label_parent` to the other end's name. On `product_tags`, `product_id` is `is tagged with` with `Tag` / `Tags`, so the Product page shows "Tags…" and "Add Tag"; `tag_id` is `applied to` with `Product` / `Products`.
+- **Same parent twice.** When one child has two or more `parent` fields to the same parent, give each its own pair, or the parent's page shows two identical buttons. `permission_hierarchy` does this with `Includes` and `Included in`.
 
 ### `reference`: Cross-Entity Relationship (Independent Lifecycle)
 
@@ -712,10 +735,10 @@ Create a junction entity and add a `parent` field for **each** leg (two for a bi
 # Create junction entity (products and tags already exist — entities before fields)
 semantius call crud create_entity '{"data": {"table_name": "product_tags", "entity_type": "junction", ...}}'
 
-# Both parent legs in ONE create_field call
+# Both parent legs in ONE create_field call; each leg is labeled through to the other end
 semantius call crud create_field '{"data": [
-  {"table_name": "product_tags", "field_name": "product_id", "format": "parent", "reference_table": "products", "reference_delete_mode": "cascade", "width": "default", "input_type": "default"},
-  {"table_name": "product_tags", "field_name": "tag_id", "format": "parent", "reference_table": "tags", "reference_delete_mode": "cascade", "width": "default", "input_type": "default"}
+  {"table_name": "product_tags", "field_name": "product_id", "format": "parent", "reference_table": "products", "reference_delete_mode": "cascade", "relationship_label": "is tagged with", "singular_label_parent": "Tag", "plural_label_parent": "Tags", "width": "default", "input_type": "default"},
+  {"table_name": "product_tags", "field_name": "tag_id", "format": "parent", "reference_table": "tags", "reference_delete_mode": "cascade", "relationship_label": "applied to", "singular_label_parent": "Product", "plural_label_parent": "Products", "width": "default", "input_type": "default"}
 ]}'
 ```
 

@@ -90,22 +90,23 @@ export function parseQuestions(input: unknown): AskUserQuestionItem[] | null {
 const INLINE_FORMAT = /\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|(?<![\w])_(.+?)_(?![\w])/g;
 
 /** Turn the model's inline markdown into `<strong>`/`<em>` elements (nesting
- * supported). Built as React nodes rather than HTML strings, so model text can
+ * supported; `stripBold` for text that is already bold). Built as React nodes rather than HTML strings, so model text can
  * never inject markup. Display only: answers are still keyed by the raw text. */
-function renderInline(text: string): ReactNode[] {
+function renderInline(text: string, { stripBold = false } = {}): ReactNode[] {
   const nodes: ReactNode[] = [];
   let last = 0;
   for (const match of text.matchAll(INLINE_FORMAT)) {
     const start = match.index ?? 0;
     if (start > last) nodes.push(text.slice(last, start));
     const bold = match[1] ?? match[2];
-    nodes.push(
-      bold !== undefined ? (
-        <strong key={start}>{renderInline(bold)}</strong>
-      ) : (
-        <em key={start}>{renderInline(match[3] ?? match[4])}</em>
-      ),
-    );
+    if (bold !== undefined) {
+      // Already-bold context (the question): drop the markers, keep the text.
+      nodes.push(
+        stripBold ? <span key={start}>{renderInline(bold, { stripBold })}</span> : <strong key={start}>{renderInline(bold)}</strong>,
+      );
+    } else {
+      nodes.push(<em key={start}>{renderInline(match[3] ?? match[4], { stripBold })}</em>);
+    }
     last = start + match[0].length;
   }
   if (last < text.length) nodes.push(text.slice(last));
@@ -249,7 +250,7 @@ export function AskUserQuestionCard({
         ) : null}
 
         <div className="flex flex-col gap-2 p-3">
-          <p className="text-sm">{renderInline(question.question)}</p>
+          <p className="font-medium text-sm">{renderInline(question.question, { stripBold: true })}</p>
           {question.multiSelect ? (
             <p className="-mt-1 text-muted-foreground text-xs">Select all that apply.</p>
           ) : null}

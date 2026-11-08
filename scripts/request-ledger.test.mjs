@@ -142,6 +142,22 @@ const entry = (i, extra = {}) => ({ at: new Date(Date.UTC(2026, 9, 28, 12, 0, i)
   );
   const gone = await readCollectionRecord('sessions', 's-gone', deps);
   check('admin read: ledger still served after the session record expired', gone?.session?.requests_total?.requests_count === 1);
+  check(
+    'admin read: no session timer (record predates it, or expired) -> requests_total has no active_ms, not 0',
+    !('active_ms' in live.session.requests_total) && !('active_ms' in gone.session.requests_total),
+    j(live.session.requests_total),
+  );
+  kvData.set('session:s-timed', JSON.stringify({ id: 's-timed', session_state: { active_ms: 12500, responses_count: 2 } }));
+  kvData.set(requestsKey('s-timed'), JSON.stringify({ 'gen-1': entry(1) }));
+  const timed = await readCollectionRecord('sessions', 's-timed', deps);
+  check(
+    'admin read: requests_total.active_ms is the session timer, beside the ledger sums',
+    timed?.session?.requests_total?.active_ms === 12500 && timed.session.requests_total.requests_count === 1,
+    j(timed?.session?.requests_total),
+  );
+  kvData.set('session:s-zero', JSON.stringify({ id: 's-zero', session_state: { active_ms: 0 } }));
+  kvData.set(requestsKey('s-zero'), JSON.stringify({ 'gen-1': entry(1) }));
+  check('admin read: a timer that reads 0 is reported as 0', (await readCollectionRecord('sessions', 's-zero', deps))?.session?.requests_total?.active_ms === 0);
   check('admin read: neither record nor ledger -> not found', (await readCollectionRecord('sessions', 's-none', deps)) === null);
 }
 

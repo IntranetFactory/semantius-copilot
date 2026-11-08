@@ -7,14 +7,23 @@
   // clicked; closing it is remembered per agent + `display` in the browser, so
   // re-wording a `display` gives its tip one more airing.
   "title": "Welcome to the Semantius Agent",
-  "subtitle": "I help you with your Semantius data platform: your records, the entities and modules that hold them, and who can use them. Where a prompt says [blank], I'll ask you which one.",
+  "subtitle": "I help you with everything on your Semantius data platform: your records, the entities and modules that hold them, who can use them, and whole new business systems. Where a prompt says [blank], I'll ask you which one.",
   "sections": [
     {
       "title": "Modules",
       "subtitle": "A module groups the entities, permissions and roles of one system",
-      "prompts": [       
+      "prompts": [
+        {
+          "display": "Design and build a new module",
+          "prompt": "Build a new system on Semantius for ",
+          "prefill": true,
+          "hint": "Finish the sentence in a few words, such as \"handling customer support tickets\". I'll interview you for the rest. Looking for ideas? Browse the [system templates](https://www.semantius.com/templates) and press **Run** on one to build it with me."
+        },
         {
           "display": "What modules are installed?"
+        },
+        {
+          "display": "Show me a diagram of module [blank]"
         }
       ]
     },

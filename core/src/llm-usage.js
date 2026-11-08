@@ -214,6 +214,22 @@ export function reconcileWithResponseUsage(rows, responseUsage, at = new Date())
   return [...rows, { at: at.toISOString(), purpose: 'unobserved', ...gap }];
 }
 
+/**
+ * Milliseconds the server worked on ONE response: the start hook's timestamp
+ * to the finish hook's. A response ends when the agent stops, so the time a
+ * session waits for the user (between responses, an `AskUserQuestion` pause
+ * included) is never inside it. `startedAt` comes from the response metadata
+ * (`useResponseStart`); a response that began before that hook existed has
+ * none, and its duration is unknown — 0, never a guess.
+ *
+ * @param {unknown} startedAt epoch ms
+ * @param {number} [finishedAt] epoch ms
+ */
+export function responseActiveMs(startedAt, finishedAt = Date.now()) {
+  if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return 0;
+  return Math.max(0, Math.round(finishedAt - startedAt));
+}
+
 /** The running totals every row feeds. Shape of the persisted `session_state` slice. */
 export const ZERO_LLM_TOTALS = Object.freeze({
   input_tokens: 0,

@@ -43,6 +43,7 @@ import {
   useModel,
   usePersistentState,
   useResponseFinish,
+  useResponseStart,
   useSandbox,
   useSkill,
   useTool,
@@ -59,6 +60,7 @@ import {
   provisionSemantiusEnv,
   readSession,
   reconcileWithResponseUsage,
+  responseActiveMs,
   resolveSandboxBinding,
   sandboxNameForSession,
   skillCatalogFromBundle,
@@ -254,6 +256,13 @@ type SessionState = {
   tool_calls_count: number;
   llm_calls_count: number;
   responses_count: number;
+  /**
+   * Milliseconds the server worked: the sum over responses of start-to-finish
+   * time. Time waiting for the user falls between responses, so it is not in
+   * here. Only responses that started after the start hook existed are counted.
+   * Absent on sessions persisted before this field existed.
+   */
+  active_ms?: number;
   /** OpenRouter server-tool counters summed key-wise (`web_search_requests`,
    * ...; the agent's web_tools), from usage.server_tool_use via the pi-ai and
    * Flue patches. Absent until a response reports one. */
@@ -283,6 +292,7 @@ const ZERO_SESSION_STATE: SessionState = {
   tool_calls_count: 0,
   llm_calls_count: 0,
   responses_count: 0,
+  active_ms: 0,
 };
 
 /** Untrusted (client-supplied) seed -> AgentMeta, or null when unusable. */
@@ -438,9 +448,14 @@ export function Main({ id }: AgentProps) {
   const namespace = (env as unknown as Record<string, DurableObjectNamespace>)[active?.binding ?? 'Sandbox'];
 
   const [, setSessionState] = usePersistentState<SessionState>('sessionState', ZERO_SESSION_STATE);
-  useResponseFinish(({ response }) => {
+  // Response timer for session_state.active_ms: the start hook stamps the
+  // response metadata (read back from the durable record log at finish, so it
+  // survives a re-attempt — the time a restart took then counts as worked).
+  useResponseStart(() => ({ started_at: Date.now() }));
+  useResponseFinish(({ metadata, response }) => {
     const { usage } = response;
     const llmRequests = reconcileWithResponseUsage(drainLlmRequests(id), usage);
+    const durationMs = responseActiveMs(metadata.started_at);
     let next = ZERO_SESSION_STATE;
     // Not on Flue's PromptUsage type — added by the Flue patch when present.
     const serverToolUse = (usage as { serverToolUse?: unknown }).serverToolUse;
@@ -451,6 +466,7 @@ export function Main({ id }: AgentProps) {
           tool_calls_count: prev.tool_calls_count + response.toolCalls.length,
           // ?? 0: sessions persisted before this field existed.
           responses_count: (prev.responses_count ?? 0) + 1,
+          active_ms: (prev.active_ms ?? 0) + durationMs,
           ...(prev.server_tool_use || serverToolUse
             ? { server_tool_use: addServerToolUse(prev.server_tool_use, serverToolUse) }
             : {}),
@@ -482,6 +498,7 @@ export function Main({ id }: AgentProps) {
     return {
       session_state: next,
       usage,
+      duration_ms: durationMs,
       ...(modelEntry ? { model: modelAlias(modelEntry.name) } : {}),
     };
   });

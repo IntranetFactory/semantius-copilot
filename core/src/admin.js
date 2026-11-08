@@ -397,12 +397,17 @@ export async function readCollectionRecord(collectionId, recordId, deps) {
     ]);
     if (!session && ledgerRaw === null) return null;
     const requests = parseLedger(ledgerRaw);
+    // active_ms is the agent's own response timer (session_state), not a sum
+    // over ledger rows: the ledger holds model calls, which miss tool and
+    // sandbox time. Omitted — not 0 — when the session record is gone or
+    // predates the timer, so "unknown" never reads as "no work".
+    const activeMs = session?.session_state?.active_ms;
     return {
       kind: 'session',
       id: recordId,
       session: {
         ...(session ?? { id: recordId, session_record: 'expired or deleted; only the request ledger remains' }),
-        requests_total: summarizeRequests(requests),
+        requests_total: { ...summarizeRequests(requests), ...(typeof activeMs === 'number' ? { active_ms: activeMs } : {}) },
         requests,
       },
     };
