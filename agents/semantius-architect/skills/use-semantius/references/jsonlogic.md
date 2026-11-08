@@ -544,7 +544,7 @@ semantius call crud create_entity '{
 }'
 ```
 
-Both arrays default to `[]` and may be omitted entirely. To remove a rule or recompute, send the full replacement array on `update_entity` — the platform replaces, not merges.
+Both arrays default to `[]` and may be omitted entirely. To add, change or remove a rule, or to recompute, read the current list with `read_entity` and send the full list on `update_entity` — the platform replaces, not merges.
 
 #### Out of scope
 

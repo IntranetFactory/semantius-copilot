@@ -26,11 +26,13 @@ Each field, entity and permission is then created under the rules that already g
 
 ## Order of a build
 
+`preflight.md` runs first (`SKILL.md` → "Environment Setup"). Steps 1 to 4 need only this file, plus `entity-families.md` when the outline contains such a case; read nothing else before them.
+
 1. Outline the entities, after taking the shape of the leading products when the domain is well known, and tell the user what you are building (above).
 2. Settle any choice locked at creation (next section).
 3. Confirm the scope, only when more than 4 entities are relevant (after that).
 4. Ask the sample-data question, with the exact total for the confirmed scope. Every question is asked on its own, one at a time, and the build waits for each answer.
-5. Create the module in the order of `data-modeling.md` → "Mandatory Creation Order": module, permissions, module wiring, permission hierarchy, roles, grants, default-role wiring, entities, fields, `label_parent` where an entity has one.
+5. Now read `data-modeling.md` and `rbac.md`, and any other reference whose condition in the Quick Decision Guide holds for the confirmed scope. Then create the module in the order of `data-modeling.md` → "Mandatory Creation Order": module, permissions, module wiring, permission hierarchy, roles, grants, default-role wiring, entities, fields, `label_parent` where an entity has one.
    Icons are checked before they are written: run `bun "<skill-folder>/references/lucide-icon-checker.ts" <names>` (it must exit 0) before the write that carries them. The module's own `icon_name` is checked before `create_module`; every enum and field icon is checked together, in one call, before the first `create_field`. An enum entry takes its icon from the "Enum icons" table (`data-modeling.md` → "Enum values and labels"), any other icon from `lucide-icon-finder.ts`, never from memory (`data-modeling.md` → "Icons are Lucide icons").
 6. Seed the sample data, when the user said yes, as `seed-data.md` says.
 7. Verify, then answer (below).
@@ -43,7 +45,7 @@ An `is_a` / `has_a` family, or a separate entity instead (`entity-families.md`),
 
 ## Confirm the scope when it is large
 
-When more than 4 entities are relevant, the user confirms the entity list before the first write. At 4 or fewer, build without this question.
+When more than 4 entities are relevant, the user confirms the entity list before the first write. At 4 or fewer, build without this question. Count every entity this build would create, including the base of an `is_a` / `has_a` family.
 
 - Put the list in the question as running text, the entities' plural labels separated by commas, with a short clause only for an entity whose purpose is not obvious. No bulleted list and no line per entity.
 - Options: build all of them, build only the core ones (name them in the question), or adjust the list.
@@ -54,7 +56,7 @@ When more than 4 entities are relevant, the user confirms the entity list before
 
 Ask it with `AskUserQuestion`, in the question format the preflight sets (`SKILL.md` → "Environment Setup"). The consent rules below hold in every format.
 
-Ask it as its own question, after the scope is settled and before the first write, and end the turn. Name the exact total for the confirmed scope.
+Ask it as its own question, after the scope is settled and before the first write, and end the turn. Name the exact total for the confirmed scope: the sum of the rows you plan for each table, counting each record of a family once.
 
 > Should I add a small demo dataset so you can review the module, or leave the tables empty for your real data?
 >
