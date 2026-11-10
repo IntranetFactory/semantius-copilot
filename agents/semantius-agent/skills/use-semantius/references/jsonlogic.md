@@ -121,14 +121,14 @@ The rule passes on INSERT (no prior row), passes when the prior status was anyth
   "jsonlogic": {
     "if": [
       { "==": [{ "var": "$mode" }, "delete"] },
-      { "has_permission": "sales:delete_orders" },
+      { "has_permission": "sales:delete_order" },
       true
     ]
   }
 }
 ```
 
-Inserts and updates pass untouched; a delete passes only for holders of `sales:delete_orders`, and anyone else gets the rule's `code` and `message`. For "the owner or a permission holder", replace the `has_permission` branch with `{"or": [{"==": [{"var": "$old.owner_user_id"}, {"var": "$user_id"}]}, {"has_permission": "sales:delete_orders"}]}`.
+Inserts and updates pass untouched; a delete passes only for holders of `sales:delete_order`, and anyone else gets the rule's `code` and `message`. For "the owner or a permission holder", replace the `has_permission` branch with `{"or": [{"==": [{"var": "$old.owner_user_id"}, {"var": "$user_id"}]}, {"has_permission": "sales:delete_order"}]}`.
 
 #### Platform-extension operators
 
@@ -479,7 +479,7 @@ Test a rule's logic before writing it to an entity with the `evaluate_json_logic
 
 ```bash
 semantius call crud postgrestRequest '{"method": "POST", "path": "/rpc/evaluate_json_logic", "body": {
-  "rule": {"if": [{"==": [{"var": "$mode"}, "delete"]}, {"has_permission": "sales:delete_orders"}, true]},
+  "rule": {"if": [{"==": [{"var": "$mode"}, "delete"]}, {"has_permission": "sales:delete_order"}, true]},
   "data": {"$mode": "delete", "status": "open", "$old": {"status": "open"}}
 }}'
 ```
@@ -487,11 +487,14 @@ semantius call crud postgrestRequest '{"method": "POST", "path": "/rpc/evaluate_
 - It prints the rule's result (`false` above for a caller without the permission); a truthy result means the write would pass. A throw comes back as the error the write would get, e.g. `(99000) <message>` or `(42501) Permission denied: ${permission} required`.
 - `data` is only what you send. No reserved variable is added, so include every one the rule reads: `$mode`, `$old`, `$today`, `$now`, `$user_id` (your own is `user_id` from `getCurrentUser`). For a DELETE, send the stored row as both the record and `$old`.
 - `has_permission` and `require_permission` check your own permissions, `set_record` reads real rows, and `value_changed` compares against the `$old` you pass.
+- Several cases, or a long rule: write a Bun script that sends each case over stdin (`cli-usage.md` → "Building a bulk payload in Bun"), so no shell parses the JSON. Test a rule that maps values on every combination of its inputs, and a rule that guards with `$mode` on the delete path too.
 
 #### Example: pass both on `create_entity`
 
-```bash
-semantius call crud create_entity '{
+`.tmp_deploy/features-entity.json`:
+
+```json
+{
   "data": {
     "table_name": "features",
     "singular_label": "Feature",
@@ -541,7 +544,11 @@ semantius call crud create_entity '{
       }
     ]
   }
-}'
+}
+```
+
+```bash
+bun "<skill-folder>/references/call-file.ts" create_entity .tmp_deploy/features-entity.json
 ```
 
 Both arrays default to `[]` and may be omitted entirely. To add, change or remove a rule, or to recompute, read the current list with `read_entity` and send the full list on `update_entity` — the platform replaces, not merges.
@@ -595,35 +602,40 @@ Every field carries an optional `input_type_rule` property: a JsonLogic object t
 
 When the current record's `workflow_state` is `approved`, the form renders `approved_at` as `readonly`; otherwise as the standard editable input.
 
-**Example — show `approved_at` only when workflow_state crosses into approved.** The classic "housekeeping field appears at the right moment" pattern: `approved_at` starts hidden, surfaces as a required input once the user is moving the record into `approved`, and locks to readonly after the record is saved approved:
+**Example — show a field only in one state and require it there.** `sold_date` and `sale_price` stay hidden until the record is sold, then become required. The form re-evaluates the rule after each change, so choosing the state shows the fields before the record is saved. Both fields keep the static `input_type` `default`, and each carries this rule:
 
 ```json
 {
   "if": [
-    { "==": [{ "var": "workflow_state" }, "approved"] },
-    "readonly",
+    { "==": [{ "var": "workflow_state" }, "sold"] },
+    "required",
     "hidden"
   ]
 }
 ```
 
-If you need a third state ("required while transitioning"), nest:
+The rule only shapes the form, so the entity also carries a validation rule that refuses the state without the values. What counts as empty depends on the format (`data-modeling.md` → "Fields that apply only to some enum or boolean values"): here a `date` is `null` and a `number` is `0`. The `$mode` guard keeps a record written before the rule deletable:
 
 ```json
 {
-  "if": [
-    { "==": [{ "var": "workflow_state" }, "approved"] },
-    "readonly",
-    { "if": [
-      { "==": [{ "var": "$old.workflow_state" }, "approved"] },
-      "readonly",
-      "hidden"
-    ]}
-  ]
+  "code": "99010",
+  "name": "sold_needs_date_and_price",
+  "message": "A sold record needs a sold date and a sale price.",
+  "jsonlogic": {
+    "if": [
+      { "and": [
+        { "!=": [{ "var": "$mode" }, "delete"] },
+        { "==": [{ "var": "workflow_state" }, "sold"] }
+      ]},
+      { "and": [
+        { "!=": [{ "var": "sold_date" }, null] },
+        { "!=": [{ "var": "sale_price" }, 0] }
+      ]},
+      true
+    ]
+  }
 }
 ```
-
-Be aware that `$old` is not reliably available in the client-side render context per the contract above; if the form library does supply it, the pattern works, otherwise prefer a simpler two-state rule (`approved` → `readonly`, else `hidden`) and let `validation_rules` enforce "must be set on the approve transition" server-side.
 
 **Setting and removing.** Pass `input_type_rule` on `create_field` or `update_field` under `data`. Sending `{}` removes the rule and the static `input_type` resumes.
 

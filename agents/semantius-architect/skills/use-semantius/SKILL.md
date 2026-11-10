@@ -6,7 +6,8 @@ description: >-
   something new that needs its own records, however it is phrased (a module, app,
   platform, system, tracker, tool, or "a way to see and manage X", e.g. "build my
   SaaS management platform"; adding a field, entity or permission to an existing
-  module is not a build); build or query
+  module is not a build); review or audit an existing module, or ask what it is
+  missing or how to improve it; build or query
   a semantic data model, including subtypes and extensions of an entity (emails
   and calls as kinds of activities, customers and suppliers as business
   partners) and enum values with labels; set up RBAC; insert or import data into Semantius
@@ -65,6 +66,7 @@ Understanding which layer you're working with determines which tools to use:
 | `references/cli-usage.md` | CLI commands and their tiers, credentials and hosts, options, shell patterns, chaining, installation; § "Moving Entities and Modules Between Hosts" |
 | `references/data-modeling.md` | Layer 1, entities, fields, modules, relationships, safe evolution; § "Enum values and labels" |
 | `references/build-module.md` | A request to build or set up something new that needs its own records: the default deliverable, the sample-data question and size, what not to produce unasked, verification, the final response |
+| `references/review-module.md` | A request to review, audit or check an existing module, or to say what it is missing: what to read, what to verify, the optional additions, the report, applying what the user picks |
 | `references/seed-data.md` | Writing generated rows (the sample data of a build, or any request for made-up records): the seed script, mapping children to parents by label, the checks, values and rows that read as records, clearing what was seeded |
 | `references/seed-lib.ts` | Copy it next to the seed script and import it; don't retype it and don't read it, `seed-data.md` lists its functions and shows how: bulk insert, parent lookup by label, relationship read-back, count, distinctness, scale and computed-column guards, clearing a seed, seeded random generator |
 | `references/entity-families.md` | Layer 1, subtypes and extensions (`id_type: is_a` / `has_a`, `id_refentity`): when to use them, create order, reads and writes across levels, limits, deletes, error codes. Read before the first `create_entity` of such an entity |
@@ -76,8 +78,11 @@ Understanding which layer you're working with determines which tools to use:
 | `references/cube-queries.md` | Layer 3, CubeJS query DSL, date filtering, analysis modes |
 | `references/cube-tools.md` | Layer 3, discover/validate/load/chart tool signatures |
 | `references/webhooks.md` | Receiving records from external systems through signed webhook receivers: setup, signing, logs |
-| `references/lucide-icon-finder.ts` | Run it (`bun`), don't read it: `<query…>` (one or more words each, most specific first) lists Lucide icon names per query, in that order; `--batch -` takes a JSON object on stdin mapping labels to their queries and answers every label in one call; see `data-modeling.md` → "Icons are Lucide icons" |
+| `references/call-file.ts` | Run it (`bun`), don't read it: `<tool> <file.json>` sends a JSON file to a `crud` tool with no shell in between, so quotes and non-ASCII text stay intact in every shell; every `create_entity` and `create_field` goes through it; exit codes are the CLI's |
+| `references/module-rbac-setup.ts` | Run it (`bun`), don't read it: creates a module with its icon, color, permissions, hierarchy, roles, grants and default roles, never `create_*` calls for those; `--slug <slug>` alone fills what an existing module is missing; see `data-modeling.md` → "Mandatory Creation Order" |
+| `references/lucide-icon-finder.ts` | Run it (`bun`), don't read it: `--batch -` takes a JSON object on stdin mapping each label to an array of its queries and answers every label in one call; plain `<query…>` arguments are alternatives for one meaning; see `data-modeling.md` → "Icons are Lucide icons" |
 | `references/lucide-icon-checker.ts` | Run it (`bun`), don't read it: `<name…>` confirms Lucide icon names before an icon is written, exit 1 names the unknown ones; see `data-modeling.md` → "Icons are Lucide icons" |
+| `references/entity-match-checker.ts` | Run it (`bun`), don't read it: `--batch -` takes a JSON object on stdin mapping each new entity's `table_name` to other words for it, and compares them with the instance's entities and, of the platform's own, `users`; exit 1 names the matches to settle; see "Before any new entity: compare it with the instance" |
 | `references/vendor-names.ts` | Run it (`bun`), don't read it: `entity:<Name>…` and `field:<Name>…` convert a product's record and field names (singular, spelled the product's way) into `table_name` and labels, or `field_name` and label, only when the user asks to follow that product's names; never convert them by hand |
 | `references/preflight.md` | The environment checks a skill runs before doing work: stay in the repo root, Bun and jq, CLI install and sign-in, and when to read the two question-format files below |
 | `references/muse-questions.md`, `references/dot-questions.md` | How to ask questions where `AskUserQuestion` is not available; `preflight.md` says when to read them |
@@ -92,8 +97,14 @@ Understanding which layer you're working with determines which tools to use:
 **The request lacks a value it needs ("add a field": to which kind of record)?**
 → Ask for it, see "Asking the user to pick a value" below
 
+**About to create a new entity, on any path?**
+→ Compare it with every entity on the instance first, see "Before any new entity: compare it with the instance" below. Nothing is created until each match is settled
+
 **Asked to build or set up something new that needs its own records, however it is phrased (a module, app, platform, system, tracker, tool, "a way to see and manage X"; adding a field, entity or permission to an existing module is not a build)?**
-→ Read `references/build-module.md`. Follow the leading products when the domain is well known, in the order of a build. Default: module, entities, fields, relationships, permissions, roles and the UI links. Ask about sample data first (5 to 10 rows per parent entity, never seeded without a yes; seeded as `references/seed-data.md` says). No spec, diagram, report, export or analytics unless asked
+→ Read `references/build-module.md`. Follow the leading products when the domain is well known, in the order of a build. Default: module, entities, fields, relationships, permissions, roles and the UI links. Compare the outline with the instance, confirm the entity list, then ask about sample data (5 to 10 rows per parent entity, never seeded without a yes; seeded as `references/seed-data.md` says). No spec, diagram, report, export or analytics unless asked
+
+**Asked to review, audit or check an existing module, or what it is missing or how to improve it?**
+→ Read `references/review-module.md`. Read the whole live module, verify it against this skill's rules, suggest optional entities and other additions from the leading products, and report. Nothing is written until the user picks what to apply
 
 **Managing schema, create/modify entities, fields, modules?**
 → Layer 1, read `references/data-modeling.md`, follow mandatory creation order. Every entity you create carries its class (`entity_type`) and the permissions its write tier gives (`references/data-modeling.md` → "Classifying an entity", `references/rbac.md` → "Choosing an entity's permissions")
@@ -145,6 +156,34 @@ Understanding which layer you're working with determines which tools to use:
 
 **A baked recipe (e.g. from a `semantius-skill-maker`-generated skill) hit an unexpected 409/422 and you suspect schema drift?**
 → Live introspect with `read_entity` / `read_field`, see `references/data-modeling.md` § "Runtime schema introspection (live FK / shape lookup)". Do not silently adapt the recipe; abort, surface the drift, recommend regenerating the domain skill.
+
+---
+
+## Before any new entity: compare it with the instance
+
+One real-world thing is one entity. A second entity for something the instance already holds splits its records across two tables and is costly to undo, so this section outranks every limit on questions and every no-answer default, on every path that creates an entity. `table_name` identifies an entity across the whole instance, so two modules cannot each have their own `vendors`.
+
+1. **List other words for each new entity**, the words people use for the same thing (vendors: suppliers, providers, merchants). At least one each.
+2. **Run the check** before the first `create_entity`. It reads the entities on the instance and compares names, labels and your words. Of the platform's own entities it compares only `users`; the others are never reused:
+
+   ```bash
+   echo '{"vendors":["suppliers","providers"],"contracts":["agreements"]}' | bun "<skill-folder>/references/entity-match-checker.ts" --batch -
+   ```
+
+   Exit `0` means nothing to settle, exit `1` lists each match, exit `2` is a bad call or an unreadable instance. It can only match the words it was given, so also read the `Existing entities:` line it prints: an entity that means the same thing is a similar name even when the script did not list it.
+3. **Settle each match before anything is written**, one question at a time, in the question format the preflight sets:
+
+   | Found | Ask | When the user declines | With no answer |
+   |---|---|---|---|
+   | Same name | "\<Plural Label\> already exists in \<Module Name\>. Use the existing one?": use it (recommended), or keep a separate one under a different name | The new entity takes a name that states its concept in full | Use the existing one |
+   | Reserved name | Nothing: the name is a platform table, and the new entity takes a name that states its concept in full | | |
+   | Similar name | "\<Existing Plural Label\> in \<Module Name\> looks like the \<New Plural Label\> you need. Are they the same thing?": yes, use the existing one, or no, they are different | On "different", create the new entity and pass `--separate <table_name>` on the next run | Do not create it; name it as a next step |
+
+   A new entity named `users` is the built-in: it is always reused, with no question. A similar name is asked like any other: `employees` or `contractors` may be the platform's users, or may be separate.
+4. **Run the check again** after the answers, with reused and left-out entities removed, and whenever the list changes. No `create_entity` until it exits `0`.
+5. **Reusing an entity** means a relationship to it and no new entity. The module's users can view it and cannot edit it (`references/rbac.md` → "Viewing an entity of another module"). When the module needs a field the entity lacks, ask before adding it: one question per entity, naming each field and saying it also appears in the other module. An approved field is added as optional, and a field not approved is named as a next step. No sample rows go into a reused entity.
+
+Never create a renamed or prefixed copy to get past a name clash. A separate entity for the same thing exists only when the user chose it, after hearing that its records will stay apart from the existing ones, and before anything is built. A duplicate-key error on `create_entity` is a match like any other: stop and settle it.
 
 ---
 
@@ -215,18 +254,20 @@ The plugin's sample prompts use `[blank]` where the user puts a name from the li
 semantius                              # List all servers and tools
 semantius -d                           # List with descriptions
 semantius tools <server>              # Show tools and parameters for a server
-semantius tools <server> <tool>       # Get tool description and JSON schema
+semantius tools <server> <tool>       # Get tool description and JSON schema, for a tool the references do not cover
 semantius search_tools "<words>"      # Find tools by name or description
 semantius call <server> <tool> '{}'   # Call tool with inline JSON
 semantius call <server> <tool>        # Call tool — reads JSON from stdin
 ```
 
-**Windows (PowerShell): always pass inline JSON, or pipe empty input if the tool takes no arguments.** Omitting the JSON argument makes the CLI block reading stdin until EOF. In a persistent PowerShell session (state kept alive across calls, as some agent harnesses do) that stdin pipe is never closed, so the call hangs forever with no error and no timeout — it is not a network or auth issue, and retrying will not help. Always supply the JSON explicitly, even if empty:
+**Windows (PowerShell): always give the CLI its JSON, inline or piped, or pipe empty input if the tool takes no arguments.** Omitting the JSON argument makes the CLI block reading stdin until EOF. In a persistent PowerShell session (state kept alive across calls, as some agent harnesses do) that stdin pipe is never closed, so the call hangs forever with no error and no timeout — it is not a network or auth issue, and retrying will not help. Always supply the JSON explicitly, even if empty:
 
 ```powershell
 semantius call crud getCurrentUser '{}'     # inline JSON, never blocks
 "" | semantius call crud getCurrentUser     # or explicitly pipe stdin closed
 ```
+
+Windows PowerShell 5.1 strips the quotes from inline JSON (`INVALID_JSON_ARGUMENTS`), so pipe it there: `'{"limit": 1}' | semantius call crud read_role`. `$PSVersionTable.PSVersion` shows the version.
 
 Never invoke a no-argument `semantius call ...` bare on Windows/PowerShell without one of the two forms above.
 
@@ -300,12 +341,12 @@ Full detail: `references/crud-tools.md` § `getCurrentUser`.
 
 ## Golden Rules
 
-1. **Read before writing**, Before any `create_*`, call `read_*` to check for duplicates. ALWAYS first.
-   - Before `create_module` → run `read_module` first
+1. **Never model one real-world thing twice, and read before writing.** A new entity is compared with the whole instance first, see "Before any new entity: compare it with the instance". Before any `create_*`, call `read_*` to check for duplicates. ALWAYS first.
+   - A new module → `references/module-rbac-setup.ts`, which reads first; never `create_module`
    - Before `create_entity` → run `read_entity` first
    - Before `create_permission` → run `read_permission` first
    - Before `create_role` → run `read_role` first
-   - If the read returns results, use those IDs instead of creating duplicates. Only create if it returns empty.
+   - If the read returns results, use those IDs instead of creating duplicates (an entity is settled as that section says). Only create if it returns empty.
    - For a bulk create, **one** `read_*` with an `in.(...)` filter covers every item (`"filters": "field_name=in.(description,cost)&table_name=eq.services"`); never one `--single` read per record.
 2. **Schema first**, follow "Mandatory Creation Order" in `references/data-modeling.md`, the single source for the order, the `is_a` / `has_a` exception, and how every entity is classified and read back.
 3. **Never create auto-generated fields**, `id`, `created_at`, `updated_at` and the `label_column` field are created automatically by `create_entity`. On an `is_a` / `has_a` entity also never create a field of its base: create only the entity's own fields. Leave `field_order` out of `create_field` too: the platform appends new fields in array order, while a hand-picked value can silently tie with an auto-created field (the label field sits at 20). Set it only when the user wants a specific position, after reading the entity's live `field_order` values.
@@ -314,8 +355,9 @@ Full detail: `references/crud-tools.md` § `getCurrentUser`.
 6. **Surface a UI link whenever it helps the user**, after schema changes *and* after record operations (create / find / update). Pattern: `{ui_baseurl}/{module_slug}/{table_name}`, append `/{id}` for one record. See "Linking to the web UI" above for the rules (derive `ui_baseurl` from `getCurrentUser`; use the lowercase `module_slug`).
 7. **Always batch: one call per set of records, never a loop of single calls.** Whenever more than one record of the same kind is pending (several fields for an entity, several permissions for a module, several `role_permission` rows, several ids to update or delete, several rows for a table), send them **in one call**: pass an array in `data` to `create_*` (`'{"data": [{...}, {...}]}'`), or an array in `id` (`table_name` for entities, `permission_name` for permissions) to `update_*` / `delete_*` (`'{"id": [4, 5, 6]}'`, the same `data` applied to every id). Array items do **not** need the same keys (a key omitted from one item takes the column default). One call is one request and one transaction (all-or-nothing); the response is always an array of the affected records. Keep a call to roughly 100 rows / ids. Issuing N single-record calls where one array call would do is a mistake. The one ordering exception is entities of a family: one `create_entity` call per level, bases first. `postgrestRequest` also takes an array `body`, but under raw PostgREST rules (identical keys per item, or `?columns=` on the path with omitted keys becoming NULL). See `references/crud-tools.md` § "Bulk operations".
 8. **Aggregates over child records are rollups**, A value summed, counted or otherwise aggregated from child records is a field with a `rollup` definition, never a `computed_fields` rule or a value the client maintains. See `references/rollup-fields.md`.
-9. **Deliver the smallest result that satisfies the request.** A build request is schema, permissions, roles and UI links, not a spec, report or analytics run. Sample data is offered, capped and seeded only after an explicit yes; specs, diagrams, exports and analytics are produced only when asked. Verification is one read of the new entities (class and permissions) and, when seeded, the real seed run's output (every table at its count, each child relationship read back, each computed and rollup column checked) and a rollup value if the module has rollups, not an analysis. An analytics request answers only the question asked and writes nothing to the schema. Smallest means narrowest scope, never a compressed rendering of a result: when the answer is an artifact, deliver the whole artifact (Golden Rule 10). See `references/build-module.md`.
+9. **Deliver the smallest result that satisfies the request.** A build request is schema, permissions, roles and UI links, not a spec, report or analytics run. Sample data is offered, capped and seeded only after an explicit yes; specs, diagrams, exports and analytics are produced only when asked. Verification is one `module-rbac-setup.ts --slug` run, one read of the new entities (class, permissions, rules and read rules), one read each of the module's hierarchy, roles and grants and, when seeded, the real seed run's output (every table at its count, each child relationship read back, each computed and rollup column checked) and a rollup value if the module has rollups, not an analysis. An analytics request answers only the question asked and writes nothing to the schema. Smallest means narrowest scope, never a compressed rendering of a result: when the answer is an artifact, deliver the whole artifact (Golden Rule 10). See `references/build-module.md`.
 10. **Generated artifacts are used exactly as the tool returned them.** What a tool returns (a diagram, spec, document, report, export or CSV schema) is the artifact; the bytes are not raw material to summarize. A diagram is pasted into the reply verbatim: the status line, every `classDef` and `class` line and the node order, because the styling states which entities were selected and which are only referenced. A document is saved by redirecting stdout to a file and handed over as that file. The tool's output already carries its own ```` ```mermaid ```` fence; do not add a second one. Length is no reason to shorten it; if the output was truncated, redirect stdout to a file, read the file in parts and paste it in full. Never retype, condense, re-style, re-order or tidy it, and never put a hand-made version beside it. Quoting part of an artifact counts as retyping: to answer a question about it, use prose, or paste the whole artifact. A subset or a view across several modules is not a reason to edit the diagram: call the tool with `module_slugs` and/or `table_names`. Every time an artifact is sent, including a repeat later in the session, it is pasted from a tool result in that same turn: run the generator again for a different selection, read the saved file for the same one. Never reproduce it from an earlier message. A table or prose that adds information (fields from `read_field`, an explanation) may sit outside the artifact; a second diagram, or a table that only restates the diagram's nodes and arrows, may not. If the tool fails, report the failure; do not draw a substitute by hand.
+11. **`AskUserQuestion` is the only tool call of its response**, because a tool call beside it cancels the pause and the run continues before the user has answered. Finish every read and write first.
 
 ## Response handling: exit code is not enough
 
