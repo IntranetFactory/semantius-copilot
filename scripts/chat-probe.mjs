@@ -7,14 +7,17 @@
  * without clicking through the frontend: send a turn here, then check the
  * Braintrust `semantius-copilot` logs / Arize `semantius-copilot` project for the trace.
  *
- *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}'] [--session=<id>] [--agent=<name>] [--deadline=<seconds>]
+ *   API_TOKEN=$(cat .api-token) node scripts/chat-probe.mjs ["message"] [--payload='{"k":"v"}'] [--session=<id>] [--agent=<name>] [--model=<id>] [--deadline=<seconds>]
  *
  * --session=<id> resumes an EXISTING session instead of ingesting a new one —
  * the tool for cross-turn persistence checks (workspace backup/restore across
  * a container sleep needs a write turn and a later read turn on one session).
  * --agent=<name> drives another agents/ definition (default
  * hoth-trip-planner); its bundle must exist in dist-bundle/ (`pnpm bundle`)
- * and be deployed. --deadline=<seconds> extends the settle wait (default 180)
+ * and be deployed. --model=<id> seeds a new session on that registry id
+ * instead of the agent's default (the first of its `models`); it must be one
+ * of them (added 2026-11-10 to probe the Muse Ember variants, unrequested).
+ * --deadline=<seconds> extends the settle wait (default 180)
  * for turns that legitimately run long — e.g. the model-limits regression's
  * single-shot long write (fix_model_limits_plan.md).
  *
@@ -69,6 +72,11 @@ async function postJson(url, body) {
 
 const agentName = args.find((arg) => arg.startsWith('--agent='))?.slice('--agent='.length) ?? 'hoth-trip-planner';
 const bundle = JSON.parse(readFileSync(join(root, 'dist-bundle', `${agentName}.agent.json`), 'utf8'));
+const modelArg = args.find((arg) => arg.startsWith('--model='))?.slice('--model='.length);
+if (modelArg && !bundle.models.includes(modelArg)) {
+  console.error(`--model=${modelArg} is not in ${agentName}'s models: ${bundle.models.join(', ')}`);
+  process.exit(2);
+}
 console.log(`minted semantius token for org ${semantiusToken.slice(0, semantiusToken.indexOf(':'))}`);
 let sessionId = args.find((arg) => arg.startsWith('--session='))?.slice('--session='.length);
 if (sessionId) {
@@ -94,7 +102,7 @@ const seed = {
   version: bundle.version,
   baseImage: bundle.baseImage,
   instructions: bundle.instructions,
-  modelId: bundle.models[0],
+  modelId: modelArg ?? bundle.models[0],
   ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
   ...(payload !== undefined ? { payload } : {}),
 };

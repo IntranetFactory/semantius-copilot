@@ -398,7 +398,17 @@ function DataBrowser({ apiKey }: { apiKey: string }) {
       ) : !record ? (
         <RecordsList base={base} apiKey={apiKey} collection={collection} onOpen={setRecord} />
       ) : (
-        <RecordDetail base={base} apiKey={apiKey} collection={collection} record={record} />
+        // Keyed by record: opening another record starts from a clean slate
+        // (no stale detail, back on the rendered tab), while a Refresh of the
+        // same record keeps the current tab and the old values on screen until
+        // the new ones arrive.
+        <RecordDetail
+          key={`${collection.id}:${record.id}`}
+          base={base}
+          apiKey={apiKey}
+          collection={collection}
+          record={record}
+        />
       )}
     </section>
   );
@@ -597,27 +607,36 @@ function RecordDetail({
   collection: Collection;
   record: RecordRef;
 }) {
-  const [state, setState] = useState<{ detail?: Detail; error?: string; loading: boolean }>({ loading: true });
+  const [state, setState] = useState<{ detail?: Detail; error?: string; loading: boolean; loadedAt?: Date }>({
+    loading: true,
+  });
   // Rendered view vs the raw stored payload. Sessions label it "Chat" since the
   // rendered form is the conversation; everything else is "Formatted".
   const [tab, setTab] = useState<'view' | 'raw'>('view');
+  // Bumped by Refresh: re-reads THIS record from the backend, and (as the key
+  // of the views below) remounts the parts that fetch on their own — the live
+  // conversation and the Raw JSON conversation snapshot — so they re-read too.
+  const [reloads, setReloads] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setState({ loading: true });
-    setTab('view');
+    // Keep the previous detail on screen while re-reading; only the very first
+    // load (no detail yet) shows the bare "loading…" placeholder.
+    setState((prev) => ({ ...prev, error: undefined, loading: true }));
     adminGet<Detail>(base, apiKey, `/admin/collections/${collection.id}/record?id=${encodeURIComponent(record.id)}`)
-      .then((detail) => !cancelled && setState({ detail, loading: false }))
-      .catch((err) => !cancelled && setState({ error: String(err), loading: false }));
+      .then((detail) => !cancelled && setState({ detail, loading: false, loadedAt: new Date() }))
+      .catch((err) => !cancelled && setState((prev) => ({ ...prev, error: String(err), loading: false })));
     return () => {
       cancelled = true;
     };
-  }, [base, apiKey, collection.id, record.id]);
+  }, [base, apiKey, collection.id, record.id, reloads]);
 
-  if (state.loading) return <div className="detail"><p className="status">loading…</p></div>;
-  if (state.error) return <div className="detail"><p className="status status-error">{state.error}</p></div>;
+  if (!state.detail) {
+    if (state.error) return <div className="detail"><p className="status status-error">{state.error}</p></div>;
+    return <div className="detail"><p className="status">loading…</p></div>;
+  }
 
-  const detail = state.detail as Detail;
+  const detail = state.detail;
   const isSession = detail.kind === 'session';
 
   return (
@@ -626,6 +645,19 @@ function RecordDetail({
         <code className="detail-key">{record.id}</code>
         <span className="detail-head-actions">
           {'size' in detail && typeof detail.size === 'number' ? <span className="status">{detail.size} bytes</span> : null}
+          {state.loadedAt ? (
+            <span className="status" title={state.loadedAt.toISOString()}>
+              as of {state.loadedAt.toLocaleTimeString()}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="linkbtn"
+            onClick={() => setReloads((n) => n + 1)}
+            disabled={state.loading}
+          >
+            {state.loading ? 'Refreshing…' : 'Refresh'}
+          </button>
           {isSession ? (
             // The one link across the split: hands the session id to the chat
             // page. That page needs the OWNER's Semantius token to actually
@@ -646,11 +678,18 @@ function RecordDetail({
         </button>
       </nav>
 
+      {state.error ? <p className="status status-error">Refresh failed — showing the previous read. {state.error}</p> : null}
+
       {tab === 'raw' ? (
         isSession ? (
           // For a session the raw form is what's actually persisted: the KV
           // session record plus the agent DO's conversation snapshot.
-          <RawSession apiKey={apiKey} sessionId={record.id} session={(detail as { session: Record<string, unknown> }).session} />
+          <RawSession
+            key={reloads}
+            apiKey={apiKey}
+            sessionId={record.id}
+            session={(detail as { session: Record<string, unknown> }).session}
+          />
         ) : detail.kind === 'kv' ? (
           // Payload only — key and size already sit in the header, and the
           // admin envelope's `json` is just the parsed copy of `value`, so
@@ -668,7 +707,12 @@ function RecordDetail({
       ) : detail.kind === 'kv' ? (
         <KvValue value={(detail as { value: string }).value} json={(detail as { json: unknown }).json} />
       ) : isSession ? (
-        <SessionDetail apiKey={apiKey} session={(detail as { session: Record<string, unknown> }).session} sessionId={record.id} />
+        <SessionDetail
+          key={reloads}
+          apiKey={apiKey}
+          session={(detail as { session: Record<string, unknown> }).session}
+          sessionId={record.id}
+        />
       ) : detail.kind === 'backup' ? (
         <BackupView base={base} apiKey={apiKey} detail={detail as BackupDetailShape} />
       ) : (

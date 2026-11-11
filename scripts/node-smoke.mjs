@@ -123,13 +123,27 @@ try {
   check('registry: thinking_level inside reasoning_efforts accepted', !registryRejects({ reasoning_efforts: ['low', 'high'], thinking_level: 'high' }));
   const pinned = {
     'openai/gpt-6-luna': 'medium',
+    'openai/gpt-6-luna@low': 'low',
+    'openai/gpt-6-luna@medium': 'medium',
+    'openai/gpt-6-luna@high': 'high',
     'openai/gpt-6-luna@xhigh': 'xhigh',
+    'openai/gpt-6-luna@max': 'max',
+    'anthropic/claude-haiku-5.5@low': 'low',
+    'anthropic/claude-haiku-5.5@medium': 'medium',
+    'anthropic/claude-haiku-5.5@high': 'high',
+    'anthropic/claude-haiku-5.5@xhigh': 'xhigh',
+    'anthropic/claude-haiku-5.5@max': 'max',
     'deepseek/deepseek-v4.1-flash-1017@max': 'max',
     'meta/muse-spark-1.3-contributor@xhigh': 'xhigh',
     'meta/muse-spark-1.3-contributor@max': 'max',
+    'meta/muse-ember@low': 'low',
+    'meta/muse-ember@medium': 'medium',
+    'meta/muse-ember@high': 'high',
+    'meta/muse-ember@xhigh': 'xhigh',
+    'meta/muse-ember@max': 'max',
   };
   check(
-    'registry: shipped thinking_level pins (Luna medium/xhigh, DeepSeek max, Muse xhigh/max)',
+    'registry: shipped thinking_level pins (Luna medium + low..max, Haiku low..max, DeepSeek max, Muse Spark xhigh/max, Muse Ember low..max)',
     Object.entries(pinned).every(([id, level]) => registry[id]?.thinkingLevel === level),
     Object.keys(pinned).map((id) => `${id}=${registry[id]?.thinkingLevel}`).join(' '),
   );

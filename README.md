@@ -947,11 +947,15 @@ breakpoints, and pi-ai adds them only for provider id `openrouter`, which the pe
 plumbing, the cache-breakpoint flag, and drives the installed pi-ai dist against a canned fetch to assert the request
 body's `provider` is the routing object byte-for-byte. The `deepseek/deepseek-v4.1-flash-1017`
 entry runs with `{ "sort": "throughput", "max_price": { "completion":
-0.6 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "unknown"], "only": ["coreweave",
-"cloudflare", "relace", "ionstream"], "allow_fallbacks": false }` — the fastest allowlisted
-non-fp4 host at or under $0.60/M output, the list rate (filters apply *before* the throughput
-ranking; with fallbacks off, no allowlisted host available = the request fails). `"unknown"` is load-bearing: it admits DeepSeek first-party, Cloudflare, Reka and
-Relace; without it only InferenceNet and Morph qualify. The model is newer than the pi-ai
+0.6 }, "quantizations": ["fp8", "bf16", "fp16", "fp32", "mxfp4", "unknown"], "only":
+["coreweave", "cloudflare", "relace", "ionstream", "wafer/us"], "allow_fallbacks": false }` —
+the fastest allowlisted non-fp4 host at or under $0.60/M output, the list rate (filters apply
+*before* the throughput ranking; with fallbacks off, no allowlisted host available = the
+request fails). `mxfp4` is there for `wafer/us` alone (added 2026-11-11, asked for by Martin
+Amm); the allowlist keeps every other mxfp4 host out. As of 2026-11-11 that leaves
+Cloudflare, Ionstream and `wafer/us`: Relace now lists only an fp4 endpoint and CoreWeave
+charges $1.20/M output. `"unknown"` is load-bearing: Cloudflare and Ionstream report it, so
+without it only `wafer/us` qualifies. The model is newer than the pi-ai
 catalog, so the entry pins `max_tokens: 384000` / `context_window: 1048576` explicitly
 (under every eligible host's output cap, lowest 393216); `agents_config.jsonc` records the
 placeholder-path side effects and the eligible hosts. Per-host prices, quantization and output caps for a model:
@@ -1456,6 +1460,14 @@ already reads: `session:<id>` and `agent:<id>` share the session id, and
 so the key itself cannot be reversed). `agentdef:<name>` is a deployed definition, not
 session-scoped — it gets no date and sorts last. The frontend does not reorder within a
 group, so this ordering is entirely `listCollectionRecords`'.
+
+Every record detail has a **Refresh** button (asked for by Martin Amm, 2026-11-11): it
+re-reads the same record from the backend without leaving it — the current tab stays
+selected and the previous values stay on screen until the new read lands — and, for a
+session, also re-reads the live conversation and the Raw JSON conversation snapshot. An
+"as of" time beside it (added unasked, so an unchanged record still shows that the read
+happened) is when the shown values were read. A failed refresh keeps the previous read
+and says so above it.
 
 The **R2 backups** collection lists the workspace backup archives (one per session — see
 "Workspace backup & restore"): rows are labeled with the full session id from each

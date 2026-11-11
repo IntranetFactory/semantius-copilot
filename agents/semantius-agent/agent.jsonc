@@ -6,19 +6,30 @@
     //"z-ai/glm-5.3-flash",
     //"z-ai/glm-5.3",
     //"deepseek/deepseek-v4.1-flash-1017",
-    "deepseek/deepseek-v4.1-flash-1017@max",
-    //"openai/gpt-6-luna",
-    //"openai/gpt-6-luna@xhigh",
-    "meta/muse-spark-1.3-contributor",
-    "meta/muse-spark-1.3-contributor@max",
     "meta/muse-spark-1.3-contributor@xhigh",
-    "anthropic/claude-sonnet-5.5@high",
-    "anthropic/claude-sonnet-5.5@xhigh",
-    "anthropic/claude-sonnet-5.5@max"
+    "deepseek/deepseek-v4.1-flash-1017@max",
+    //"openai/gpt-6-luna@low",
+    //"openai/gpt-6-luna@medium",
+    //"openai/gpt-6-luna@high",
+    "openai/gpt-6-luna@xhigh",
+    "openai/gpt-6-luna@max",
+    //"meta/muse-spark-1.3-contributor",
+    "meta/muse-spark-1.3-contributor@max",
+    
+    //"meta/muse-ember@low",
+    //"meta/muse-ember@medium",
+    //"meta/muse-ember@high",
+    //"meta/muse-ember@xhigh",
+    "meta/muse-ember@max",
+    //"anthropic/claude-sonnet-5.5@high",
+    //"anthropic/claude-sonnet-5.5@xhigh",
+    //"anthropic/claude-sonnet-5.5@max",
+    //"anthropic/claude-haiku-5.5@low",
+    //"anthropic/claude-haiku-5.5@medium",
+    //"anthropic/claude-haiku-5.5@high",
+    //"anthropic/claude-haiku-5.5@xhigh",
+    //"anthropic/claude-haiku-5.5@max"
     //"xiaomi/mimo-v2.6-pro"
-    // "anthropic/claude-haiku-5.5@high",
-    // "anthropic/claude-haiku-5.5@xhigh",
-    // "anthropic/claude-haiku-5.5@max"
   ],
   "proxy_whitelist": [
     "registry.npmjs.org", // for  dependencies

@@ -18,7 +18,7 @@ This file covers the schema mechanics: modules, entities, fields, relationships,
 - [Modules](#modules)
 - [Entities](#entities): naming, built-ins, key fields, auto-generated fields, provenance columns
 - [Fields](#fields): naming, formats, `width`, `input_type`, fields that apply only to some enum or boolean values, `unique_value`, `default_value`, `cube_type`, all properties
-- [Relationships](#relationships): relationship labels, `reference`, `parent`, junctions, cross-module references
+- [Relationships](#relationships): relationship labels, `reference`, `parent`, junctions, relationships to other modules
 - [Safe Evolution Patterns](#safe-evolution-patterns)
 - [Updating and Deleting Entities](#updating-and-deleting-entities)
 - [Agent Workflow Tips](#agent-workflow-tips): including full-text search
@@ -34,17 +34,17 @@ This section is the single source for the creation order. Other files point here
 **Always follow this sequence, never skip steps:**
 
 ```
-module-rbac-setup.ts (module, permissions, permission hierarchy, roles, grants, default roles) → ALL Entities (one call; one per level, bases first, with is_a / has_a) → Fields (one call per entity) → update_entity (label_parent, where an entity has one)
+module-rbac-setup.ts (module, permissions, permission hierarchy, roles, grants, default roles) → ALL Entities (one call; one per level, bases first, with is_a / has_a) → ALL Fields (one call; rollups last in the array) → update_entity (label_parent, where an entity has one)
 ```
 
-**Batch every step that writes more than one record of a kind** (Golden Rule 7): every entity of the model in one `create_entity`, all of an entity's fields in one `create_field`. `data` is an array on every `create_*`; items may have different keys; the response is an array. And **create every entity before any field**: a field's `reference_table` (another entity of the model, or the entity itself) must exist when the field is created, which the entities-first order guarantees — no second pass for cross-references or self-references. `label_parent` is written after the fields (step 8), because the platform checks that the field it names exists.
+**Batch every step that writes more than one record of a kind** (Golden Rule 7): every entity of the model in one `create_entity`, every field of the model in one `create_field`. `data` is an array on every `create_*`; items may have different keys; the response is an array. And **create every entity before any field**: a field's `reference_table` (another entity of the model, or the entity itself) must exist when the field is created, which the entities-first order guarantees — no second pass for cross-references or self-references. `label_parent` is written after the fields (step 8), because the platform checks that the field it names exists.
 
 **Exception: a model with `is_a` / `has_a` entities** creates its entities in **one `create_entity` call per level, bases first**: plain entities and family roots first, then the entities based on them, and so on. The fields still come only after every level exists. A based entity named before its base fails with `23503`. Full rules: `entity-families.md`.
 <!-- Family variant: `entity-families.md` → "Creating a family". This block summarizes; that section governs families. -->
 
 **Every `create_entity` and `create_field` goes through a file.** Run `mkdir -p .tmp_deploy` once, write the JSON to `.tmp_deploy/<name>.json`, then run `bun "<skill-folder>/references/call-file.ts" <tool> .tmp_deploy/<name>.json`, as the examples below do. Quotes and apostrophes in a description then cannot break the call. The payload shapes are in this file, so do not run `semantius tools` for these tools.
 
-**Steps 1 to 5: create the module, its permissions, hierarchy, roles, grants and default roles with one command.** Never with `create_*` calls. Two things are created with `create_*` calls after this command: gates and the roles that take them (`build-module.md`, step 5.4; `rbac.md` → "Restricted steps (gates)"), and the view access to an entity of another module (`build-module.md`, step 5.7; `rbac.md` → "Viewing an entity of another module").
+**Steps 1 to 5: create the module, its permissions, hierarchy, roles, grants and default roles with one command.** Never with `create_*` calls. Two things are created with `create_*` calls after this command: gates, the roles that take them and the roles that do part of the work, with their permissions (`build-module.md`, step 5.4; `rbac.md` → "Restricted steps (gates)", "Roles that do part of the work"), and the view access to an entity of another module (`build-module.md`, step 5.7; `rbac.md` → "Viewing an entity of another module").
 
 ```bash
 bun "<skill-folder>/references/module-rbac-setup.ts" --name "<Module Name>" --slug <module-slug> --description "<at most 60 characters>" --icon <icon-name>
@@ -58,7 +58,7 @@ bun "<skill-folder>/references/module-rbac-setup.ts" --name "<Module Name>" --sl
 - A module that already exists: `--slug <module-slug>` alone fills what it is missing and changes nothing else.
 
 6. **Create the entities**, one `create_entity` call whose `data` array carries every entity of the model (each with `module_id`, `entity_type`, `view_permission` and `edit_permission`; classify first, see "Classifying an entity" below). First `entity-match-checker.ts` exits 0 (`SKILL.md` → "Before any new entity: compare it with the instance"), then one `read_entity` with `table_name=in.(...)`. Icons first: every entity gets an `icon_name`, unless no icon fits, and one `lucide-icon-checker.ts` call before the first `create_entity` covers every entity, enum and field icon (see "Icons are Lucide icons"). Every item carries `entity_type`, `view_permission` and (except on `computed`) `edit_permission`, chosen together from the entity's class and write tier: the platform default `unclassified` is a defect, not a class. Classify without asking, state the result in the summary, and check it with the read-back in "Agent Workflow Tips" → "Verify the class and the permissions after creating entities" (`rbac.md` → "Choosing an entity's permissions" gives the tiers). With `is_a` / `has_a` entities, one call per level instead, bases first (see the exception above). Before this call, run the pass in "Fields that apply only to some enum or boolean values": its validation rules go in this call.
-7. **Add fields**, per entity, one `create_field` call whose `data` array carries every domain attribute of that entity, and never the field named in `label_column` or another auto-generated one: `create_entity` already made them, and one such row fails the whole call with `23505`, so nothing lands. To give the label field a better title, call `update_field` with `"id": "<table_name>.<label_column>"` after this call (see "Customizing the label field's title"). The FK targets all exist by now. Icons first: an enum or field icon that call did not cover goes through `lucide-icon-checker.ts` before the first `create_field` (see "Icons are Lucide icons"). Each `input_type_rule` from the pass in step 6 goes in this call. Every `relationship_label` in this call has passed its test first (see "Relationship labels").
+7. **Add fields** in one `create_field` call whose `data` array carries every domain attribute of every entity of the model: each item names its own `table_name`. Rollup fields go at the end of the array, after the fields they read; a rollup ahead of its child's relationship or value field fails with `90264`, and nothing in the call lands. With more than about 100 fields, split the array into a few calls by entity, sent in order, with the rollups in the last one. Never the field named in `label_column` or another auto-generated one: `create_entity` already made them, and one such row fails the whole call with `23505`, so nothing lands. To give the label field a better title, call `update_field` with `"id": "<table_name>.<label_column>"` after this call (see "Customizing the label field's title"). The FK targets all exist by now. Icons first: an enum or field icon that call did not cover goes through `lucide-icon-checker.ts` before the first `create_field` (see "Icons are Lucide icons"). Each `input_type_rule` from the pass in step 6 goes in this call. Every `relationship_label` in this call has passed its test first (see "Relationship labels"). The `update_field` calls that give label fields their titles do not depend on each other: send them together.
 8. **Set `label_parent`**, only on an entity whose records are identified through a parent (see `label_parent` under "Key Entity Fields") and never on a junction, with `update_entity` once its fields exist. `create_entity` cannot carry it: the field it names does not exist yet, and the write fails with `90226`. `update_entity` applies one `data` to every listed table, so each different field name is its own call:
    ```bash
    semantius call crud update_entity '{"table_name": "order_lines", "data": {"label_parent": "order_id"}}'
@@ -128,27 +128,26 @@ Every entity carries a **class** in `entities.entity_type`, and the class decide
 
 Classify without asking the user: say the result in the summary after the create (one line per class, each with its write tier in plain words, e.g. "catalog: only admins can add or edit"), and change it with `update_entity` when the user disagrees.
 
-| `entity_type` | What it holds | Typical examples |
-|---|---|---|
-| `catalog` | Reference or setup data that administrators maintain and operational records point at | cost_centers, product_categories, lead_sources |
-| `operational_workflow` | Everyday records with a **gated step**: a step that a role other than the module's Manager role takes, such as an approval | purchase_requests that an approver approves, offers, contracts |
-| `operational_record` | Everyday records with no gated step, created and edited freely | invoices, subscriptions, budgets, notes |
-| `junction` | A pure connecting record between two or more entities, with no attributes or lifecycle of its own | product_tags, user_roles |
-| `computed` | Every field is derived; nothing writes it directly | reporting tables |
-| `unclassified` | Never a choice: the platform default for an entity nobody classified | |
+**The class follows from who writes the records in normal work.**
+
+| `entity_type` | Who writes its records |
+|---|---|
+| `junction` | Nobody on its own: it holds only its relationship fields, a `parent` field to each entity it relates, and a row exists only to relate them |
+| `computed` | Nobody: every field is derived |
+| `catalog` | Only administrators: setup or reference values that other records point at |
+| `operational_workflow` | The module's everyday users, and the entity has a **gated step**: a step that a role other than the module's Manager role takes, such as an approval |
+| `operational_record` | The module's everyday users, and the entity has no gated step |
+| `unclassified` | Never a choice: the platform default for an entity nobody classified |
 
 **Choose in this order; the first match wins:**
 
-1. **Connecting record.** Two or more `parent` relationships (a binary or an N-ary one), no attributes of its own, no lifecycle → `junction`. One that carries its own attributes or a lifecycle is an association class → `operational_record` or `operational_workflow`, never `junction`.
-2. **Everything derived**, no direct writes → `computed`.
-3. **Base of a family** (other entities are `is_a` / `has_a` based on it; see `entity-families.md`) → never `catalog`, however small. `operational_workflow` when it has a gated step, otherwise `operational_record`. `business_partners`, the base of `customers` and `suppliers`, is an `operational_record`.
-4. **Reference data** → `catalog` when **all three** hold: small and slowly changing (hundreds of rows at most, edited a handful of times a month); operational entities point at it as a lookup, category, stage, type or source (it is pointed *at*, it does not point outward at operational data); and it usually ships with seeded values decided once.
-5. **Gated step** → `operational_workflow`. A gate is a step that needs its own permission; the test is in `rbac.md` → "Restricted steps (gates)". A single gated step (`submitted` → `approved`) is enough, and the number of states is irrelevant. A `status` enum alone is not a gate: without a step that only some users may take, the entity is an `operational_record`.
-6. **Otherwise** → `operational_record`.
+1. **Its only fields are its relationship fields** (two, or more for an N-ary relationship) → `junction`. An entity that stores an n:m relationship and has fields or states of its own is not a junction: take the steps below.
+2. **Nothing writes it**, every field is derived → `computed`.
+3. **Only administrators write it** → `catalog`. The records the module exists to hold are never a `catalog`, however few: the module's everyday users add to them. Neither is the base of a family (`entity-families.md`) whose based entities those users write, because each of their writes also writes the base.
+4. **It has a gated step** → `operational_workflow`. The test for a gate is in `rbac.md` → "Restricted steps (gates)".
+5. **Otherwise** → `operational_record`.
 
-An entity the module exists to hold (the inventory its users add to every day, such as the applications in a SaaS management module) is never a `catalog`, whatever its size: a `catalog` is written to only by admins, so classifying the main working dataset as one stops the module's managers from adding to it.
-
-Classify from the entity's purpose, not its name: a `budget` is an `operational_record`, a `budget_category` is a `catalog`. The platform built-ins (`users`, `roles`, `permissions`) are already classified; never recreate them.
+The platform built-ins (`users`, `roles`, `permissions`) are already classified; never recreate them.
 
 **Write tier and permissions.** The class gives the write tier, and `rbac.md` → "Choosing an entity's permissions" turns the tier into the entity's `view_permission` and `edit_permission`:
 
@@ -157,19 +156,19 @@ Classify from the entity's purpose, not its name: a `budget` is an `operational_
 | `catalog` | `:admin` |
 | `operational_workflow` | `:manage` |
 | `operational_record` | `:manage` |
-| `junction` | `:manage`; `:admin` only when every parent leg is a `catalog` |
+| `junction` | `:manage`; `:admin` only when every entity it relates is a `catalog` |
 | `computed` | `:read` (nothing writes it; omit `edit_permission`) |
 
 **Rules**
-- A `junction` is classified in the `create_entity` call that creates it (its `parent` fields come later, with the other fields), never afterward. The platform also treats an entity with two or more `parent` fields and no payload as a junction whatever its class, so classify a pure connecting record `junction`.
+- Classify a junction `junction` in the `create_entity` call that creates it (its `parent` fields come later, with the other fields). The platform also treats an entity with two or more `parent` fields and no other fields as a junction whatever its class.
 - `entity_type` is metadata, not a key: fix a wrong or missing class with `update_entity` (an array of `table_name`s takes the same value; the label function is rebuilt, no data is lost), then re-check the entity's `edit_permission` against the new tier.
 - Never `create_field` it; it is a core column.
-- The adjacent write-once column `catalog_entity_code` is set only for an entity that realizes a catalog identity; leave it empty for entities built outside the deploy pipeline. `singular` is derived from `table_name` when blank, and `plural` is always set to `table_name`, so pass neither.
+- The adjacent write-once column `catalog_entity_code` is set only for an entity that realizes a catalog identity; leave it empty on an entity built with this skill. `singular` is derived from `table_name` when blank, and `plural` is always set to `table_name`, so pass neither.
 
 ### Entity Naming Rules
 
 - **`table_name` is always plural snake_case**, `products`, `orders`, `order_lines`, not `product`, `order`, `orderLine`
-- **Name the concept in full.** A singular noun that explains itself; `table_name` is its plural. `support_request` → `support_requests`, `sales_opportunity` → `sales_opportunities`, not `ticket` or `opp`.
+- **Name the concept in full.** A singular noun that explains itself; `table_name` is its plural. `sales_opportunity` → `sales_opportunities`, never an abbreviation such as `opp`.
 - **Never end a `table_name` in `_ext`.** `<table_name>_ext` is the storage table of an `is_a` / `has_a` entity, so the platform reserves it (`90250`); see `entity-families.md`.
 - **Never create a `users` entity**, Semantius has a built-in `users` table. Any module that needs to reference users must use `reference_table: "users"` pointing at the existing table. Creating a competing `users` or `user` entity will conflict with the built-in table and break authentication.
 - **Never create a second entity for something the instance already holds**, under any name or prefix. `table_name` identifies an entity across the whole instance, not per module. Compare first: `SKILL.md` → "Before any new entity: compare it with the instance".
@@ -194,7 +193,7 @@ The platform ships with built-in tables for authentication, RBAC, and integratio
 | `last_seen` | date-time | Last activity timestamp |
 | `created_at` / `updated_at` | date-time | Auto |
 
-**Common author mistakes when extending `users` (the deployer skips these as overlapping with built-ins):**
+**Common mistakes when extending `users`: each overlaps with what the built-in table already holds or records.**
 
 | Don't add | Reason |
 |---|---|
@@ -219,7 +218,7 @@ The platform ships with built-in tables for authentication, RBAC, and integratio
 | `origin` | enum NOT NULL | `system` / `model` / `model_master` / `user`. Strictly immutable after INSERT. Set by whoever creates the role; default `user`. |
 | `module_id` | reference → modules | Which module owns the role |
 
-> **Origin semantics.** `system` rows are platform built-ins (seeded at database init; only their `origin` and `slug` are locked). `model` rows are created by a spec deploy on a domain module's scaffold. `model_master` rows are scaffold roles on a master module (see master-data promotion design). `user` rows are admin-created via the UI/API. **Slug rename is permitted for `model` / `model_master` / `user`; locked for `system`.**
+> **Origin semantics.** `system` rows are platform built-ins (seeded at database init; only their `origin` and `slug` are locked). `model` and `model_master` rows are created only when a module is installed from a catalog design (a domain module and a master module respectively); an agent never sets them. `user` rows are admin-created via the UI/API. **Slug rename is permitted for `model` / `model_master` / `user`; locked for `system`.**
 
 #### `permissions` — RBAC permissions, natural-key by name
 
@@ -247,7 +246,7 @@ Used by the integration runtime; domain models almost never touch these.
 
 #### `modules`, `entities`, `fields`, `queues`, `queue_table_events`, `dashboards`
 
-Platform meta-schema. **Never declare in a domain model.** The deployer manages these as a side effect of `create_entity` / `create_field` / `create_module`.
+Platform meta-schema. **Never declare in a domain model.** The platform manages these as a side effect of `create_entity` / `create_field` / `create_module`.
 
 ### Key Entity Fields
 
@@ -256,7 +255,7 @@ Platform meta-schema. **Never declare in a domain model.** The deployer manages 
 | `table_name` | **Plural** snake_case. Renaming is supported but think twice: integrations, saved queries, and external consumers reference the entity by name. |
 | `singular_label` | Human-readable name for **one record** (e.g. `Product`). Must be grammatically symmetric with `plural_label`, if `plural_label` is "Products", this must be "Product", never "Product Name". Pass it: when blank it is derived from `label_column` (`product_name` becomes "Product Name"), which is not a singular noun. Field-level titles like "Product Name" belong on the label field (the field named in `label_column`), not here (see Customizing the label field's title below). |
 | `plural_label` | e.g. "Products" |
-| `label_column` | Snake_case **field name** that identifies a record (e.g. `product_name`). NOT a human-readable title. Optional on `create_entity`: set it on every entity that has a natural local label; omit it for a junction table, whose `_label` the platform composes from the parent legs (see "Junction tables" below). Never set it on an `is_a` / `has_a` entity: it comes from the base (on create the platform overwrites it; an update is refused with `90242`). **Always single-line text:** `create_entity` creates this field as `text`, and as a core column its format can never change afterward (`90219`), so a label column is never an `enum`, number, date, boolean or FK. When the only identifying attribute is a type or category, pick another text field, or on a junction omit `label_column`. |
+| `label_column` | Snake_case **field name** that identifies a record (e.g. `product_name`). NOT a human-readable title. Optional on `create_entity`: set it on every entity that has a natural local label; omit it for a junction table, whose `_label` the platform composes from its `parent` fields (see "M:N Junction Tables" below). Never set it on an `is_a` / `has_a` entity: it comes from the base (on create the platform overwrites it; an update is refused with `90242`). **Always single-line text:** `create_entity` creates this field as `text`, and as a core column its format can never change afterward (`90219`), so a label column is never an `enum`, number, date, boolean or FK. When the only identifying attribute is a type or category, pick another text field, or on a junction omit `label_column`. |
 | `module_id` | Required on `create_entity` — must be a valid (non-null) integer module id; `null` is rejected. Find with `read_module`. On `update_entity` it stays optional, but a provided value must still be a non-null integer. |
 | `entity_type` | **Required on every entity you create:** `catalog`, `operational_workflow`, `operational_record`, `junction` or `computed`. The platform default `unclassified` is never a choice. See "Classifying an entity" above. Optional on `update_entity`, where a provided value must be one of the six allowed values. |
 | `view_permission` | Name string (e.g. `"catalog:read"`); defaults to `public:read` when omitted, so set it deliberately. The permission must already exist |
@@ -315,7 +314,7 @@ The base schema ships a set of **core provenance columns** on `entities`, `field
 
 | Table | Column | Type / default | Meaning |
 |---|---|---|---|
-| `entities` | `catalog_entity_code` | TEXT `''`, non-unique | Canonical uber-model code (the rename / dialect / silo join key). `table_name` holds the deployed name and may drift; this does not. Empty = created outside the deploy pipeline. |
+| `entities` | `catalog_entity_code` | TEXT `''`, non-unique | Canonical uber-model code (the rename / dialect / silo join key). `table_name` holds the deployed name and may drift; this does not. Empty = not installed from a catalog design. |
 | `fields` | `catalog_field_code` | TEXT `''`, non-unique | Stable design-time field identity (the blueprint field name, e.g. `status`); the field-rename join key, and the field-level twin of `catalog_entity_code`. `field_name` holds the deployed name and may drift; this does not. Empty = not generated from a catalog spec. |
 | `entities` | `catalog_owner_module` | TEXT `''` | Owning-module slug for an `embedded_master` placeholder. Soft pointer, not an FK. |
 | `entities` | `entity_type` | TEXT `'unclassified'`, CHECK ∈ 6 (`operational_workflow` / `operational_record` / `catalog` / `junction` / `computed` / `unclassified`) | Data-class axis; the write tier derives FROM it. Set it on every `create_entity` (see "Classifying an entity"). |
@@ -323,11 +322,11 @@ The base schema ships a set of **core provenance columns** on `entities`, `field
 | `modules` | `catalog_module_code` | TEXT `''`, non-unique | Catalog blueprint / `system_slug` the module was provisioned from. The coarser business-domain grouping is the separate `domain_code` column (many `catalog_module_code`s can share one `domain_code`). |
 | `roles` | `catalog_role_code` | TEXT `''`, non-unique | Catalog persona the role was provisioned from. |
 
-`use-semantius` exposes no tool to look up or install a catalog blueprint. A module built here is built by hand, and its catalog codes stay empty (`''`) unless a spec deploy stamps them. Do not search for a catalog or deploy tool, and do not invent a `catalog_*_code` value.
+`use-semantius` exposes no tool to look up or install a catalog blueprint. A module built here is built by hand, and its catalog codes stay empty (`''`); only a module installed from a catalog design has them. Do not search for a catalog or deploy tool, and do not invent a `catalog_*_code` value.
 
 **Rules for every skill that writes the catalog:**
 
-- **Never `create_field` these columns** — core provides them. Stamp **values only**: a spec deploy stamps the catalog codes and aliases at provision time, and every `create_entity` sets `entity_type` itself.
+- **Never `create_field` these columns** — core provides them. Write **values only**: a catalog install stamps the catalog codes and aliases, and every `create_entity` sets `entity_type` itself.
 - **Never write `ctype`** — it is privilege-locked. There is nothing to set to mark a column "core"; that is core's job.
 - The scalar codes (`catalog_entity_code` / `catalog_field_code` / `catalog_module_code` / `catalog_role_code`) are **write-once**: set on create, or filled once while empty, then never changed; a later rename touches `table_name` / `field_name` / `module_slug` only. `catalog_entity_aliases` is **append-only** (never rewrite or drop prior elements).
 - Test emptiness as `= ''` / `= '{}'::jsonb` / `= '[]'::jsonb` / `= 'unclassified'`, **never `IS NULL`**.
@@ -341,7 +340,8 @@ The title of the auto-created label field (the field named in `label_column`) is
 Every entity carries optional `computed_fields` / `validation_rules` JSON arrays
 (default `[]`; set on `create_entity`, replaced wholesale on `update_entity`: send the full list, a partial list deletes the rest)
 that derive values and enforce invariants on every write. Caller-supplied values
-for a computed field are silently overwritten.
+for a computed field are silently overwritten with the rule's result, unless the rule
+returns the field itself (an approval stamp on an import: `rbac.md` → "Controls on a gate", control 5).
 → Full reference (evaluation semantics, reserved variables, platform-extension
 operators, cross-entity lookups): `jsonlogic.md`.
 
@@ -376,7 +376,7 @@ Choose `format` carefully. Format **can** be changed after creation on a managed
 | Category | `format` values |
 |----------|----------------|
 | Text | `string`, `text`, `multiline`, `html`, `code` |
-| Numbers | `integer`, `int32`, `int64`, `number`, `float`, `double`, use `number` (stored as `NUMERIC(18, scale)`) for all monetary/currency/amount fields (`price`, `cost`, `amount`, `total`, `balance`, `revenue`, `fee`, `rate`, `salary`, `budget`, `discount`). Pair with `precision` (digits after the decimal; default `2` suits money, set `4`–`6` for tax/FX rates, `0` for integer-like NUMERIC counts). `float`/`double` are binary IEEE-754 and lose cents on rounding, only use them when the user explicitly requests them or the value is inherently imprecise (scientific measurements, ML scores, GPS coordinates) |
+| Numbers | `integer`, `int32`, `int64`, `number`, `float`, `double`, use `number` (stored as `NUMERIC(18, scale)`) for every amount of money. Pair with `precision` (digits after the decimal; default `2` suits money, set `4`–`6` for tax/FX rates, `0` for integer-like NUMERIC counts). `float`/`double` are binary IEEE-754 and lose cents on rounding, only use them when the user explicitly requests them or the value is inherently imprecise (scientific measurements, ML scores, GPS coordinates) |
 | Dates/Time | `date`, `time`, `date-time`, `duration` |
 | Boolean | `boolean` |
 | Choice | `enum` (also set `enum_values`: each entry is a value or a `{"value", "label"}` object that may also carry an optional `description`, `color` and `icon`, e.g. `[{"value": "draft", "label": "Draft", "color": "#64748b"}, {"value": "on_hold", "label": "On hold", "color": "#f59e0b"}]`; see "Enum values and labels" below). Never for a date, a real number or an amount, however few distinct values it has: those are `date` / `date-time` or `number` |
@@ -385,8 +385,8 @@ Choose `format` carefully. Format **can** be changed after creation on a managed
 | Identifiers | `uuid`, `email`, `uri`, `url` |
 | Binary | `binary` (stored as `BYTEA`) |
 | Other text formats | `jsonata`, `password`, `uri-reference`, `iri`, `iri-reference`, `uri-template`, `idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `regex`, `json-pointer`, `json-pointer-uri-fragment`, `relative-json-pointer`, `byte` |
-| Cross-entity relationship (independent) | `reference` + `reference_table` |
-| Ownership/composition | `parent` + `reference_table` |
+| A record that stands on its own | `reference` + `reference_table` |
+| A part of its parent | `parent` + `reference_table` |
 
 > ℹ️ **The other text formats are plain `TEXT` columns.** Each one chooses the form control; the database does not check the shape of the value. `password` only masks the input: the value is not hashed and reads return it like any other field, so never describe it as secure storage.
 
@@ -412,11 +412,9 @@ Choose `format` carefully. Format **can** be changed after creation on a managed
 **Picking between text formats.** All five resolve to a Postgres `TEXT` column; the format selects the UI input shape. Because they share a primitive, the format **can be changed among them after creation** — `text → multiline → html` is safe and accepted by `update_field`. The choice still matters up front because flipping later re-renders the form and may force a UI republish. Cross-primitive changes (e.g. `text → date`) are rejected by the platform.
 
 - `string` and `text` are **single-line** inputs — names, titles, labels, email-like identifiers, short tags. The form renders a single-line `<input>`. Use these for any field that holds a short value displayed on a single row.
-- `multiline` is the **multi-line** input — descriptions, notes, comments, free-form prose, journal entries, scorecard commentary. The form renders a `<textarea>`. Pick `multiline` whenever the field holds prose the user might paste a paragraph into; pick `text` / `string` when the value is a single line. The distinction lives in the column metadata, so the choice is made up front and migrating between them later means dropping and recreating the field.
+- `multiline` is the **multi-line** input for prose. The form renders a `<textarea>`. Pick `multiline` whenever the field holds prose the user might paste a paragraph into; pick `text` / `string` when the value is a single line.
 - `html` renders a rich-text editor on top of HTML storage; reserve for fields that need formatted output (release notes, marketing copy).
 - `code` renders a monospace code editor; reserve for stored source / configuration snippets.
-
-Heuristic: field names like `*_name`, `*_title`, `*_label`, `*_code`, `*_id` (string identifier), `email_address`, `phone_number`, `url` → single-line (`string` or `text`). Field names like `description`, `notes`, `body`, `comment`, `concerns`, `strengths`, `feedback`, `summary`, `details`, `rationale`, `instructions` → multi-line (`multiline`).
 
 > 🛑 **Reserved field names.** A `field_name` must **not** start with `_` (reserves the entity's own `_label`); the platform rejects it on create and on rename (`90224`). A name ending in `_id_label` is accepted, but it shadows the generated `<fk>_label` companion of the FK `<fk>` when both exist, so avoid it. Plain `*_label` names (e.g. `status_label`) remain allowed.
 
@@ -436,7 +434,7 @@ Heuristic: field names like `*_name`, `*_title`, `*_label`, `*_code`, `*_id` (st
 | `default` | Standard editable input, use for most fields |
 | `required` | Editable and mandatory, enforced by the platform, not only in the UI |
 | `readonly` | Displayed but not editable, **never import into this** |
-| `disabled` | Grayed out, not editable, **never import into this** — this is the canonical mode for **computed fields** (platform owns the value, caller payloads are silently overwritten on every write; see `jsonlogic.md`) |
+| `disabled` | Grayed out, not editable, **never import into this**, except an approval stamp on a record created past its step (`rbac.md` → "Controls on a gate", control 5) — this is the canonical mode for **computed fields** (platform owns the value, caller payloads are silently overwritten on every write unless the rule returns the field itself; see `jsonlogic.md`) |
 | `hidden` | Not shown in forms |
 
 > ℹ️ The composed-label columns `_label` / `<fk>_label` are **always** platform-owned and read-only regardless of `input_type` — they are read-time projections, never authored fields, so this table does not apply to them. Never write or import into them.
@@ -448,7 +446,7 @@ static `input_type` per record at form-render time. UI-only and fails open — a
 rendered `hidden` / `readonly` is still writable via API; server-side enforcement
 belongs in `validation_rules` (see `jsonlogic.md`). A non-empty rule also removes the
 database check of `required` for that field, because the rule can turn `required` off per record.
-Use it whenever a field's input mode depends on the record: required, readonly, disabled or hidden in some states and editable in others (for example `rejection_reason` editable only while `status` is `rejected`: the rule returns `default` in that state and `readonly` otherwise). The `input_type_rule` only shapes the form, so also add a `validation_rules` entry on the entity that enforces the same condition for every caller, unless the user says the restriction is cosmetic. For `rejection_reason`: `{"code": "99010", "name": "rejection_reason_only_when_rejected", "message": "A rejection reason can be set only while the request is rejected.", "jsonlogic": {"if": [{"value_changed": "rejection_reason"}, {"==": [{"var": "status"}, "rejected"]}, true]}}`, and the field's `input_type_rule` is `{"if": [{"==": [{"var": "status"}, "rejected"]}, "default", "readonly"]}`. Read a field with `{"var": "<field>"}`, never as a bare string.
+Use it whenever a field's input mode depends on the record: required, readonly, disabled or hidden in some states and editable in others (for example `rejection_reason`, needed while `workflow_state` is `rejected`: the rule returns `required` in that state and `hidden` otherwise, as the next section says). The `input_type_rule` only shapes the form, so also add a `validation_rules` entry on the entity that enforces the same condition for every caller, unless the user says the restriction is cosmetic. For `rejection_reason`: `{"code": "99010", "name": "rejection_reason_when_rejected", "message": "A rejected request needs a rejection reason.", "jsonlogic": {"if": [{"==": [{"var": "$mode"}, "delete"]}, true, {"if": [{"==": [{"var": "workflow_state"}, "rejected"]}, {"!=": [{"var": "rejection_reason"}, ""]}, true]}]}}`, and the field's `input_type_rule` is `{"if": [{"==": [{"var": "workflow_state"}, "rejected"]}, "required", "hidden"]}`. Read a field with `{"var": "<field>"}`, never as a bare string.
 → Full reference: `jsonlogic.md`.
 
 ### Fields that apply only to some enum or boolean values
@@ -509,8 +507,8 @@ Nullability is also computed by format (via the platform's `is_nullable()` rule)
 **Rule:** `default_value` is optional on `create_field`. Set it when the zero value is wrong for the domain (a non-zero starting balance, a specific seed string) and always on a required `enum`.
 
 - **A required enum has no automatic default.** With no `default_value` the default is `''`, which a required enum refuses (`90258`): every write must send a value, and adding the field to a table with rows fails (`90259`). Pass `default_value` (the value, never the label). The order of `enum_values` only affects display; list values in lifecycle order (`draft`, `pending`, `new`, `open`, `active` first) for that reason.
-- **The lifecycle state field is named exactly `workflow_state`.** An entity with a lifecycle (an ordered set of states a record moves through, such as `draft` → `submitted` → `approved`) stores it in one required `enum` field named `workflow_state`: `enum_values` are the states in order, `default_value` is the initial state. Never `status`, `state` or `lifecycle_state`. Gates, `value_changed` rules and `process_gates.state_column` refer to this name, and a spec with another name is rejected on deploy. An enum that merely looks state-like but is not the lifecycle (a `priority`, a `contract_status` beside the lifecycle) keeps its domain name. Before creating it, read the entity's fields and do not add a second state field when `workflow_state` exists.
-- **Title it with the domain's word for the state.** The name is fixed; the title is not: "Stage" for a pipeline (applications, opportunities, deals), "Status" for most other records (assets, contracts, tickets). "Workflow State" is the title when no domain word fits.
+- **The lifecycle state field is named exactly `workflow_state`.** An entity with a lifecycle (an ordered set of states a record moves through, such as `draft` → `submitted` → `approved`) stores it in one required `enum` field named `workflow_state`: `enum_values` are the states in order, `default_value` is the initial state. Never `status`, `state` or `lifecycle_state`. Gates, `value_changed` rules and `process_gates.state_column` refer to this name. Every other enum keeps its domain name, even one whose values look like states. Before creating it, read the entity's fields and do not add a second state field when `workflow_state` exists.
+- **Title it with the domain's word for the state.** The name is fixed; the title is not: the word people in the domain use for where a record stands, such as "Stage" or "Status". "Workflow State" is the title when no domain word fits.
 - **Limits and SQL expressions.** A `default_value` has at most 200 characters, with no `;`, `--` or `/*`. It is evaluated only when it exactly matches (case-insensitive) one of `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `CURRENT_TIME`, `LOCALTIMESTAMP`, `LOCALTIME`, `now()`, `clock_timestamp()`, `statement_timestamp()`, `transaction_timestamp()`, `gen_random_uuid()`, `CURRENT_USER`, `SESSION_USER`. Any other text is a literal cast to the column's type, never evaluated.
 - **`default_value` is stored as text**, whatever the format. A number or boolean is converted (`1` is stored as `"1"`, `true` as `"true"`), and a JSON array or object as its JSON text. Give a value that fits the format: a whole number for an integer field, `true` or `false` for a boolean, valid JSON for a JSON field. Example: a required `integer` field `seats_purchased` with a `>= 1` rule takes `"default_value": "1"` (or `1`), because the auto-default `0` would break the rule.
 - **There is no settable `is_nullable` flag** — nullability is computed purely from `format` (the `is_nullable()` rule above): only `reference`, `date`, and `date-time` are nullable. For every other format the column is NOT NULL regardless of `input_type`; declaring the field optional doesn't make it nullable.
@@ -569,7 +567,7 @@ An `enum_values` entry is either a plain value (`"draft"`) or a `{"value", "labe
      {"value": "on_hold", "label": "On hold", "color": "#f59e0b", "icon": "circle-pause", "description": "Waiting for the counterparty to countersign"},
      {"value": "signed", "label": "Signed", "color": "#22c55e", "icon": "circle-check"}
    ],
-   "input_type": "required", "width": "default"}
+   "default_value": "draft", "input_type": "required", "width": "default"}
 ]}
 ```
 
@@ -600,7 +598,7 @@ Take the icon of the row whose meaning the entry's label carries. Put every labe
 
 Write each hex in lowercase, exactly as listed. No two entries of one enum share a color.
 
-**State-like enums**, `workflow_state` and enums whose field name is `priority`, `severity`, `urgency`, `impact`, `risk_level` or ends in `_status`, take each entry's color by its meaning. When two or more entries share a meaning (`submitted` and `in_review` are both waiting), the first takes the `color`, the next ones the shades in order:
+**Enums whose values are states or levels**, `workflow_state` among them, take each entry's color by its meaning. When two or more entries share a meaning (`submitted` and `in_review` are both waiting), the first takes the `color`, the next ones the shades in order:
 
 | Entry meaning | `color` | Shades |
 |---|---|---|
@@ -609,11 +607,11 @@ Write each hex in lowercase, exactly as listed. No two entries of one enum share
 | waiting, on hold, pending | `#f59e0b` | `#d97706` · `#fbbf24` |
 | done, approved, closed as success | `#22c55e` | `#16a34a` · `#4ade80` |
 | canceled, failed, rejected | `#ef4444` | `#dc2626` · `#f87171` |
-| levels (priority, severity, urgency, impact, risk_level) low · medium · high · critical | `#64748b` · `#3b82f6` · `#f59e0b` · `#ef4444` | |
+| levels: low · medium · high · critical | `#64748b` · `#3b82f6` · `#f59e0b` · `#ef4444` | |
 
 Past the listed shades, a further entry of that meaning gets another shade of the same hue that the enum does not use yet.
 
-**Every other enum:** an entry whose label carries one of the meanings above takes that color (`defect` → `#ef4444`, `approved` → `#22c55e`). Red, amber and green go only to such entries, never to an entry whose label does not relate to them (never red for `approved`). Every other entry takes the next color of this set that the enum does not use yet, in order:
+**Every other enum:** an entry whose label carries one of the meanings above takes that color (`approved` → `#22c55e`). Red, amber and green go only to such entries, never to an entry whose label does not relate to them (never red for `approved`). Every other entry takes the next color of this set that the enum does not use yet, in order:
 
 | # | Color | `color` |
 |---|---|---|
@@ -655,7 +653,7 @@ All new fields of an entity go into **one** `create_field` call — `data` is an
       "table_name": "products",
       "field_name": "description",
       "title": "Description",
-      "format": "text",
+      "format": "multiline",
       "width": "default",
       "input_type": "default",
       "searchable": true
@@ -716,7 +714,7 @@ Three separate `create_field` calls for the three fields would be three round tr
 | `reference_delete_mode` | string | `restrict`, `clear`, or `cascade`. On an `is_a` entity never `cascade` (`90249`): set `restrict` or `clear` explicitly, on `parent` fields too. |
 | `relationship_label` | string | Verb for the relationship, set on every `reference` and `parent` field in the same `create_field` call that creates it; omitted, the platform writes `has`. Read it as `<Referenced Entity> <label> <Holding Entity>` (e.g. `"employs"` on `employees.department_id`). Used as the arrow label in module diagrams and in navigation labels. See "Relationship labels". |
 | `singular_label_parent` | string | `parent` fields only. The noun in the add button of this field's child list on the parent's page: `"Permission"` gives "Add Permission". |
-| `plural_label_parent` | string | `parent` fields only. The title of the button on the parent's page that opens this field's child list: `"Permissions"` gives "Permissions…". Empty, the button uses the child entity's plural label (an Entity page shows "Fields…"). Set the pair on every junction leg, and when one child has two or more `parent` fields to the same parent. See "Relationship labels". |
+| `plural_label_parent` | string | `parent` fields only. The title of the button on the parent's page that opens this field's child list: `"Permissions"` gives "Permissions…". Empty, the button uses the child entity's plural label (an Entity page shows "Fields…"). Set the pair on every `parent` field of a junction, and when one child has two or more `parent` fields to the same parent. See "Relationship labels". |
 | `cube_type` | string | OLAP cube participation: `disabled`, `auto` (default), `dimension`, `measure`. See `### cube_type Values` above. |
 | `catalog_field_code` | string | Core provenance column: stable design-time field identity (the blueprint field name, e.g. `status`), the field-rename join key. Write-once: set on create or filled once while empty, then never changed. Empty = not generated from a catalog spec. See "Platform provenance / meta columns" above. |
 
@@ -726,35 +724,29 @@ Three separate `create_field` calls for the three fields would be three round tr
 
 ### Choosing the Right Format
 
-The platform manages nullability from the format; there is no `is_nullable` flag to pass. A `reference` column allows NULL; a `parent` column is NOT NULL whatever its delete mode. A `reference` becomes mandatory with `input_type: required` and delete mode `restrict`; `required` with `clear` is refused (`90257`).
+**What the format does in the app.** A `parent` child is a part of its parent. It has no menu entry: people see, add and change it only on its parent's page, and a role that cannot open the parent cannot reach it. A `reference` record stands on its own. It has its own menu entry and list, and it is not listed on the page of the record it points at. A rollup works over either format; when the child's `view_permission` differs from the parent's, see `rollup-fields.md` → "Hidden child rows".
 
-**Exception: fields of an `is_a` entity never cascade** (`90249`). The rows below that say `cascade` become `restrict` (or `clear` on a `reference`) there, set explicitly. See `entity-families.md`.
+**The format also sets nullability.** A `parent` column is NOT NULL in every state, whatever its delete mode. A `reference` column allows NULL; it becomes mandatory with `input_type: required` and delete mode `restrict`, and `required` with `clear` is refused (`90257`). There is no `is_nullable` flag to pass.
+
+**A relationship is a `parent` only when all three of these hold. Otherwise it is a `reference`.** Answer them for each relationship field on its own, from how the leading products handle these records:
+
+1. **The child never exists without its parent.** No path saves it without one, in any state: not a form, a draft, an import or an integration. It never has to outlive its parent either.
+2. **The child is created as part of the work on its parent.** From how the leading products split the work, name the people who create the child and the people who work the parent. A `parent` child is created by the people working on the parent, as part of that work. A child that other people create as their own work, looking the parent up, is a `reference`.
+3. **The child is reached and run only through its parent.** Nobody, whether they write it or read it, needs to reach it without opening the parent first: nobody cites it by its own number, and nobody works or reads these records in a list across parents (a queue, a board, a list of their own items). It has no life of its own either: its states only move its parent forward.
+
+When you cannot tell, it is a `reference`. An order line is a `parent` of its order: it is only ever added and handled inside the order. The same line is a `reference` to its product, which exists on its own.
+
+A junction (its only fields are its relationship fields; see "Classifying an entity") has a `parent` field to each entity it relates.
+
+A child that must have its parent only from some state on is a `reference`, required from that state through an `input_type_rule` and a validation rule ("Fields that apply only to some enum or boolean values").
+
+**Then the delete mode.** It decides what deleting the record the field points at does:
+
+- **`cascade`** deletes the children with their parent. Use it only on a `parent` whose children have no value of their own once the parent is gone, and that everyone who may delete the parent may also delete. A cascade does not check the child's own permission or rules (a database referential action skips row-level security), so a child whose `edit_permission` differs from the parent's, or whose validation rule admits fewer people than the parent's own rules (`has_permission` / `require_permission`, see `jsonlogic.md`), takes `restrict`. Use `cascade` there only when the user accepts that deleting the parent deletes those children without that check.
+- **`restrict`** refuses to delete the parent while a child points at it, so each child is removed first, through its own permission. Use it on every other `parent`, on every required `reference`, and on every record kept for audit or by law, whichever its format: such a record is closed or voided instead of deleted.
+- **`clear`** empties the field. Use it only on an optional `reference`. Never on a `parent`: its column is NOT NULL, so every delete of the parent would fail.
+- **On an `is_a` entity, never `cascade`** (`90249`): set `restrict`, or `clear` on an optional `reference`, explicitly. See `entity-families.md`.
 <!-- Family variant: `entity-families.md` → "Creating a family". This rule summarizes; that section governs families. -->
-
-**Two tests before the table.** The rows below assume the child belongs with its parent. Test that on every relationship first. One that fails either test is a `reference`: `restrict` when it is required, `clear` when it is optional. A rollup works over either format; when the child's `view_permission` differs from the parent's, see `rollup-fields.md` → "Hidden child rows".
-
-- **The creation test.** A `parent` child is created by the people who work on the parent, as part of that work. Judge by how the record arises in normal work, not by a one-time import. A child created in another workflow, by another team or by an outside party, who look the parent up (a code, a search, a document that names it, a customer portal), is a `reference`, even when it has no meaning without the parent. An invoice has no meaning without its activity and is still a `reference`, because finance keys it in as its own work. A child the system generates along with its parent (the installments of a payment plan) counts as created with it. Time alone does not count: a comment added days later on its ticket is still a `parent`. Who moves the child through its states later does not count either. A child whose `edit_permission` differs from its parent's is a `reference`: that permission also gates inserts, so other people create it. When you cannot tell who creates the child, it is a `reference`.
-- **The independence test.** A `workflow_state` on the child settles nothing by itself. The relationship is a `reference` when the child is self-identifying (people cite its number without the parent's, as with an invoice), when people open and work on it by itself, from its own list rather than through its parent (a task in a project), or when its states drive work unrelated to completing the parent. A child whose states only move it toward its parent's completion stays a `parent`, whoever moves it: an order line going through price checked, commissioned, loaded and delivered is still part of its order, even when invoicing waits on delivered. A gated step on the child itself, such as an approval or a signature, does not make it independent.
-
-**Junction and association class legs skip both tests.** An association class is a record whose purpose is to relate two independent entities and that carries attributes or states of its own. An order line is not one: it is a part of its order that also refers to a product, so `order_id` is a `parent` and `product_id` is a `reference`. Every junction leg and every association class leg is a `parent`. On an association class with its own `workflow_state` (a job application between a candidate and an opening) each leg takes `restrict`, which protects the record and keeps it listed on both parents' pages. On one with attributes only (a project member with an allocation percentage), the rows below give the delete mode.
-
-**Retention records never cascade.** A record with retention value of its own (an invoice, a payment, a signed document, anything kept for audit or by law) takes `restrict` whichever format the tests give it, so its parent cannot be deleted out from under it; the record is closed or voided instead.
-
-Worked example (marketing planning): plans, programs, campaigns and activities are each created in separate work by the people who run that level, who pick the level above from a list, so each level is a required `reference` with `restrict`. Totals still roll up level by level. Orders and invoices under an activity are also `reference` with `restrict`, while a budget line entered inside its activity passes both tests and is a `parent`.
-
-**Read order:** the divergent-permission-scope rule (last two rows) **overrides** the "child is owned by parent" and "M:N junction FK" rows whenever the child has a permission gate of its own, or a junction or association class leg's edit tier differs from the parent's. Always evaluate divergence first; fall through to the same-tier rows only when neither applies.
-
-| Scenario | `format` | `reference_delete_mode` |
-|----------|----------|------------------------|
-| Optional relationship to independent entity | `reference` | `clear` |
-| Required relationship to independent entity | `reference` | `restrict` |
-| Association class with its own `workflow_state`, each leg (skips the tests above) | `parent` | `restrict` |
-| Child is owned by parent (**shared permission scope** — child tier == parent tier) | `parent` | `cascade` (`restrict` on an `is_a` child) |
-| M:N junction FK, **both parents share the junction's tier** (per-leg test, not table-wide) | `parent` | `cascade` (`restrict` on an `is_a` junction) |
-| **Lifecycle-bound child with divergent permission scope** (a permission gate of its own, or a junction or association class leg whose tier differs) — overrides the two rows above | `parent` | `restrict` |
-| Lifecycle-bound child with divergent permission scope, accepting that deleting the parent deletes the child without the child's own permission check (high-risk) — overrides the two rows above | `parent` | `cascade` |
-
-**Divergent-permission-scope rule.** This is the rare case: most children share their parent's permissions, and `parent` + `cascade` is right. A cascade deletes the children without checking the child's own delete permission (a Postgres referential action does not apply row-level security); `restrict` refuses the parent's deletion while any child exists, so each child is removed first through its own delete permission. When a child has its own conditional permission gate (a `validation_rules` rule whose JsonLogic invokes `has_permission` or `require_permission` (see `jsonlogic.md`) against a workflow permission that the parent does not require), keep `format: parent` and set `reference_delete_mode: restrict` (recommended for audit-logged decision evidence like scorecards or signed offers). Use `cascade` only when the user explicitly accepts that deleting the parent deletes the child without that check. `clear` never works on a `parent`: the column is NOT NULL, so every delete of the parent would fail. A child that must survive its parent is not a `parent`: use `reference` with `clear` (first row), or `restrict` for a retention record. Never change a `parent` to a `reference` because of a gated step on the child: the two tests above decide the format, and a `reference` drops the child from the parent's child listing. A child whose entity has a different `edit_permission` from its parent's is a `reference`, by the creation test. A junction is the exception: every leg stays `parent`, including a leg to an entity another module owns, because a junction row is only a relationship and its permission comes from the module that created it.
 
 ### Relationship labels
 
@@ -763,13 +755,13 @@ Set `relationship_label` on every `reference` and `parent` field, in the same `c
 - **Voice.** The referenced entity speaks. Read the label as `<Referenced Entity> <label> <Holding Entity>`, the direction of the arrow in the module diagram: `accounts` → `opportunities` is `owns`, `users` → `tasks` (the owner) is `manages`. A sentence that does not parse, or that parses but is not true, means the label is written from the wrong side.
 - **Specific verbs.** `has`, `references`, `belongs to` and `relates to` add nothing; use a domain verb such as `owns`, `employs` or `supports`. A self-reference takes `is parent of` or `manages`.
 - **One verb per field.** Fields from one entity to the same entity take different verbs: `tasks.creator_id` → `users` is `created`, `tasks.assignee_id` → `users` is `works on`.
-- **Test every label before the field write.** Write each field's sentence, `<Referenced Entity> <label> <Holding Entity>`. `<Referenced Entity>` is the record in `reference_table`, called by the part the field names, if any (`manager_id`: Manager). `<Holding Entity>` is the record in `table_name`; on a junction leg, each other end instead. Rewrite the label unless the sentence is true of that field: `reviews` on `scorecards.interview_id` gives "Interview reviews Scorecard", which is false; `is assessed in` passes.
-- **Junction legs.** Read the label through the junction to the other end, and set `singular_label_parent` and `plural_label_parent` to the other end's name. On `product_tags`, `product_id` is `is tagged with` with `Tag` / `Tags`, so the Product page shows "Tags…" and "Add Tag"; `tag_id` is `is applied to` with `Product` / `Products`.
+- **Test every label before the field write.** Write each field's sentence, `<Referenced Entity> <label> <Holding Entity>`. `<Referenced Entity>` is the record in `reference_table`, called by the part the field names, if any (`manager_id`: Manager). `<Holding Entity>` is the record in `table_name`; on a junction's `parent` field, the entity at the other end instead. Rewrite the label unless the sentence is true of that field: `places` on `order_lines.product_id` gives "Product places Order Line", which is false; `is ordered in` passes.
+- **Junctions.** Read each `parent` field's label through the junction to the other end, and set `singular_label_parent` and `plural_label_parent` to the other end's name. On `product_tags`, `product_id` is `is tagged with` with `Tag` / `Tags`, so the Product page shows "Tags…" and "Add Tag"; `tag_id` is `is applied to` with `Product` / `Products`.
 - **Same parent twice.** When one child has two or more `parent` fields to the same parent, give each its own pair, or the parent's page shows two identical buttons. `permission_hierarchy` does this with `Includes` and `Included in`.
 
-### `reference`: Cross-Entity Relationship (Independent Lifecycle)
+### `reference`: a record that stands on its own
 
-Use when the child record is **created independently** and then associated with the parent, it exists and makes sense on its own. Example: a Task is created on its own and related to a Lead; a Product exists independently of any category. The child can outlive or be reassigned away from the parent.
+Use it when any of the three questions in "Choosing the Right Format" fails. The record has its own menu entry and list, and is not listed on the page of the record it points at.
 
 An order has an optional assigned sales rep. `.tmp_deploy/orders-fields.json`:
 
@@ -793,9 +785,9 @@ An order has an optional assigned sales rep. `.tmp_deploy/orders-fields.json`:
 bun "<skill-folder>/references/call-file.ts" create_field .tmp_deploy/orders-fields.json
 ```
 
-### `parent`: Ownership/Composition (Bound Lifecycle)
+### `parent`: a part of its parent
 
-Use when the child record is **always created in the context of the parent** and has no meaning outside it, master-detail. Example: an Order Line is created within an Order; a Meeting Attendee is created within a Meeting. You would never create the child record first and relate it later.
+Use it only when all three questions in "Choosing the Right Format" hold. The child has no menu entry: people reach it from its parent's page.
 
 An order line belongs to an order. `.tmp_deploy/order-lines-fields.json`:
 
@@ -821,9 +813,9 @@ bun "<skill-folder>/references/call-file.ts" create_field .tmp_deploy/order-line
 
 ### M:N Junction Tables
 
-Create a junction entity and add a `parent` field for **each** leg (two for a binary junction, three or more for an N-ary one):
+Create a junction entity and add a `parent` field to **each** entity it relates (two for a binary junction, three or more for an N-ary one):
 
-First the junction entity, written like any other with `"entity_type": "junction"` (`products` and `tags` already exist: entities before fields). Then both parent legs in **one** `create_field` call, each leg labeled through to the other end. `.tmp_deploy/product-tags-fields.json`:
+First the junction entity, written like any other with `"entity_type": "junction"` (`products` and `tags` already exist: entities before fields). Then all its `parent` fields in **one** `create_field` call, each labeled through to the other end. `.tmp_deploy/product-tags-fields.json`:
 
 ```json
 {"data": [
@@ -836,23 +828,18 @@ First the junction entity, written like any other with `"entity_type": "junction
 bun "<skill-folder>/references/call-file.ts" create_field .tmp_deploy/product-tags-fields.json
 ```
 
-> **Do not set `label_column` on a junction.** `label_column` is optional — `create_entity` requires only `table_name` and `module_id` — and a junction has no natural label field: the platform composes `_label` from the `parent` legs automatically. Setting `label_column` to `id` (or any auto-generated column — `created_at`, `updated_at`) makes `create_entity` fail with *column 'id' specified more than once*, because that column already exists. Omit `label_column` (as the example above does), and likewise omit `label_parent`.
+> **Do not set `label_column` on a junction.** `label_column` is optional — `create_entity` requires only `table_name` and `module_id` — and a junction has no natural label field: the platform composes `_label` from its `parent` fields automatically. Setting `label_column` to `id` (or any auto-generated column — `created_at`, `updated_at`) makes `create_entity` fail with *column 'id' specified more than once*, because that column already exists. Omit `label_column` (as the example above does), and likewise omit `label_parent`.
 
-> **Junctions aren't binary-only.** `entity_type = junction` combines **all** `parent` legs, so an N-ary relationship works the same way — e.g. `(user, role, tenant)`. The class rule for a junction versus an association class is in "Classifying an entity" above.
+> **Junctions aren't binary-only.** `entity_type = junction` combines **all** its `parent` fields, so an N-ary relationship works the same way — e.g. `(user, role, tenant)`. Whether an entity that stores an n:m relationship is a junction is decided in "Classifying an entity" above.
 
-### Cross-module references and required relationships
+### Relationships to entities of other modules
 
-Modules deploy standalone. The blueprint's `related_modules` frontmatter is an **advisory integration hint**, NOT a deployment prerequisite. The deployer never auto-pulls or auto-requires another module to install before this one. A blueprint that needs another module to function (its entities can't deploy without the other module's entities) is a defect to flag, not assemble around.
+A module is installed on its own. It never needs another module installed first, and a relationship never makes another entity or module install.
 
-The mechanism for self-containment is `embedded_master`: a module declares an entity locally with `held_as = embedded_master` and `mastered_in = <canonical-owner-module>`. The entity exists in this module's catalog until the canonical owner installs; at that point Branch-B promotion (deployer Stage 4c-promote) moves the entity to the canonical owner with no data migration.
+- A relationship to an entity that is neither live nor created in the same build creates **no field and no constraint**.
+- When both entities exist, the field is optional: `input_type: "default"` with `reference_delete_mode: "clear"`. It is required (`input_type: "required"` with `reference_delete_mode: "restrict"`) only when every record must have it once both entities exist.
 
-For a relationship between entities in different modules:
-
-- A relationship to an entity that is neither live nor created in the same deploy creates **no field and no constraint**.
-- When both entities exist, the field is proposed. It is non-mandatory unless the spec's §6 `Required` says `yes`: `yes` sends `input_type: "required"` with `reference_delete_mode: "restrict"`, and `no` (the default) sends `input_type: "default"` with `reference_delete_mode: "clear"`.
-- The relationship NEVER forces the other entity (or its module) to install.
-
-The blueprint's §5 `field_required` says whether the relationship's field must be filled in once both entities are installed; the spec records the decision in its §6 `Required`. Neither makes an entity required. Whether a module can be installed without an entity is a separate fact, the blueprint's §3 `install_optional`.
+A module can also hold an entity that another module owns in the catalog (an embedded master: `catalog_owner_module` names the owner). The entity lives in this module until its owner module is installed, and then moves to the owner with no data migration.
 
 ### Embedded-entity governance follows the catalog
 
@@ -861,18 +848,18 @@ An entity's permissions are named by the catalog, never by what is installed. A 
 - **Read and write:** `<owner>:read_<entity>` and `<owner>:write_<entity>`, named after the entity's master. The entity's `view_permission` and `edit_permission` point at them and never change.
 - **Workflow gates:** `<owner>:<verb>`, named after the module that realizes the state if the catalog names one, otherwise the entity's master.
 - **Overrides** (`view_all_<plural>` / `manage_all_<plural>` / `submit_<singular>` / `bypass_submit_lock`) and matching business rules: named after the entity's master.
-- **Bundles** (`<unit>:read`, `<unit>:manage`, `<unit>:admin`, a narrow tier, a role that takes gates): named after the module that declares them. They include the rows above through `permission_hierarchy`, so the module's roles keep holding bundles. `rbac.md` § *Per-entity permissions and bundles* has the full table.
+- **Bundles** (`<unit>:read`, `<unit>:manage`, `<unit>:admin`, a role that does part of the work, a role that takes gates): named after the module that declares them. They include the rows above through `permission_hierarchy`, so the module's roles keep holding bundles. `rbac.md` § *Per-entity permissions and bundles* has the full table.
 - **Boundary-crossing handoffs:** the module still emits the events the embedded entity publishes to or reacts from modules the embedding unit doesn't "play".
 
-When the canonical owner module later installs and Branch-B promotion moves the entity to its canonical home, nothing is renamed. The permission rows already exist: they move to the owner and take the owner's description. Entity columns, grants and rules don't change, and the owner adds its own bundle rows. **Once the same modules are installed, every order ends with the same permission names, entity columns, hierarchy rows and grants.** A second module that embeds the same entity uses the same rows and adds only its own bundle rows.
+When the owner module is installed later and the entity moves to it, nothing is renamed. The permission rows already exist: they move to the owner and take the owner's description. Entity columns, grants and rules don't change, and the owner adds its own bundle rows. **Once the same modules are installed, every order ends with the same permission names, entity columns, hierarchy rows and grants.** A second module that embeds the same entity uses the same rows and adds only its own bundle rows.
 
 Three cases keep other names:
 
-- **Deliberately separate table** (`rename-incoming-from` in a spec): keeps the local prefix, because a shared name would make a grant on one table open the other.
+- **A separate table kept on purpose** under its own name: keeps the local prefix, because a shared name would make a grant on one table open the other.
 - **Entity already live with other permission names** (reused or built by hand): the live names win, and the module's bundle rows include them.
 - **`access_scope: custom`:** the module keeps its hand-made permissions.
 
-This rule applies uniformly to every blueprint shape (`hiring-starter`, `ats-recruitment-pipeline` which is itself master-of-15-and-embedded-of-5, `real-estate-agent`, any future bundle) and to every install ordering. The deployer's behavior on every install is `module_kind`-agnostic; the `module_kind` frontmatter is an informational label, not a behavior switch.
+This holds for every module and every install order.
 
 ---
 
@@ -987,17 +974,17 @@ semantius call crud postgrestRequest '{
 
 1. **Schema setup** (covered above). Before `create_entity` / `create_field`, check the entity or field doesn't already exist; before `delete_entity`, check what references it.
 
-2. **Runtime drift recovery** (new context). A baked recipe in a domain skill (e.g. one generated by `semantius-skill-maker`) assumes a particular FK shape, junction uniqueness, or audit-log flag. The live schema can drift. When a recipe gets a `409 Conflict`, `422 Unprocessable Entity`, or any write failure it didn't predict, **query the live shape** before deciding how to recover:
+2. **Runtime drift recovery**. A baked recipe in a domain skill (e.g. one generated by `semantius-skill-maker`) assumes a particular FK shape, junction uniqueness, or audit-log flag. The live schema can drift. When a recipe gets a `409 Conflict`, `422 Unprocessable Entity`, or any write failure it didn't predict, **query the live shape** before deciding how to recover:
 
 ```bash
-# What FKs does entity <id> have right now?
-semantius call crud read_field '{"filters": "entity=eq.<entity_id>"}'
+# Which relationship fields does the entity have right now?
+semantius call crud read_field '{"filters": "table_name=eq.<table_name>&reference_table=neq.&select=field_name,format,reference_table,reference_delete_mode"}'
 
 # What does this specific field reference today?
-semantius call crud read_field '{"filters": "entity=eq.<entity_id>&name=eq.<field_name>"}'
+semantius call crud read_field '{"filters": "table_name=eq.<table_name>&field_name=eq.<field_name>"}'
 
 # Is this entity audit-logged today?
-semantius call crud read_entity '{"filters": "id=eq.<entity_id>"}'
+semantius call crud read_entity '{"filters": "table_name=eq.<table_name>&select=table_name,audit_log"}'
 # Look for audit_log: true in response
 ```
 

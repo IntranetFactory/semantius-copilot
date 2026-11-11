@@ -68,7 +68,7 @@ Understanding which layer you're working with determines which tools to use:
 | `references/build-module.md` | A request to build or set up something new that needs its own records: the default deliverable, the sample-data question and size, what not to produce unasked, verification, the final response |
 | `references/review-module.md` | A request to review, audit or check an existing module, or to say what it is missing: what to read, what to verify, the optional additions, the report, applying what the user picks |
 | `references/seed-data.md` | Writing generated rows (the sample data of a build, or any request for made-up records): the seed script, mapping children to parents by label, the checks, values and rows that read as records, clearing what was seeded |
-| `references/seed-lib.ts` | Copy it next to the seed script and import it; don't retype it and don't read it, `seed-data.md` lists its functions and shows how: bulk insert, parent lookup by label, relationship read-back, count, distinctness, scale and computed-column guards, clearing a seed, seeded random generator |
+| `references/seed-lib.ts` | Copy it next to the seed script and import it; don't retype it and don't read it, `seed-data.md` lists its functions and shows how: bulk insert, parent lookup by label, relationship read-back, count, distinctness, scale, state-agreement and computed-column guards, a refusal of a key the platform computes, clearing a seed, seeded random generator |
 | `references/entity-families.md` | Layer 1, subtypes and extensions (`id_type: is_a` / `has_a`, `id_refentity`): when to use them, create order, reads and writes across levels, limits, deletes, error codes. Read before the first `create_entity` of such an entity |
 | `references/jsonlogic.md` | Layer 1, JsonLogic rules: `computed_fields`, `validation_rules`, extension operators, cross-entity lookups, dynamic `input_type_rule` (conditional readonly/hidden/required) |
 | `references/rollup-fields.md` | Layer 1, rollup fields: a `sum`, `count`, `min`, `max` or `avg` over child records that the database keeps current; definition keys, filter subset, format fit, hidden child rows, change and removal |
@@ -85,7 +85,7 @@ Understanding which layer you're working with determines which tools to use:
 | `references/entity-match-checker.ts` | Run it (`bun`), don't read it: `--batch -` takes a JSON object on stdin mapping each new entity's `table_name` to other words for it, and compares them with the instance's entities and, of the platform's own, `users`; exit 1 names the matches to settle; see "Before any new entity: compare it with the instance" |
 | `references/vendor-names.ts` | Run it (`bun`), don't read it: `entity:<Name>…` and `field:<Name>…` convert a product's record and field names (singular, spelled the product's way) into `table_name` and labels, or `field_name` and label, only when the user asks to follow that product's names; never convert them by hand |
 | `references/preflight.md` | The environment checks a skill runs before doing work: stay in the repo root, Bun and jq, CLI install and sign-in, and when to read the two question-format files below |
-| `references/muse-questions.md`, `references/dot-questions.md` | How to ask questions where `AskUserQuestion` is not available; `preflight.md` says when to read them |
+| `references/muse-questions.md`, `references/dot-questions.md` | How to ask questions where `AskUserQuestion` is not available; never read them when it is. `preflight.md` says when to read them |
 
 ---
 

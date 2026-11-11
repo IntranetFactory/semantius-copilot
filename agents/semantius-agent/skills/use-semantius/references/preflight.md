@@ -12,19 +12,15 @@ Keep it quiet. The only user-facing output is a halt message (a required tool co
 
 ---
 
-## Question format (Muse chat)
+## Question format
 
-This step runs on every invocation, even when a skill uses none of the checks below.
+This step runs on every invocation, even when a skill uses none of the checks below. It picks one way of asking for the whole invocation, so at most one of the two question-format files is read. Exactly one of these cases applies:
 
-In Muse chat, if `AskUserQuestion` is not in this session's tool list, read [`muse-questions.md`](./muse-questions.md) (this folder) now, before any question is asked in this invocation, and re-read it whenever the conversation has been summarized or reset since it was last read. Recorded run state, memory notes, and summaries record verdicts and progress only; they never override the question format in that file.
+- **With `AskUserQuestion`** (in this session's tool list, or listed as a deferred tool you load first): ask every question with it, and read neither [`muse-questions.md`](./muse-questions.md) nor [`dot-questions.md`](./dot-questions.md). Their chat formats apply only where the tool is missing.
+- **Muse chat without it:** read [`muse-questions.md`](./muse-questions.md) (this folder) now, before any question is asked in this invocation, and re-read it whenever the conversation has been summarized or reset since it was last read.
+- **dot, OpenAI's personal assistant, or another similarly limited tool without it:** read [`dot-questions.md`](./dot-questions.md) (this folder) now, before any question is asked in this invocation, and re-read it whenever the conversation has been summarized or reset since it was last read.
 
----
-
-## Question format (dot)
-
-This step runs on every invocation, even when a skill uses none of the checks below.
-
-In dot, OpenAI's personal assistant, and other similarly limited tools, if no supported interactive question tool is available, read [`dot-questions.md`](./dot-questions.md) (this folder) now, before any question is asked in this invocation, and re-read it whenever the conversation has been summarized or reset since it was last read. Recorded run state, memory notes, and summaries record verdicts and progress only; they never override the question format in that file.
+Recorded run state, memory notes, and summaries record verdicts and progress only; they never override the question format this step picks.
 
 ---
 
@@ -40,7 +36,7 @@ This covers scripts as much as bare commands. The Bun helpers skills stage in sc
 
 Besides the `semantius` CLI, these skills need two general-purpose tools on PATH:
 
-- **Bun** — the mandated runtime: skills run their scripts with `bun run`. Python is forbidden across these skills.
+- **Bun** — the mandated runtime: skills run their scripts with `bun run`. Python is forbidden across these skills (`cli-usage.md` → "Ad-hoc JSON and file work in Bun").
 - **jq** — parses `semantius` JSON output, both in this preflight (check 3 reads `org` and `ui_baseurl` with `jq`) and in the skills' bash flows.
 
 Install any that are missing, no prompt, one plain line per tool actually installed (e.g. *"Installing jq..."*). **This check runs before check 3**, because the CLI probe there parses JSON with `jq`, so `jq` must already be on PATH. After installing, if the tool is still not found (`command -v <tool>` on POSIX, `Get-Command <tool>` on Windows PowerShell), it is installed but not on the agent's PATH yet: a PATH change reaches only programs started afterward. Do not stop. Look in the folder its installer uses:
