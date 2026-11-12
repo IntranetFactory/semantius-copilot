@@ -31,7 +31,7 @@ The rollup field's `format` must fit the result (`90268`):
 
 ## Creating one
 
-The child entity must already exist, and `link_field` and `value_field` must exist or come earlier in the same `create_field` array, so a rollup goes last, in the model's one `create_field` call or a later one. A rollup ahead of them fails with `90264`, and nothing in the call lands. Several rollups can go in one `create_field` array.
+The child entity must already exist, and `link_field`, `value_field` and every field the `filter` reads must exist or come earlier in the same `create_field` array, so a rollup goes last, in the model's one `create_field` call or a later one. A rollup ahead of its `link_field` or `value_field` fails with `90264`, one ahead of a field its filter reads fails with `90265`, and nothing in the call lands. Several rollups can go in one `create_field` array.
 
 `.tmp_deploy/orders-rollups.json`:
 

@@ -195,8 +195,7 @@ A = static setting, B = per-session setting.
 
 **Backend B — dynamic bundle, MULTI-AGENT (generic agent `main`).** One Flue agent hosts every agent:
 which agent a session runs is decided by the **agent bundle** POSTed at session creation, not by code.
-Base Dockerfile is **skill-free** — only the CF sandbox base (the `-python` variant: `node`, `bun`,
-Python 3.11) + the `semantius` CLI and `yq`; `/workspace/.agents/skills` is
+Base Dockerfile is **skill-free** — only the CF sandbox base + `node`; `/workspace/.agents/skills` is
 **empty at boot**. This is a hard requirement, not an aside: if any skill file were baked in, B would be
 discovering a baked copy instead of testing dynamic injection. Verified by the §13 clean-base test (a B
 container **before** injection finds no skill). Ingest `POST …/sessions/agent` (which also **mints the

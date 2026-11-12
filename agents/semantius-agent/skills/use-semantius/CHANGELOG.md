@@ -2,6 +2,139 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## The label field gets its title from create_entity
+
+2026-11-12. Asked for by Martin Amm, once CR 2 (`C:\dev\semantius\plans\CR-2-label-field-title.md`) shipped. `create_entity` now titles the label field, so a build no longer renames it with one `update_field` per entity. That step cost the Muse recruiting build a probe and left three label fields titled "Name". `bun tests/platform-probes.ts cr2` confirmed the behavior on `tests`:
+
+- a given `label_column_label` is the title, and the two stay in step both ways;
+- without it, the title is the label column in words with the entity's singular left out where the column starts with it (`product_name` on `products` is "Name", `job_opening_title` is "Title");
+- a column ending in `_number`, `_no`, `_id` or `_code` keeps the entity's word;
+- an `is_a` entity keeps its base's title on create, and an update to another one is refused with `90242`.
+
+The skill follows the platform's default, which replaces its own rule that a title repeats the label column in words ("Enrollment Name").
+
+- `data-modeling.md`: "Customizing the label field's title" describes the default and `label_column_label`. Step 6 passes `label_column_label` only when another title fits better, and step 7 loses the rename. "Key Entity Fields" gains a `label_column_label` row. The `singular_label` row says a blank one is derived from `singular`. The auto-generated fields table and "Choosing the label" follow.
+- `build-module.md` step 7 loses "label titles".
+- `review-module.md` checks the title against the default, and titles a composed `<singular>_name` "Name".
+- `crud-tools.md` lists `label_column_label` for `create_entity`.
+- The `call-file.ts` message for a label field re-sent in `create_field` points to `label_column_label`.
+
+The file format is unchanged; `version` stays `3.1`.
+
+## call-file.ts and writeModel refuse a field create_entity already made
+
+2026-11-12. Asked for by Martin Amm. In the Haiku runs of task t4 (`tests/crud-tools-eval.ts`), 4 of 7 runs sent the label column again in their `create_field` call, mostly with the title the skill asks for and sometimes with `input_type: required`. `create_entity` had already made that field, so the whole call failed with `23505` and nothing in it landed. Golden Rule 3 already forbids this.
+
+- `call-file.ts` now refuses a `create_field` row for a field `create_entity` already made: `id`, `created_at`, `updated_at`, and the entity's label column, read from the host in the same read as the rollup check. The message says to use `update_field` for its title or description.
+- `writeModel` refuses the same, reading the label column from the entity payload.
+- `data-modeling.md` → "Mandatory Creation Order" step 7, the `call-file.ts` paragraph, Golden Rule 3 and the `call-file.ts` row in `SKILL.md` say so.
+
+The file format is unchanged; `version` stays `3.1`.
+
+## One check run names every problem, one builder writes the model, one run verifies it, and one call asks both questions
+
+2026-11-12. Asked for by Martin Amm, after a Muse recruiting build on `tests` lost about ten minutes. Its `create_field` call failed three times in a row, on a required reference with `clear` (`90257`), a rollup over hidden rows (`90269`) and `90265`. Its state rules were added with one `update_entity` per entity after the entities existed. It re-read the module's setup with four separate reads after the verify run. And it asked the entity-list and sample-data questions in two turns. Three Haiku paper builds on the text before this change (`tests/crud-tools-eval.ts`, task t4, `PAPER=1`) left two required references with `clear` and eleven enum icons that are not Lucide icons (`check-circle-2`, `x-circle`, `edit-2`) in payloads that `call-file.ts --check` passed.
+
+- **`call-file.ts`** checks more before it sends, and names every problem in one run instead of stopping at the first. It refuses a required `reference` with `reference_delete_mode: clear`, a rollup without `include_hidden_rows` over a child that has a `select_rule` or another `view_permission` (read from the host), and an `icon_name` or enum `icon` that is not in `lucide-icon-tags.json`. A build therefore no longer runs `lucide-icon-checker.ts` (`build-module.md` step 5.5, `data-modeling.md` → "Icons are Lucide icons"); the checker stays for icons no script checks.
+- **`jsonlogic-kit.ts`** gains `modelProblems` and `writeModel`. One builder holds the entities and their fields, and `writeModel` writes `entities.json` (one file per level for a family) and `fields.json` (rollups last) only when the model has no problem. It refuses a field its `input_type_rule` makes required in some states with no validation rule that reads it, `readonly` on a field no computed rule fills, a computed field that fills nothing, and the checks of `call-file.ts`. The rules of the pass in step 5.4 therefore land in `create_entity`, never in a later `update_entity` (`data-modeling.md` → "Mandatory Creation Order", `build-module.md` step 5.7).
+- **`module-rbac-setup.ts`** sends its independent reads together. With `--slug` on a module that has entities, it prints `report` lines: the module's `access_scope`, then one per entity (class, permissions, rule and computed-field names, `select_rule`), per `<slug>:*` hierarchy row and per role with its grants. That run is a build's whole verification read (`build-module.md` → "Verify, then stop", Golden Rule 9).
+- **With `AskUserQuestion`**, the entity-list question and the sample-data question go in one call, and the sample-data option names the total for each scope offered. An answer that adjusts the list makes the sample-data answer void, and it is asked again on its own. The chat formats keep one question at a time (`build-module.md` → "Order of a build", "Confirm the entity list", "The sample-data question"; `flows.md` rows 8.7 and 8.8 and the overview row follow).
+- **`tests/crud-tools-eval.ts`** gains task t4 (the whole skill on the recruiting request, live or paper) and a `clean` mode, and `tests/platform-probes.ts` probes platform change requests.
+
+The file format is unchanged; `version` stays `3.1`.
+
+## A rollup's filter may read fields created earlier in the same call
+
+2026-11-12. Asked for by Martin Amm. A Muse recruiting build on `tests` sent every field in one `create_field` call with the rollups last, as the skill says, and the platform refused a rollup whose filter read `job_applications.workflow_state`, created earlier in that call (`90265`). The platform now compiles a rollup filter against the fields created earlier in the same call (CR 1 in `C:\dev\semantius\plans`). `bun tests/platform-probes.ts cr1` confirmed it on `tests`. The probe also confirmed that `90265` still refuses a filter on a field that exists nowhere, a field later in the array, and a json column, and that a refused call creates nothing.
+
+`rollup-fields.md` → "Creating one" names the fields a filter reads beside `link_field` and `value_field`, and gives the code for each: `90264` for a rollup ahead of its `link_field` or `value_field`, `90265` for one ahead of a field its filter reads. The order of a build does not change: `data-modeling.md` and `crud-tools.md` already put rollups last, after the fields they read.
+
+## The key type and the label are two rules, and no label copies an id
+
+2026-11-12. Asked for by Martin Amm, after a Muse recruiting build on `tests` showed two defects. Each job application's name repeated its id, and so did every interview's and offer's `job_application_id_label`. Job openings got an `auto_increment` key although their ids are seen outside the platform. The agent had followed "A record people do not name" exactly. That rule decided the key and the label in one test, only for records without a name of their own: a named record never got a key-type decision, and a record its related records name got a copy of its id.
+
+Two Haiku paper builds on that text reproduced both defects; both runs said no rule decides the key of a named record. A third, on the text before it, composed the application label from its candidate and job opening, but chose the keys by judgment.
+
+`data-modeling.md` now has two sections:
+- **"Choosing the key type":** every new entity takes `typeid`, with its singular as `id_prefix`, except a junction (`auto_increment`) and an `is_a` / `has_a` entity. `build-module.md` step 1 reads the prefixes of all of them.
+- **"Choosing the label":** a record's own name, title or number, or else `<singular>_name` composed by a `computed_fields` rule from the related records' label columns ("Ana Silva – Calculus I"). The first round of Haiku paper builds on the new text gave interviews and offers made-up names typed into a form, so the first case asks for a name people already call the record by. It keeps the stored label on an update where a related record reads as `null`, and the entity takes no `label_parent` to a record the rule names. A label never copies the id.
+
+A live check on `tests` found that `set_record` binds stored columns only, so `_label` and `<fk>_label` read as `null` in its body; `jsonlogic.md` says so. The same check ran the composed rule: an insert gave "Marta Keller – Senior Backend Engineer", and an update with an unreadable candidate kept the stored label.
+
+Other changes:
+- `jsonlogic-kit.ts` gains `composedLabel`, tested against a new example in `jsonlogic.md` Pattern 3, whose order line label is now `order_line_name`.
+- `review-module.md` checks the key type in its own row. A label that copies the id is fixed by replacing its rule, with no rebuild.
+- `seed-data.md` uses a composed label as its example of a computed parent label.
+- `flows.md` row 8.6 follows.
+
+The file format is unchanged; `version` stays `3.1`.
+
+## A write permission includes read, and the close-out names the roles to assign
+
+2026-11-12. Asked for by Martin Amm, after a Haiku paper build of a recruiting module had to guess both. In the module-wide shape, each `<slug>:write_<entity>` of a role that does part of the work now includes `<slug>:read`, as `write_<entity>` includes `read_<entity>` in the per-entity shape: a write without read is unusable under row-level security. The change is in `rbac.md` → "Roles that do part of the work", step 2, in `build-module.md` steps 5.4 and "Verify, then stop", and in `review-module.md` row 72. A build's final response now lists, by `role_name`, the module's roles that take gates or do part of the work, for the user to assign to people (`flows.md` row 8.9). The file format is unchanged; `version` stays `3.1`.
+
+## A record people do not name gets a typeid key and its id as its label
+
+2026-11-12. Asked for by Martin Amm, after a Muse recruiting build on `tests` created `applications`, `interviews` and `offers` with no label column. The platform then added a required `label` field that nobody could fill. The agent keyed its seed on invented codes and added three fields to the live schema to make them work.
+
+`data-modeling.md` → "A record people do not name" now decides such an entity: people tell its records apart by a number the system gives them, or by the records it relates. It gets:
+- `id_type: typeid`, with `id_prefix` set to its singular;
+- `label_column: <singular>_number`, set in `create_entity`, its title renamed from "Name" to "<Singular> Number" once the fields exist;
+- a `computed_fields` rule `{"var": "id"}` that copies the id into the label.
+
+The prefixes are read before the first write; a taken prefix is settled with the user like a name clash (`flows.md` row 8.6). The platform titles every label field "Name", so every build now renames each new label field's title to match its label column (`offer_number` → "Offer Number", `product_name` → "Product Name"), with `update_field` once the fields exist (`data-modeling.md` → "Customizing the label field's title", creation order step 7). A record that carries a name, a title or a number people type or receive keeps that text as its label. `review-module.md` row 90 checks it, and an entity without it needs a rebuild.
+
+A live check on `tests` first found that a rule could not see a database-assigned typeid at insert. After the platform fix, the same check copied the id into the label, a child's `<fk>_label` showed it, and an update kept it. The file format is unchanged; `version` stays `3.1`.
+
+## Payloads with rules are built in Bun, and call-file.ts checks them before sending
+
+2026-11-12. Asked for by Martin Amm, after the same build spent 12 tool calls on one entity payload. The agent typed its nested JsonLogic on one line, and `call-file.ts` reported only `JSON Parse error: Expected ']'`. The agent then reached for Python, which the skills forbid.
+
+New and changed tools:
+- `jsonlogic-kit.ts` builds every rule from small functions. A builder script names each part of a rule and writes the payload file with `writePayload`, which refuses a repeated rule code or name (`data-modeling.md` → "Mandatory Creation Order"). Its tests rebuild rules from `rbac.md`'s own JSON blocks.
+- `call-file.ts` now does these checks before it sends:
+  - it names the line and column of invalid JSON, with a caret and the bracket still open;
+  - it refuses a variable a shell emptied (`""`, `".workflow_state"`);
+  - it refuses a `has_permission` / `require_permission` name that is not a permission on the host;
+  - `--check` validates without sending.
+- `edit-file.ts` changes a file by exact replacement, for a harness with no file-edit tool.
+- `permission-names.ts` holds the permission-name helpers that `module-rbac-setup.ts` and `call-file.ts` share.
+
+`cli-usage.md` → "Ad-hoc JSON and file work in Bun" now states the Python rule once, with its reason and a Bun tool for each need. It also covers writing a file with no write tool (a quoted heredoc, then run what was written). `jsonlogic.md` → "Testing a rule" sends its case from a file. The file format is unchanged; `version` stays `3.1`.
+
+## One seed command checks every row before anything is sent
+
+2026-11-12. Asked for by Martin Amm, after the same build spent about 28 of its 42 minutes on 10 seed-script runs and 5 halts:
+- an invented key column;
+- a required label left out;
+- a key emptied by a patch;
+- approval stamps found missing only after every table had landed, which cost a clear and a re-seed;
+- a real run chained after a failed check.
+
+`seed-lib.ts` changes:
+- **One command, two passes.** It runs the script as a check pass and then, only when that passed, as the real pass. `--check` stops after the check pass. Every `rng` stream restarts each pass. The real pass halts when its keys or row counts differ from the check pass; other values are not compared. A check pass hides the rows its `clearSeeded` would delete.
+- **Metadata once.** It reads the tables' descriptions once per module.
+- **Checks before any write.** Every row is checked:
+  - columns are fields;
+  - no platform-written column is sent;
+  - required fields have a value, including ones an `input_type_rule` requires;
+  - enum values are values, with a hint for a label or a near spelling;
+  - `null` only where allowed;
+  - the stamps of rows past an approval are present;
+  - the approver is not the user running the seed;
+  - that user is the module's admin and can read every row back.
+- **Keys.** A table is keyed on its label column, or on `_ref`, a planned name that is never sent, matched on the values the rows send. Junctions converge on a re-run.
+- **Drift and halts.** `seedEnsureMany` reads the whole table (up to 999 rows). A stored row that differs from its planned row, or that matches no planned row because a key or a value changed in the script, halts. Numbers are compared rounded to their field's precision, a junction is keyed on `_ref`, and a stamp sent on a row before its step is refused. A halt names the script line: the line that threw, or the last helper called.
+- **New helpers.**
+  - `--describe <tables>` prints what each table takes.
+  - `at(days, "HH:MM")` builds date-times.
+  - `readRows(path)` reads an existing entity such as `users`.
+  - `seedUser()` gives the user running the seed.
+
+A Haiku paper build of the same request then passed: its payloads were valid, every permission name resolved, and its seed script's check pass was clean against metadata built from those payloads. It used no Python and typed no rule by hand. Its two stumbles, a missing read helper and no way to get the seed user, gave `readRows` and `seedUser`.
+
+`seed-data.md` describes the one-command run and drops the advice to key on a code. The file format is unchanged; `version` stays `3.1`.
+
 ## Mid-market leaders by default, and every record they agree on is outlined or named
 
 2026-11-11. Asked for by Martin Amm, after a recruiting build outlined five entities and left out the interview feedback record that Greenhouse, Lever and Workable each keep. `build-module.md` → "Model it like the leading products", step 1, now picks the leading products from the market segment the request names (a company size, or a segment such as enterprise or small business) and, when it names none, from the mid-market: products that companies of about 100 to 1,000 people buy and set up without an implementation partner. A product the user names to mirror is always one of them. Its examples are now one domain, a CRM: Salesforce, HubSpot. Step 2 now finds what the products agree on by working out each product's own list of records under its own names and matching the lists. A record two or more of them keep is an entity of the outline, or a next step in the final response with its reason when the user's goal does not need it. `flows.md` rows 8.1 and 8.9 follow. The file format is unchanged; `version` stays `3.1`.

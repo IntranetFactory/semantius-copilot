@@ -3,53 +3,116 @@
  * seed-lib.ts — the fixed helpers for a sample-data seed script. Copy it next to the
  * script and import it; never retype it (`references/seed-data.md` shows how).
  *
+ * One command, two passes: `bun run <script>` runs the script's body as a check pass, which records
+ * every write and sends none, and then, only when the check pass passed, as the real pass. A halt in the
+ * check pass sent nothing. `--check` (or `SEED_CHECK=1`) runs the check pass alone.
+ *
  * What it enforces:
- *   - Failure is loud: a non-zero exit from `semantius`, a short RETURNING, a row with
- *     different keys than its siblings, a wrong count or a child that names the wrong
- *     parent all THROW, and `runSeed` turns any thrown error into a non-zero exit.
- *   - Ids are never typed and never taken from an insert response by position: a parent
- *     is re-read by its natural key (`idsByKey`) and a child names its parent by label.
- *     `assertParents` then reads every child back with its `<fk>_label` and compares it
- *     with the parent the script meant.
- *   - Numbers fit the rows: `assertItemized` halts before the first write on a stored figure out of scale with
- *     its child rows, and `assertComputedVary` halts on a computed or rollup column with one value on every row.
- *   - States agree: `assertStatesAgree` halts before the first write on a parent whose state its child rows'
- *     states contradict.
- *   - A key the seed owns: `seedEnsureMany` refuses a `keyField` the platform writes.
- *   - One call per table: `postMany` sends a whole table in one `postgrestRequest` POST
- *     (array `body`, at most `BATCH_SIZE` rows per call). A failed call landed nothing.
+ *   - Rows are checked against the platform's description of their table before anything is sent, in both
+ *     passes: every column is a field, no column the platform writes is sent (an approval stamp on a row
+ *     past its step excepted), required fields carry a value, an enum gets one of its values (never a
+ *     label), `null` goes only where the format takes it, a row at or past an approval carries its stamps,
+ *     its approver is not the user running the seed, and that user may create and read what is seeded.
+ *     The tables' descriptions are read once per module.
+ *   - Failure is loud: a non-zero exit from `semantius`, a short RETURNING, rows with different keys, a
+ *     wrong count, a child that names the wrong parent, or a stored row that differs from the plan all
+ *     THROW, and `runSeed` turns any thrown error into a non-zero exit naming the script line.
+ *   - Ids are never typed and never taken from an insert response by position: a parent is re-read by its
+ *     key (`idsByKey`) and a child names its parent by that key. `assertParents` then reads every child
+ *     back with its `<fk>_label` and compares it with the parent the script meant.
+ *   - The key is the table's label column when the seed sends it. Otherwise (the platform computes the
+ *     label, or the table is a junction) each planned row carries `_ref`, a name that is never sent, and the
+ *     stored rows are matched on the values the rows send.
+ *   - Numbers fit the rows (`assertItemized`), states agree (`assertStatesAgree`), computed and rollup
+ *     columns move (`assertComputedVary`), rows past an approval carry their stamps (`assertStamped`).
+ *   - One call per table: `postMany` sends a whole table in one `postgrestRequest` POST (array `body`, at
+ *     most `BATCH_SIZE` rows per call). A failed call landed nothing.
+ *   - Sample email addresses never reach a real inbox: any address that is not at a subdomain of
+ *     example.com is refused.
  *
- * Check run: `bun run <script> --check` (or `SEED_CHECK=1`) runs the whole script with
- * every write recorded but never sent. Reads still go to the live host: before a table's
- * insert, one read with `limit=0` proves the table and every column of the first row
- * exist. The rows a write would have added are returned by later reads that match them
- * (`eq.`, `in.()` and `is.null` filters), so `idsByKey` and the next table behave as on a
- * real run. The platform still validates VALUES (enums, NOT NULL, rules) only on the real
- * run, and relationship labels exist only there, so `assertParents` checks them on the
- * real run.
+ * CLI: `bun seed-lib.ts --describe <table>[,<table>…]` prints what a seed of each table sends.
  *
- *   - Sample email addresses never reach a real inbox: `postMany` refuses any address that is not at a
- *     subdomain of example.com.
- *
- * Not a CLI — import it:
+ * Import it:
  *   import { postMany, seedEnsureMany, idsByKey, assertParents, assertJunction, assertItemized, assertStatesAgree, assertStamped, assertComputedVary, assertSeedCounts, assertSeedDistinct,
- *            rng, days, uniq, slugify, exampleDomain, patchById, clearSeeded, runSeed } from "./seed-lib";
+ *            readRows, seedUser, rng, days, at, uniq, slugify, exampleDomain, patchById, clearSeeded, runSeed } from "./seed-lib";
  */
+
+import { relative } from "node:path";
 
 type Row = Record<string, unknown>;
 
-let writeCount = 0;
-let clearStarted = false;   // this script called clearSeeded
-let rowsInserted = false;   // this script sent an insert
+/** The key of a table whose rows carry a planned name instead of a key column: `seedEnsureMany(path, rows, "_ref")`. */
+export const REF = "_ref";
 
-/** Count of write calls so far (a bulk call counts once). */
+let writeCount = 0;
+let clearStarted = false;   // this pass called clearSeeded
+let rowsInserted = false;   // this pass sent an insert
+
+/** Count of write calls so far in this pass (a bulk call counts once). */
 export const writes = (): number => writeCount;
 
-/** True with the `--check` argument or `SEED_CHECK=1`: writes are recorded, never sent. */
-export const isCheckRun = (): boolean => process.env.SEED_CHECK === "1" || process.argv.slice(2).includes("--check");
+// ─────────────────────────────── passes ───────────────────────────────
+
+type Mode = "check" | "real";
+let mode: Mode | undefined;   // set by runSeed; outside it (tests), --check / SEED_CHECK decide
+let quiet = false;            // the check pass of a one-command run prints only its halt and one summary line
+
+const checkOnlyAsked = (): boolean => process.env.SEED_CHECK === "1" || process.argv.slice(2).includes("--check");
+
+/** True in the check pass: writes are recorded, never sent. */
+export const isCheckRun = (): boolean => (mode ? mode === "check" : checkOnlyAsked());
 
 /** Prefix for a success line, so a check run never reads like a seeded table. */
 const tag = (): string => (isCheckRun() ? "[check run] " : "");
+const say = (line: string): void => { if (!quiet) console.log(line); };
+
+const SELF_PATH = String((import.meta as { path?: string }).path ?? "seed-lib.ts");
+const SELF = SELF_PATH.replace(/\\/g, "/").toLowerCase();
+let lastSite = "";
+
+/** This file's path as the user runs it from the repo root (`.tmp_deploy/seed-lib.ts`). */
+const libPath = (): string => {
+  const rel = relative(process.cwd(), SELF_PATH).replace(/\\/g, "/");
+  return rel && !rel.startsWith("..") ? rel : SELF_PATH.replace(/\\/g, "/");
+};
+
+/** The first frame of `stack` outside this file, as `<file>:<line>`; "" when there is none. */
+function scriptFrame(stack: string): string {
+  for (const line of stack.split("\n").slice(1)) {
+    const m = line.match(/((?:[A-Za-z]:)?[^\s()]+\.(?:ts|js|mjs|tsx)):(\d+)(?::\d+)?/);
+    if (!m) continue;
+    const file = m[1].replace(/\\/g, "/");
+    const lower = file.toLowerCase();
+    if (lower === SELF || lower.endsWith("/seed-lib.ts")) continue;
+    return `${file.split("/").pop()}:${m[2]}`;
+  }
+  return "";
+}
+
+/** Remembers the script line that called the current helper, so a halt names it. */
+function site(): void {
+  lastSite = scriptFrame(new Error().stack ?? "") || lastSite;
+}
+
+const passPlan = new Map<string, string[]>();   // check pass: table → what each insert planned
+const passSeen = new Map<string, number>();
+
+/** The real pass must build the rows the check pass checked. */
+function samePlanAsCheck(table: string, plan: string): void {
+  if (!mode) return;
+  if (mode === "check") {
+    passPlan.set(table, [...(passPlan.get(table) ?? []), plan]);
+    return;
+  }
+  const i = passSeen.get(table) ?? 0;
+  passSeen.set(table, i + 1);
+  if (passPlan.get(table)?.[i] !== plan) {
+    throw new Error(
+      `${table}: the real pass built other rows than the check pass, so what was checked is not what would be written. ` +
+      `Build every row inside runSeed's body from the plan, rng(), days() and at(); never from Date.now(), Math.random() or the clock.`,
+    );
+  }
+}
 
 // ─────────────────────────────── transport ───────────────────────────────
 
@@ -68,16 +131,25 @@ let transport: Transport = spawnTransport;
 /** Tests only: replace the process that talks to the platform (`null` restores it). */
 export const setTransport = (t: Transport | null): void => { transport = t ?? spawnTransport; };
 
-// ─────────────────────────────── check run ───────────────────────────────
+// ─────────────────────────────── check pass ───────────────────────────────
 
-const dryRows = new Map<string, any[]>();   // `pg:/<table>` → rows a check run "inserted"
+const dryRows = new Map<string, any[]>();           // `pg:/<table>` → rows a check pass "inserted"
+const dryDeleted = new Map<string, Set<string>>();  // `pg:/<table>` → ids of live rows a check pass "deleted"
 let dryId = 0;
 const dryWarned = new Set<string>();
-const rulesRead = new Map<string, any[]>();   // table → its computed_fields, read once by assertComputedVary
-let seedUserId: string | undefined;           // the seeding user's id, read once by assertComputedVary
+const streams = new Set<() => void>();              // every rng(), restarted at the start of each pass
 
-/** Clears what a check run recorded (tests only). */
-export const resetCheckRun = (): void => { dryRows.clear(); dryWarned.clear(); dryId = 0; writeCount = 0; clearStarted = false; rowsInserted = false; rulesRead.clear(); seedUserId = undefined; };
+function resetPass(): void {
+  dryRows.clear(); dryDeleted.clear(); dryWarned.clear(); dryId = 0;
+  writeCount = 0; clearStarted = false; rowsInserted = false; lastSite = "";
+  for (const restart of streams) restart();
+}
+
+/** Clears what a check run recorded and every cached description (tests only). */
+export const resetCheckRun = (): void => {
+  resetPass();
+  metaCache.clear(); me = undefined; passPlan.clear(); passSeen.clear(); mode = undefined; quiet = false;
+};
 
 /** `col=op.value` triples of a PostgREST query string (`select`, `order`, `limit`, `offset` dropped); `null` when a part is not of that form. */
 function parseFilters(query: string): Array<[string, string, string]> | null {
@@ -99,7 +171,7 @@ function parseFilters(query: string): Array<[string, string, string]> | null {
 const decode = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };
 const unquote = (s: string): string => (s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1).replace(/\\(.)/g, "$1") : s);
 
-/** Rows the check run recorded under `key` that match `query`. An unsupported operator matches nothing (warned once). */
+/** Rows the check pass recorded under `key` that match `query`. An unsupported operator matches nothing (warned once). */
 function dryMatch(key: string, query: string): any[] {
   const rows = dryRows.get(key) ?? [];
   if (!rows.length) return [];
@@ -121,9 +193,18 @@ function dryMatch(key: string, query: string): any[] {
   return rows.filter((r) => tests.every((t) => t(r)));
 }
 
+/** The ids an `id=eq.` or `id=in.()` filter names. */
+function idsIn(query: string): string[] {
+  const t = parseFilters(query)?.find(([c, op]) => c === "id" && (op === "eq" || op === "in"));
+  if (!t) return [];
+  return t[1] === "eq" ? [unquote(decode(t[2]))] : t[2].replace(/^\(|\)$/g, "").split(",").map((v) => unquote(decode(v)));
+}
+
 // ─────────────────────────────── query helpers ───────────────────────────────
 
 export const BATCH_SIZE = 100;
+/** `seedEnsureMany` reads a table whole up to this many rows, to find stored rows that match no planned row. */
+const WHOLE_TABLE = 1000;
 
 /** Splits `rows` into groups of at most `size`. */
 export function chunk<T>(rows: ReadonlyArray<T>, size = BATCH_SIZE): T[][] {
@@ -157,17 +238,43 @@ const tableOf = (path: string): string => {
   return t.startsWith("/") ? t : `/${t}`;
 };
 
-/** The natural keys of `rows` as strings; throws on an empty or repeated key. */
+/** The keys of `rows` as strings (their `_ref` for `REF`); throws on an empty or repeated key. */
 function keysOf(who: string, table: string, keyField: string, rows: ReadonlyArray<Row>): string[] {
   const keys = rows.map((r, i) => {
     const k = r[keyField];
-    if (k === undefined || k === null || k === "") throw new Error(`${who} ${table}: row ${i} has an empty "${keyField}"`);
+    if (k === undefined || k === null || k === "") {
+      throw new Error(keyField === REF
+        ? `${who} ${table}: row ${i} has no _ref; give every planned row of this table a _ref name (it is never sent)`
+        : `${who} ${table}: row ${i} has an empty "${keyField}"`);
+    }
     return String(k);
   });
   if (new Set(keys).size !== keys.length) {
     throw new Error(`${who} ${table}: "${keyField}" repeats among the rows; every seeded row needs its own ${keyField}`);
   }
   return keys;
+}
+
+const withoutRef = (r: Row): Row => { const { [REF]: _drop, ...rest } = r; return rest; };
+
+/** The entry of `pool` nearest to `name` by edit distance, when it is at most 3 edits away. */
+function closest(name: string, pool: ReadonlyArray<string>): string | undefined {
+  const distance = (a: string, b: string): number => {
+    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const next = [i];
+      for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      row = next;
+    }
+    return row[b.length];
+  };
+  let best: string | undefined;
+  let bestDistance = 4;
+  for (const p of new Set(pool)) {
+    const d = distance(name, p);
+    if (d < bestDistance) [best, bestDistance] = [p, d];
+  }
+  return best;
 }
 
 // ─────────────────────────────── postgrestRequest ───────────────────────────────
@@ -195,27 +302,278 @@ export async function pgRequest(method: string, path: string, body?: unknown, si
         for (const r of out) Object.assign(r, body);
         const id = parseFilters(query)?.find(([c, op]) => c === "id" && op === "eq")?.[2];
         if (!out.length && id !== undefined) out = [{ ...(body as object), id: decode(id) }];   // a live row
-      } else dryRows.set(key, (dryRows.get(key) ?? []).filter((r) => !out.includes(r)));
+      } else {
+        dryRows.set(key, (dryRows.get(key) ?? []).filter((r) => !out.includes(r)));
+        const gone = dryDeleted.get(key) ?? new Set<string>();
+        const ids = idsIn(query);
+        for (const id of ids) gone.add(id);
+        dryDeleted.set(key, gone);
+        out = [...out, ...ids.filter((id) => !out.some((r) => String(r.id) === id)).map((id) => ({ id }))];   // live rows, hidden from later reads
+      }
     }
     writeCount++;
-    console.log(`  [check run] ${method} ${table}: ${out.length} row(s), not sent`);
+    say(`  [check run] ${method} ${table}: ${out.length} row(s), not sent`);
     return single ? out[0] ?? null : out;
+  }
+  let sendPath = path;
+  const gone = isCheckRun() ? dryDeleted.get(key) : undefined;
+  if (isCheckRun()) {
+    // The ids a check pass gave its own rows (-1, -2, …) never go to the host: a uuid key would refuse them.
+    // A filter left with no live value can only match recorded rows, so the host is not asked at all.
+    let live = true;
+    const parts = query.split("&").filter(Boolean).map((p) => {
+      const at = p.indexOf("=");
+      const [col, rest] = at < 0 ? [p, ""] : [p.slice(0, at), p.slice(at + 1)];
+      if (rest.startsWith("in.(")) {
+        const values = rest.slice(4, -1).split(",").filter((v) => !/^-\d+$/.test(unquote(decode(v))));
+        if (!values.length) live = false;
+        return `${col}=in.(${values.join(",")})`;
+      }
+      if (rest.startsWith("eq.") && /^-\d+$/.test(decode(rest.slice(3)))) live = false;
+      if (col === "select" && gone?.size && !rest.split(",").includes("id")) return `${p},id`;   // read the id, so a row this pass deleted can be hidden
+      return p;
+    });
+    if (!live) return dryMatch(key, query);
+    sendPath = parts.length ? `${table}?${parts.join("&")}` : table;
   }
   const argv = single
     ? ["semantius", "--single", "call", "crud", "postgrestRequest"]
     : ["semantius", "call", "crud", "postgrestRequest"];
-  const payload: Row = { method, path };
+  const payload: Row = { method, path: sendPath };
   if (body !== undefined) payload.body = body;
   const { code, out, err } = await transport(argv, JSON.stringify(payload));
-  if (isCheckRun()) {   // a GET: live rows plus the rows this check run inserted
+  if (isCheckRun()) {   // a GET: live rows not deleted by this pass, plus the rows this pass inserted
     if (code !== 0) throw new Error(`pgRequest ${method} ${path} failed (exit ${code}): ${err}`);
     const live = out.trim() ? JSON.parse(out) : [];
-    return [...(Array.isArray(live) ? live : [live]), ...dryMatch(key, query)];
+    const kept = (Array.isArray(live) ? live : [live]).filter((r: any) => !gone?.has(String(r?.id)));
+    return [...kept, ...dryMatch(key, query)];
   }
   if (code !== 0) throw new Error(`pgRequest ${method} ${path} failed (exit ${code}): ${err}`);
   if (method !== "GET") writeCount++;
   return out.trim() ? JSON.parse(out) : null;
 }
+
+// ─────────────────────────────── table descriptions ───────────────────────────────
+
+type FieldMeta = {
+  field_name: string; format: string; input_type: string; input_type_rule: unknown;
+  enum_values: unknown; default_value: unknown; ctype: string; reference_table: string; precision?: number;
+};
+type TableMeta = { table: string; entity: any; managed: boolean; fields: Map<string, FieldMeta>; base?: TableMeta };
+
+const ENTITY_COLS = "table_name,module_id,entity_type,id_type,id_refentity,label_column,computed_fields,validation_rules,select_rule,edit_permission,managed";
+const FIELD_COLS = "table_name,field_name,format,input_type,input_type_rule,enum_values,default_value,ctype,reference_table,precision";
+const metaCache = new Map<string, TableMeta>();
+
+/** The entity and fields of `table`, read once with every other entity of its module (three reads per module). */
+async function metaOf(table: string): Promise<TableMeta> {
+  const hit = metaCache.get(table);
+  if (hit) return hit;
+  const name = table.slice(1);
+  const [entity] = (await pgRequest("GET", `/entities?select=${ENTITY_COLS}&table_name=eq.${encodeURIComponent(name)}`)) ?? [];
+  if (!entity) throw new Error(`${table} is not an entity on this host; check the table name (read_entity lists them)`);
+  const entities: any[] = entity.module_id === null || entity.module_id === undefined
+    ? [entity]
+    : (await pgRequest("GET", `/entities?select=${ENTITY_COLS}&module_id=eq.${encodeURIComponent(String(entity.module_id))}`)) ?? [];
+  if (!entities.some((e) => e?.table_name === name)) entities.push(entity);
+  const fields: any[] = [];
+  for (const part of chunk(entities.map((e) => String(e.table_name)), 40)) {
+    fields.push(...((await pgRequest("GET", `/fields?select=${FIELD_COLS}&${inFilter("table_name", part)}`)) ?? []));
+  }
+  for (const e of entities) {
+    const t = `/${e.table_name}`;
+    if (metaCache.has(t)) continue;
+    metaCache.set(t, {
+      table: t, entity: e, managed: e.managed !== false,
+      fields: new Map(fields.filter((f) => f.table_name === e.table_name).map((f) => [String(f.field_name), f as FieldMeta])),
+    });
+  }
+  const meta = metaCache.get(table)!;
+  if (["is_a", "has_a"].includes(String(meta.entity.id_type)) && meta.entity.id_refentity && !meta.base) {
+    meta.base = await metaOf(`/${meta.entity.id_refentity}`);
+  }
+  return meta;
+}
+
+/** Own fields plus, for an `is_a` / `has_a` entity, the fields of its base. */
+const fieldsOf = (m: TableMeta): Map<string, FieldMeta> => (m.base ? new Map([...fieldsOf(m.base), ...m.fields]) : m.fields);
+const rulesOf = (m: TableMeta): any[] => [
+  ...(Array.isArray(m.entity?.computed_fields) ? m.entity.computed_fields : []), ...(m.base ? rulesOf(m.base) : []),
+];
+const validationsOf = (m: TableMeta): any[] => (Array.isArray(m.entity?.validation_rules) ? m.entity.validation_rules : []);
+const emptyRule = (r: unknown): boolean => !r || (typeof r === "object" && !Array.isArray(r) && Object.keys(r as object).length === 0);
+
+/** A rule that reads its own field keeps what an insert sends there (an approval stamp on a row past its step). */
+const keepsSent = (rule: any, col: string): boolean => {
+  const t = JSON.stringify(rule?.jsonlogic ?? null);
+  return t.includes(`"var":"${col}"`) || t.includes(`"var":["${col}"`);
+};
+
+/** Why the platform writes `col` (empty when the seed may send it). `keptStamps` admits a stamp an insert keeps. */
+function platformWrites(m: TableMeta, col: string, keptStamps: boolean): string {
+  const f = fieldsOf(m).get(col);
+  if (f && ["audit", "core"].includes(f.ctype)) return "the platform writes it";
+  if (f?.ctype === "rollup") return "it is a rollup column";
+  const rule = rulesOf(m).find((r) => r?.name === col);
+  if (rule) return keptStamps && keepsSent(rule, col) ? "" : "a computed_fields rule fills it";
+  if (f?.ctype === "computed") return "a computed_fields rule fills it";
+  return "";
+}
+
+const MODE_INSERT = JSON.stringify({ "==": [{ var: "$mode" }, "insert"] });
+
+/** The states in which `rule` keeps a stamp an insert sends (the shape of `rbac.md` → "Controls on a gate", control 5), or null. */
+function keptStates(rule: any): string[] | null {
+  const own = JSON.stringify({ "!=": [{ var: rule?.name }, null] });
+  let found: string[] | null = null;
+  const walk = (n: any): void => {
+    if (found || !n || typeof n !== "object") return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (Array.isArray(n.and)) {
+      const parts = n.and.map((x: any) => JSON.stringify(x));
+      const states = n.and.find((x: any) => Array.isArray(x?.in) && JSON.stringify(x.in[0]) === '{"var":"workflow_state"}' && Array.isArray(x.in[1]));
+      if (parts.includes(MODE_INSERT) && parts.includes(own) && states) { found = states.in[1].map(String); return; }
+    }
+    Object.values(n).forEach(walk);
+  };
+  walk(rule?.jsonlogic);
+  return found;
+}
+
+/** A rule that stamps the requester: `{"if": [$mode == insert, $user_id, …]}`. */
+const isRequesterStamp = (rule: any): boolean => {
+  const j = rule?.jsonlogic;
+  return Array.isArray(j?.if) && JSON.stringify(j.if[0]) === MODE_INSERT && JSON.stringify(j.if[1]) === '{"var":"$user_id"}';
+};
+
+/** The permission a restricted create checks: `{"if": [$mode == insert, {"has_permission": P}, true]}`, or null. */
+function restrictedCreate(v: any): string | null {
+  const j = v?.jsonlogic;
+  if (!Array.isArray(j?.if) || j.if.length !== 3 || JSON.stringify(j.if[0]) !== MODE_INSERT || j.if[2] !== true) return null;
+  const p = j.if[1]?.has_permission ?? j.if[1]?.require_permission;
+  return typeof p === "string" ? p : null;
+}
+
+/** Whether a select_rule shows every row to a holder of `perms`: true, false, or null when it depends on the row. */
+function showsEveryRow(rule: any, perms: Set<string>): boolean | null {
+  if (rule === true || rule === false) return rule;
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+  const [op] = Object.keys(rule);
+  const args = Array.isArray(rule[op]) ? rule[op] : [rule[op]];
+  if (op === "has_permission") return perms.has(String(args[0]));
+  if (op === "!") { const v = showsEveryRow(args[0], perms); return v === null ? null : !v; }
+  if (op === "and" || op === "or") {
+    let open = false;
+    for (const a of args) {
+      const v = showsEveryRow(a, perms);
+      if (v === (op === "or")) return v;
+      if (v === null) open = true;
+    }
+    return open ? null : op === "and";
+  }
+  return null;
+}
+
+let me: { id: string; perms: Set<string> } | undefined;
+
+/** The user running the seed: id and effective permissions, read once. */
+async function currentUser(): Promise<{ id: string; perms: Set<string> }> {
+  if (!me) {
+    const { code, out, err } = await transport(["semantius", "call", "crud", "getCurrentUser"], "{}");
+    if (code !== 0) throw new Error(`getCurrentUser failed (exit ${code}): ${err}`);
+    const j = JSON.parse(out);
+    me = { id: String(j.user_id ?? ""), perms: new Set(Array.isArray(j.permissions) ? j.permissions.map(String) : []) };
+  }
+  return me;
+}
+
+// ─────────────────────────────── values ───────────────────────────────
+
+const NULLABLE = new Set(["reference", "date", "date-time"]);
+const NUMBER_FORMATS = new Set(["number", "integer", "int32", "int64", "float", "double", "rating"]);
+const OPAQUE = new Set(["json", "object", "array", "jsonlogic", "boolean", "uuid", "time", "duration", "binary"]);
+const UNMATCHABLE = new Set(["date-time", "float", "double", "json", "object", "array", "jsonlogic", "binary", "time", "duration", "password"]);
+
+/** Whether `v` is the empty value of `format` (what a required field may not hold). */
+function isEmpty(format: string, v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (format === "rating") return v === 0;
+  if (NUMBER_FORMATS.has(format) || OPAQUE.has(format)) return false;
+  return v === "";
+}
+
+const enumEntries = (f: FieldMeta): Array<{ value: string; label: string }> =>
+  (Array.isArray(f.enum_values) ? f.enum_values : []).map((e: any) =>
+    e && typeof e === "object" ? { value: String(e.value), label: String(e.label ?? e.value) } : { value: String(e), label: String(e) });
+
+const UNKNOWN = Symbol("unknown");
+const truthy = (v: unknown): boolean => (Array.isArray(v) ? v.length > 0 : !!v);
+
+/** The plain JsonLogic of an input_type_rule (`if, ==, !=, ===, !==, in, and, or, !, !!, var`) on a row; UNKNOWN for anything else. */
+function evalPlain(rule: any, row: Row): any {
+  if (rule === null || typeof rule !== "object") return rule;
+  if (Array.isArray(rule)) return rule.map((x) => evalPlain(x, row));
+  const keys = Object.keys(rule);
+  if (keys.length !== 1) return UNKNOWN;
+  const op = keys[0];
+  const args: any[] = Array.isArray(rule[op]) ? rule[op] : [rule[op]];
+  const ev = (x: any) => evalPlain(x, row);
+  switch (op) {
+    case "var": {
+      const name = args[0];
+      if (typeof name !== "string" || name.startsWith("$") || name.includes(".")) return UNKNOWN;
+      return row[name] ?? args[1] ?? null;
+    }
+    case "if": {
+      for (let i = 0; i + 1 < args.length; i += 2) {
+        const c = ev(args[i]);
+        if (c === UNKNOWN) return UNKNOWN;
+        if (truthy(c)) return ev(args[i + 1]);
+      }
+      return args.length % 2 ? ev(args[args.length - 1]) : null;
+    }
+    case "==": case "===": case "!=": case "!==": {
+      const [a, b] = args.map(ev);
+      if (a === UNKNOWN || b === UNKNOWN) return UNKNOWN;
+      const same = op.length === 3 ? a === b : a == b;   // eslint-disable-line eqeqeq
+      return op.startsWith("=") ? same : !same;
+    }
+    case "in": {
+      const [a, b] = args.map(ev);
+      if (a === UNKNOWN || b === UNKNOWN) return UNKNOWN;
+      return Array.isArray(b) ? b.some((x) => x == a) : typeof b === "string" ? b.includes(String(a)) : false;   // eslint-disable-line eqeqeq
+    }
+    case "and": case "or": {
+      let last: any = op === "and";
+      for (const x of args) {
+        const v = ev(x);
+        if (v === UNKNOWN) return UNKNOWN;
+        if (truthy(v) === (op === "or")) return v;
+        last = v;
+      }
+      return last;
+    }
+    case "!": case "!!": {
+      const v = ev(args[0]);
+      return v === UNKNOWN ? UNKNOWN : op === "!" ? !truthy(v) : truthy(v);
+    }
+    default: return UNKNOWN;
+  }
+}
+
+/** A value as the platform compares it: a date by its day, a number as a number; null when absent. */
+function norm(m: TableMeta, col: string, v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const field = fieldsOf(m).get(col);
+  const f = field?.format;
+  if (f === "date") return String(v).slice(0, 10);
+  // a number is stored as NUMERIC(18, precision): compare it rounded the same way
+  if (f === "number") return String(Number(Number(v).toFixed(typeof field?.precision === "number" ? field.precision : 2)));
+  if ((f && NUMBER_FORMATS.has(f)) || (!f && typeof v === "number")) return String(Number(v));
+  return typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+
+// ─────────────────────────────── rows before a write ───────────────────────────────
 
 const EMAIL_IN_TEXT = /[^\s@<>"',;:()[\]]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g;
 
@@ -242,38 +600,224 @@ export function assertExampleEmails(table: string, rows: ReadonlyArray<Row>): vo
   }
 }
 
-/**
- * Bulk insert: ONE POST with an array `body` per at most `size` rows. `postgrestRequest` is the raw PostgREST
- * path, so every row MUST carry the same keys: a column you send on one row you send on every row. Only
- * `reference`, `date` and `date-time` accept `null`; every other format is NOT NULL, so an empty one is
- * `""` (text, email, url, ...) or `0` (numbers), required or not. Never leave a key `undefined`. The shape
- * is asserted up front, naming the odd row, and so is every email address (`assertExampleEmails`). In a check
- * run, one live read with `limit=0` first proves the table and the columns exist. Returns the inserted rows
- * with their ids. Treat that array as a count and a pool, not as a map from your rows to ids: a parent's id
- * comes from `idsByKey`. Throws on a short RETURNING.
- * Bare INSERT: a re-run appends a second set. Use it only for a table with no column that differs on every
- * row (a connecting record); every other table goes through `seedEnsureMany`.
- */
-export async function postMany(path: string, rows: ReadonlyArray<Row>, size = BATCH_SIZE): Promise<any[]> {
-  if (!rows.length) return [];
-  const table = tableOf(path);
+/** Emails, no `_` column, the same keys on every row: checks that need no read. */
+function assertShape(who: string, table: string, rows: ReadonlyArray<Row>): void {
   assertExampleEmails(table, rows);
-  rowsInserted = true;
-  if (isCheckRun()) {
-    const columns = Object.keys(rows[0]).filter((k) => rows[0][k] !== undefined);
-    await pgRequest("GET", `${table}?select=${columns.join(",")}&limit=0`);   // a missing table or column fails here, before the real run
-  }
   const shapeOf = (r: Row): string => Object.keys(r).filter((k) => r[k] !== undefined).sort().join(",");
   const shape = shapeOf(rows[0]);
+  const underscored = shape.split(",").filter((k) => k.startsWith("_"));
+  if (underscored.length) {
+    throw new Error(`${who} ${table}: ${underscored.join(", ")} is never sent (a column cannot start with "_"); a planned _ref goes to seedEnsureMany with the key "_ref"`);
+  }
   rows.forEach((r, i) => {
     const s = shapeOf(r);
     if (s !== shape) {
       throw new Error(
-        `postMany ${table}: row ${i} keys [${s}] differ from row 0 [${shape}]; a bulk insert needs identical keys ` +
+        `${who} ${table}: row ${i} keys [${s}] differ from row 0 [${shape}]; a bulk insert needs identical keys ` +
         `on every row (send null / "" / 0 explicitly; never omit a key or leave it undefined)`,
       );
     }
   });
+}
+
+/**
+ * The rows against the table's description, before anything is sent, in both passes. `names` labels each
+ * row in the messages. An unmanaged table (its DDL is kept outside the platform) is checked by a read with
+ * `limit=0` in the check pass instead.
+ */
+async function checkRows(who: string, table: string, rows: ReadonlyArray<Row>, names: ReadonlyArray<string>): Promise<void> {
+  const m = await metaOf(table);
+  if (!m.managed) {
+    if (isCheckRun()) {
+      const columns = Object.keys(rows[0]).filter((k) => rows[0][k] !== undefined);
+      await pgRequest("GET", `${table}?select=${columns.join(",")}&limit=0`);   // a missing table or column fails here
+    }
+    return;
+  }
+  const F = fieldsOf(m);
+  const problems: string[] = [];
+  const idType = String(m.entity.id_type ?? "auto_increment");
+  const cols = Object.keys(rows[0]).filter((k) => rows[0][k] !== undefined);
+  const sendable = cols.filter((c) => {
+    if (c === "id") {
+      if (!["bigint", "text", "has_a"].includes(idType)) problems.push(`id: never send it; the platform assigns ${idType} ids, and a child takes its parent's id from idsByKey`);
+      return false;
+    }
+    const f = F.get(c);
+    if (!f) {
+      const near = closest(c, [...F.keys()]);
+      problems.push(`${c}: not a field of ${table}${near ? ` (did you mean ${near}?)` : ""}; never add a field to the schema for a seed`);
+      return false;
+    }
+    const why = platformWrites(m, c, true);
+    if (why) { problems.push(`${c}: ${why}, so the seed never sends it`); return false; }
+    return true;
+  });
+  rows.forEach((row, i) => {
+    const name = names[i] ?? `row ${i}`;
+    for (const c of sendable) {
+      const f = F.get(c)!;
+      const v = row[c];
+      if (v === null && !NULLABLE.has(f.format)) {
+        problems.push(`${name}: ${c} is null; only a reference, date or date-time column takes null, so send ${NUMBER_FORMATS.has(f.format) ? "0" : '""'}`);
+        continue;
+      }
+      const byRule = emptyRule(f.input_type_rule) ? undefined : evalPlain(f.input_type_rule, row);
+      const required = byRule === undefined ? f.input_type === "required" : byRule === "required";
+      if (required && isEmpty(f.format, v)) {
+        problems.push(`${name}: ${c} is required${byRule === "required" ? " for this row (its input_type_rule)" : ""}; send a value`);
+        continue;
+      }
+      if (f.format === "enum" && !isEmpty("enum", v)) {
+        const entries = enumEntries(f);
+        if (entries.length && !entries.some((e) => e.value === String(v))) {
+          // the label, or a spelling variant of a value or label: compare without case, separators or doubled letters
+          const squash = (s: string): string => s.toLowerCase().replace(/[\s_-]+/g, "").replace(/(.)\1+/g, "$1");
+          const label = entries.find((e) => e.label.toLowerCase() === String(v).toLowerCase());
+          const near = label ?? entries.find((e) => squash(e.label) === squash(String(v)) || squash(e.value) === squash(String(v)));
+          problems.push(
+            `${name}: ${c} "${v}" is not one of its values (${entries.map((e) => e.value).join(", ")})` +
+            (label ? `; send the value "${label.value}", not the label` : near ? `; did you mean "${near.value}"?` : ""),
+          );
+        }
+      }
+    }
+  });
+  const sent = new Set(cols);
+  // a field its input_type_rule makes required for a row must be sent, not only filled when sent
+  const ruled = [...F.values()].filter((f) => !sent.has(f.field_name) && !emptyRule(f.input_type_rule) && !platformWrites(m, f.field_name, false));
+  rows.forEach((row, i) => {
+    for (const f of ruled) {
+      if (evalPlain(f.input_type_rule, row) === "required") problems.push(`${names[i] ?? `row ${i}`}: ${f.field_name} is required for this row (its input_type_rule) and not sent; send it on every row`);
+    }
+  });
+  const unsentRequired = (meta: TableMeta): FieldMeta[] => [...meta.fields.values()].filter((f) =>
+    !sent.has(f.field_name) && f.input_type === "required" && emptyRule(f.input_type_rule) && String(f.default_value ?? "") === "" &&
+    !["id", "audit", "core", "rollup", "computed"].includes(f.ctype) && !platformWrites(m, f.field_name, false));
+  const missing = [...unsentRequired(m), ...(m.base && (idType === "is_a" || !sent.has("id")) ? unsentRequired(m.base) : [])];
+  for (const f of missing) problems.push(`${f.field_name}: required, with no default, and not sent; send it on every row`);
+  await checkGates(table, m, rows, names, problems);
+  if (problems.length) {
+    throw new Error(
+      `${who} ${table}: ${problems.length} problem(s) found before anything was sent:\n  - ${problems.slice(0, 15).join("\n  - ")}` +
+      (problems.length > 15 ? `\n  - … +${problems.length - 15} more` : "") +
+      `\nRun \`bun ${libPath()} --describe ${table.slice(1)}\` for what this table takes, then fix the plan.`,
+    );
+  }
+}
+
+/** The approval stamps, the approver, and whether the user running the seed may create and read these rows. */
+async function checkGates(table: string, m: TableMeta, rows: ReadonlyArray<Row>, names: ReadonlyArray<string>, problems: string[]): Promise<void> {
+  const F = fieldsOf(m);
+  const rules = rulesOf(m);
+  const stamps = rules.map((r) => ({ col: String(r?.name), states: keptStates(r) })).filter((s): s is { col: string; states: string[] } => !!s.states);
+  let past = 0;
+  rows.forEach((row, i) => {
+    const hit = stamps.filter((s) => s.states.includes(String(row.workflow_state)));
+    if (hit.length) past++;
+    for (const s of hit) {
+      if (isEmpty(F.get(s.col)?.format ?? "text", row[s.col])) {
+        problems.push(`${names[i]} (${row.workflow_state}): ${s.col} is empty; a row seeded at or past the approval sends its stamp (seed-data.md → "Approval stamps on rows past the step")`);
+      }
+    }
+    // the rule keeps a stamp only on rows in its states; anywhere else the platform stores null
+    for (const s of stamps.filter((x) => !hit.includes(x))) {
+      if (!isEmpty(F.get(s.col)?.format ?? "text", row[s.col])) {
+        problems.push(`${names[i]} (${row.workflow_state}): ${s.col} is sent, but the platform keeps it only on rows in ${s.states.join(", ")}; send null`);
+      }
+    }
+  });
+  const creates = validationsOf(m).map(restrictedCreate).filter((p): p is string => !!p);
+  const select = m.entity.select_rule;
+  const narrows = !emptyRule(select);
+  if (!past && !creates.length && !narrows) return;
+  const user = await currentUser();
+  const edit = String(m.entity.edit_permission ?? "");
+  const admin = edit.includes(":") ? `${edit.split(":")[0]}:admin` : "";
+  if (past && admin && !user.perms.has(admin)) {
+    problems.push(`${past} row(s) are at or past an approval, which only an admin may create, and the user running the seed does not hold ${admin}; seed them before the approval, or run as the module's admin`);
+  }
+  if (rules.some(isRequesterStamp)) {
+    for (const s of stamps) {
+      if (F.get(s.col)?.reference_table !== "users") continue;
+      rows.forEach((row, i) => {
+        if (row[s.col] !== null && row[s.col] !== undefined && String(row[s.col]) === user.id) {
+          problems.push(`${names[i]}: ${s.col} names the user running the seed, who is the requester of every row it inserts, and a requester never approves their own record; name another user read from users`);
+        }
+      });
+    }
+  }
+  for (const p of creates) if (!user.perms.has(p)) problems.push(`only holders of ${p} may create ${table} records, and the user running the seed does not hold it`);
+  if (narrows && showsEveryRow(select, user.perms) !== true) {
+    problems.push(`its select_rule limits which rows the user running the seed sees, so the read-back would miss rows; run the seed as the module's admin`);
+  }
+}
+
+// ─────────────────────────────── keyed reads ───────────────────────────────
+
+type Keyer = { keys: string[]; select: string[]; reads: string[]; keyOf: (stored: any) => string | undefined };
+
+/**
+ * How the stored rows of `rows` are found: by `keyField` (an `in.()` read), or for `REF` by the tuple of the
+ * values the rows send that compare exactly (references, text, enums, whole numbers, dates).
+ */
+async function keyer(who: string, table: string, keyField: string, rows: ReadonlyArray<Row>, columns: ReadonlyArray<string>): Promise<Keyer> {
+  const keys = keysOf(who, table, keyField, rows);
+  if (keyField !== REF) {
+    const select = [...new Set([keyField, ...columns])];
+    return { keys, select, reads: chunk(keys).map((part) => inFilter(keyField, part)), keyOf: (r) => String(r[keyField]) };
+  }
+  const m = await metaOf(table);
+  const send = rows.map(withoutRef);
+  const F = fieldsOf(m);
+  const cols = Object.keys(send[0] ?? {}).filter((c) => send[0][c] !== undefined && !UNMATCHABLE.has(F.get(c)?.format ?? "")).sort();
+  if (!cols.length) throw new Error(`${who} ${table}: its rows send no column a _ref can be matched by (a reference, text, enum, whole number or date)`);
+  const tuple = (r: any): string => JSON.stringify(cols.map((c) => norm(m, c, r[c])));
+  const byTuple = new Map<string, string>();
+  send.forEach((r, i) => {
+    const t = tuple(r);
+    const other = byTuple.get(t);
+    if (other !== undefined) throw new Error(`${who} ${table}: "${other}" and "${keys[i]}" send the same values (${cols.join(", ")}), so they cannot be told apart; make one of them differ`);
+    byTuple.set(t, keys[i]);
+  });
+  const rank = (c: string): number => (["reference", "parent"].includes(F.get(c)?.format ?? "") ? 0 : F.get(c)?.format === "enum" ? 2 : 1);
+  const by = cols
+    .filter((c) => send.every((r) => r[c] !== null && r[c] !== undefined && r[c] !== ""))
+    .sort((a, b) => rank(a) - rank(b) || new Set(send.map((r) => String(r[b]))).size - new Set(send.map((r) => String(r[a]))).size)[0];
+  const reads = by ? chunk([...new Set(send.map((r) => String(r[by])))]).map((part) => inFilter(by, part)) : ["limit=1000"];
+  return { keys, select: [...new Set(["id", ...cols, ...columns])], reads, keyOf: (r) => byTuple.get(tuple(r)) };
+}
+
+/** The stored rows of each planned key. */
+async function readKeyed(k: Keyer, table: string): Promise<Map<string, any[]>> {
+  const stored = new Map<string, any[]>();
+  for (const q of k.reads) {
+    for (const r of await pgRequest("GET", `${table}?select=${k.select.join(",")}&${q}`)) {
+      const key = k.keyOf(r);
+      if (key !== undefined) stored.set(key, [...(stored.get(key) ?? []), r]);
+    }
+  }
+  return stored;
+}
+
+/** The columns where a stored row differs from its planned row (date-times, floats and JSON are not compared). */
+function driftOf(m: TableMeta, planned: Row, stored: any): string[] {
+  const F = fieldsOf(m);
+  const out: string[] = [];
+  for (const [c, v] of Object.entries(planned)) {
+    if (v === undefined || c === "id" || !(c in stored)) continue;
+    if (UNMATCHABLE.has(F.get(c)?.format ?? "")) continue;
+    if ((norm(m, c, v) ?? "") !== (norm(m, c, stored[c]) ?? "")) out.push(`${c} stored ${JSON.stringify(stored[c])}, planned ${JSON.stringify(v)}`);
+  }
+  return out;
+}
+
+// ─────────────────────────────── inserts ───────────────────────────────
+
+/** One POST per at most `size` rows; throws on a short RETURNING. */
+async function sendRows(table: string, rows: ReadonlyArray<Row>, size = BATCH_SIZE): Promise<any[]> {
+  if (!rows.length) return [];
+  rowsInserted = true;
   const out: any[] = [];
   for (const part of chunk(rows, size)) {
     const res = await pgRequest("POST", table, part);
@@ -284,58 +828,149 @@ export async function postMany(path: string, rows: ReadonlyArray<Row>, size = BA
       );
     }
     out.push(...res);
-    if (!isCheckRun()) console.log(`  ✓ POST ${table}: ${part.length} row(s) in one call`);
+    if (!isCheckRun()) say(`  ✓ POST ${table}: ${part.length} row(s) in one call`);
   }
   return out;
 }
 
 /**
- * Halts when `keyField` is a column the platform writes: a `computed` or `rollup` column, or a column a
- * `computed_fields` rule fills (a composed label keeps `ctype` "label", so the rule is read too). The platform
- * overwrites what the seed sends there, so no stored row ever matches its key. Reads the live host on a check
- * run as well, so the mistake surfaces before anything is written.
+ * Bulk insert: ONE POST with an array `body` per at most `size` rows. Every row carries the same keys: a column
+ * you send on one row you send on every row. The rows are checked before anything is sent (`checkRows`). Returns
+ * the inserted rows with their ids; treat that array as a count and a pool, not as a map from your rows to ids:
+ * a parent's id comes from `idsByKey`. Bare INSERT: a re-run appends a second set, so every table goes through
+ * `seedEnsureMany`, a junction included (key `_ref`).
  */
+export async function postMany(path: string, rows: ReadonlyArray<Row>, size = BATCH_SIZE): Promise<any[]> {
+  site();
+  if (!rows.length) return [];
+  const table = tableOf(path);
+  assertShape("postMany", table, rows);
+  await checkRows("postMany", table, rows, rows.map((_, i) => `row ${i}`));
+  samePlanAsCheck(table, `post ${rows.length}`);
+  return sendRows(table, rows, size);
+}
+
+/** The key advice for `table`: its label column when the seed sends it, `_ref` when the platform computes it. */
+function keyAdvice(m: TableMeta): string {
+  if (m.entity.entity_type === "junction") return `key on "_ref": give every planned row a _ref name, which is never sent (the platform composes a junction's label)`;
+  const label = String(m.entity.label_column ?? "");
+  return label && !platformWrites(m, label, false)
+    ? `key on its label column "${label}"`
+    : `key on "_ref": give every planned row a _ref name, which is never sent${label ? ` (the platform computes ${label})` : ""}`;
+}
+
+/** Halts when `keyField` is not a column the seed sends: a column the platform writes, a missing field, or `id` the platform assigns. */
 async function assertSeedOwnsKey(table: string, keyField: string): Promise<void> {
-  const name = table.slice(1);
-  const [field] = (await pgRequest("GET", `/fields?select=ctype&table_name=eq.${encodeURIComponent(name)}&field_name=eq.${encodeURIComponent(keyField)}`)) ?? [];
-  const [entity] = (await pgRequest("GET", `/entities?select=computed_fields&table_name=eq.${encodeURIComponent(name)}`)) ?? [];
-  const ruled = Array.isArray(entity?.computed_fields) && entity.computed_fields.some((c: any) => c?.name === keyField);
-  const why = ruled ? "a computed_fields rule fills it" : ["computed", "rollup"].includes(field?.ctype) ? `it is a ${field.ctype} column` : "";
+  const m = await metaOf(table);
+  if (keyField === "id") {
+    if (!["bigint", "text"].includes(String(m.entity.id_type))) throw new Error(`seedEnsureMany ${table}: "id" cannot be the key, because the platform assigns it; ${keyAdvice(m)}.`);
+    return;
+  }
+  if (m.entity.entity_type === "junction") {
+    throw new Error(`seedEnsureMany ${table}: "${keyField}" cannot be the key of a junction; ${keyAdvice(m)}.`);
+  }
+  const why = platformWrites(m, keyField, false);
   if (why) {
     throw new Error(
       `seedEnsureMany ${table}: "${keyField}" cannot be the key, because ${why}: the platform overwrites what the seed sends, ` +
-      `so the rows stored never match the rows in the plan. Key on a column the seed sends and the platform does not compute ` +
-      `(a code from uniq(), or a value that differs on every row).`,
+      `so the rows stored never match the rows in the plan; ${keyAdvice(m)}.`,
     );
+  }
+  if (m.managed && !fieldsOf(m).has(keyField)) {
+    throw new Error(`seedEnsureMany ${table}: "${keyField}" is not a field of ${table}; ${keyAdvice(m)}. Never add a field to the schema to key a seed.`);
   }
 }
 
+/** A drift halt: rows already stored differ from the plan. */
+class SeedDriftError extends Error {}
+
 /**
- * The default insert for a table. Reads the rows whose `keyField` is already present (`in.()`, chunked), posts
- * only the missing rows, and returns ALL rows with ids in INPUT order, found by key, so a re-run after a halt
- * converges instead of appending a second set. `keyField` is a column the seed sends and the platform does not
- * compute (the label column when no rule fills it, or a code), differing on every row, present on every row and
- * stable across runs; the database need not enforce it. A column the platform writes is refused before the first
- * read (`assertSeedOwnsKey`). Use it only on entities the build just created: a row that already exists under that
- * key is reused, not replaced. Never an upsert.
+ * The insert for every table. `keyField` is the table's label column when the seed sends it, otherwise `"_ref"`
+ * (every row then carries a `_ref` name, never sent, and stored rows are matched on the values the rows send).
+ * Checks the rows before anything is read or sent, reads the rows already stored under those keys, halts when one
+ * differs from its planned row, posts only the missing rows in one POST, and returns ALL rows with ids in INPUT
+ * order (with their `_ref`), so a re-run after a halt converges. Use it only on entities the build just created.
  */
 export async function seedEnsureMany(path: string, rows: ReadonlyArray<Row>, keyField: string): Promise<any[]> {
+  site();
   const table = tableOf(path);
-  const keys = keysOf("seedEnsureMany", table, keyField, rows);
-  await assertSeedOwnsKey(table, keyField);
-  const byKey = new Map<string, any>();
-  for (const part of chunk(keys)) {
-    for (const r of await pgRequest("GET", `${table}?${inFilter(keyField, part)}`)) byKey.set(String(r[keyField]), r);
+  if (!rows.length) return [];
+  const planKeys = keysOf("seedEnsureMany", table, keyField, rows);
+  if (keyField !== REF) await assertSeedOwnsKey(table, keyField);
+  const send = keyField === REF ? rows.map(withoutRef) : [...rows];
+  assertShape("seedEnsureMany", table, send);
+  await checkRows("seedEnsureMany", table, send, planKeys);
+  samePlanAsCheck(table, `ensure ${keyField}: ${planKeys.join("\u0001")}`);
+  const m = await metaOf(table);
+  const cols = Object.keys(send[0]).filter((c) => send[0][c] !== undefined);
+  const k = await keyer("seedEnsureMany", table, keyField, rows, ["id", ...cols]);
+  // Read the whole table (a table this build created holds only seeded rows): a stored row that matches no planned
+  // row is one whose key or values changed in the script after a run landed it, and inserting beside it would duplicate it.
+  const planned = new Set(k.keys);
+  const all: any[] = await pgRequest("GET", `${table}?select=${k.select.join(",")}&order=id&limit=${WHOLE_TABLE}`);
+  let stored = new Map<string, any[]>();
+  const stale: any[] = [];
+  if (all.length >= WHOLE_TABLE) {
+    stored = await readKeyed(k, table);   // too large to read whole: match by key only
+    say(`  ${tag()}${table}: more than ${WHOLE_TABLE - 1} stored rows, so rows changed after an earlier run are not detected`);
+  } else {
+    for (const r of all) {
+      const key = k.keyOf(r);
+      if (key !== undefined && planned.has(key)) stored.set(key, [...(stored.get(key) ?? []), r]);
+      else stale.push(r);
+    }
   }
-  const missing = rows.filter((_, i) => !byKey.has(keys[i]));
-  for (const r of await postMany(table, missing)) byKey.set(String(r[keyField]), r);
-  const still = keys.filter((k) => !byKey.has(k));
+  if (stale.length) {
+    const show = (r: any) => `id ${r.id}: ${k.select.filter((c) => c !== "id").slice(0, 4).map((c) => `${c} ${JSON.stringify(r[c])}`).join(", ")}`;
+    throw new SeedDriftError(
+      `seedEnsureMany ${table}: ${stale.length} stored row(s) match no planned row, because a key or a value changed in the script after a run landed them:\n  - ` +
+      `${stale.slice(0, 8).map(show).join("\n  - ")}${stale.length > 8 ? `\n  - … +${stale.length - 8} more` : ""}\n` +
+      `clearSeeded ${table} and every table seeded after it (children first), then run the seed again.`,
+    );
+  }
+  const twice = k.keys.filter((key) => (stored.get(key)?.length ?? 0) > 1);
+  if (twice.length) throw new Error(`seedEnsureMany ${table}: ${preview(twice)} match more than one stored row; clearSeeded the table, then seed again`);
+  const drift = k.keys.flatMap((key, i) => {
+    const s = stored.get(key)?.[0];
+    return s ? driftOf(m, send[i], s).map((d) => `${key}: ${d}`) : [];
+  });
+  if (drift.length) {
+    throw new SeedDriftError(
+      `seedEnsureMany ${table}: ${drift.length} value(s) of rows already stored differ from the plan:\n  - ${drift.slice(0, 12).join("\n  - ")}` +
+      (drift.length > 12 ? `\n  - … +${drift.length - 12} more` : "") + "\n" +
+      `clearSeeded ${table} and every table seeded after it (children first), then run the seed again; for one or two rows, patchById them instead.`,
+    );
+  }
+  const byKey = new Map<string, any>(k.keys.map((key) => [key, stored.get(key)?.[0]]));
+  const missing = k.keys.map((key, i) => (byKey.get(key) ? -1 : i)).filter((i) => i >= 0);
+  for (const r of await sendRows(table, missing.map((i) => send[i]))) {
+    const key = k.keyOf(r);
+    if (key !== undefined) byKey.set(key, r);
+  }
+  const still = k.keys.filter((key) => !byKey.get(key));
   if (still.length) throw new Error(`seedEnsureMany ${table}: ${still.length} row(s) neither found nor returned by the insert: ${preview(still)}`);
-  return keys.map((k) => byKey.get(k));
+  return k.keys.map((key) => (keyField === REF ? { ...byKey.get(key), [REF]: key } : byKey.get(key)));
+}
+
+/**
+ * Rows of an existing entity the seed points at, such as `users`: `await readRows("/users?select=id,display_name&limit=20")`.
+ * A child uses a chosen row's own `id` and names that row's label in `parentLabels`. A read, never a write.
+ */
+export async function readRows(path: string): Promise<any[]> {
+  site();
+  const res = await pgRequest("GET", path.startsWith("/") ? path : `/${path}`);
+  return Array.isArray(res) ? res : res ? [res] : [];
+}
+
+/** The user running the seed: the requester of every row it inserts, so never the approver of one. */
+export async function seedUser(): Promise<{ id: string | number; permissions: string[] }> {
+  const u = await currentUser();
+  return { id: /^\d+$/.test(u.id) ? Number(u.id) : u.id, permissions: [...u.perms] };
 }
 
 /** Updates ONE record by id: `PATCH <table>?id=eq.<id>` with `body`. Throws unless exactly one row came back. */
 export async function patchById(table: string, id: string | number, body: Row): Promise<any> {
+  site();
   const res = await pgRequest("PATCH", `${tableOf(table)}?id=eq.${encodeURIComponent(String(id))}`, body);
   if (!Array.isArray(res) || res.length !== 1) {
     throw new Error(`patchById ${table}: expected 1 row back, got ${Array.isArray(res) ? res.length : typeof res}`);
@@ -344,14 +979,16 @@ export async function patchById(table: string, id: string | number, body: Row): 
 }
 
 /**
- * Empties tables this build seeded, so a changed script can seed them again: `seedEnsureMany` never changes a row
- * that is already there. `tables` is in delete order, children first, each with the row count it holds:
+ * Empties tables this build seeded, so a changed script can seed them again. `tables` is in delete order,
+ * children first, each with the row count it holds:
  *   await clearSeeded([["/contracts", 4], ["/vendors", 3]]);
  * Every table is counted before the first delete, and a count that differs halts with nothing deleted, because
- * the other rows are not the seed's. Deletes by id, at most `BATCH_SIZE` per call. In a check run the counts are
- * read and the deletes are recorded, never sent. Use it only on entities the build created.
+ * the other rows are not the seed's. Deletes by id, at most `BATCH_SIZE` per call. In a check pass the counts are
+ * read and the deletes are recorded, never sent, and later reads no longer see those rows. Use it only on entities
+ * the build created.
  */
 export async function clearSeeded(tables: ReadonlyArray<readonly [path: string, expected: number]>): Promise<void> {
+  site();
   clearStarted = true;
   const ids = new Map<string, Array<string | number>>();
   const wrong: string[] = [];
@@ -377,42 +1014,35 @@ export async function clearSeeded(tables: ReadonlyArray<readonly [path: string, 
         );
       }
     }
-    console.log(`  ${tag()}✓ ${table}: ${rowIds.length} row(s) ${isCheckRun() ? "to delete" : "deleted"}`);
+    say(`  ${tag()}✓ ${table}: ${rowIds.length} row(s) ${isCheckRun() ? "to delete" : "deleted"}`);
   }
 }
 
 // ─────────────────────────────── relationships ───────────────────────────────
 
 /**
- * Turns a parent's natural key (its label) into its id. Re-reads the parent table once per at most
- * `BATCH_SIZE` keys (`select=id,<keyField>` with an `in.()` filter) and returns a function:
+ * Turns a parent's key (its label, or its `_ref`) into its id, read back from the platform:
  *   const vendorId = await idsByKey("/vendors", "vendor_name", vendorRows);
  *   vendor_id: vendorId("Adobe")
- * The function throws on a label that was not seeded, so a typo is a halt, not a wrong id. Throws here when
- * a seeded label is absent from the table or matches more than one row (a repeated label from an earlier run).
- * `labelOf(key)` gives the parent's stored `_label`, for `assertParents` when a rule composes the parent's label
- * and the plan cannot know it: `assertParents(…, plan.map((p) => interviewId.labelOf(p.interview)))`. A check run
- * gives the key back, since its rows have no label yet.
+ * The function throws on a key that was not seeded, so a typo is a halt, not a wrong id. Throws here when a
+ * seeded key is absent from the table or matches more than one row. `labelOf(key)` gives the parent's stored
+ * `_label`, for `assertParents` when the platform computes the parent's label and the plan cannot know it:
+ * `assertParents(…, plan.map((p) => offerId.labelOf(p.offer)))`. A check pass gives the key back.
  */
 export async function idsByKey(
   path: string, keyField: string, rows: ReadonlyArray<Row>,
 ): Promise<((key: string) => string | number) & { labelOf: (key: string) => string }> {
+  site();
   const table = tableOf(path);
-  const keys = keysOf("idsByKey", table, keyField, rows);
-  const found = new Map<string, any[]>();
-  for (const part of chunk(keys)) {
-    for (const r of await pgRequest("GET", `${table}?select=id,_label,${keyField}&${inFilter(keyField, part)}`)) {
-      const k = String(r[keyField]);
-      found.set(k, [...(found.get(k) ?? []), r]);
-    }
-  }
-  const absent = keys.filter((k) => !found.has(k));
+  const k = await keyer("idsByKey", table, keyField, rows, ["id", "_label"]);
+  const found = await readKeyed(k, table);
+  const absent = k.keys.filter((key) => !found.has(key));
   if (absent.length) throw new Error(`idsByKey ${table}: ${absent.length} seeded ${keyField} value(s) not found on read-back: ${preview(absent)}`);
-  const repeated = keys.filter((k) => found.get(k)!.length > 1);
+  const repeated = k.keys.filter((key) => found.get(key)!.length > 1);
   if (repeated.length) throw new Error(`idsByKey ${table}: ${keyField} matches more than one row for ${preview(repeated)}; clear the earlier rows with clearSeeded or rename`);
   const rowOf = (key: string) => {
     const hit = found.get(key);
-    if (!hit) throw new Error(`idsByKey ${table}: no seeded ${keyField} "${key}"; seeded: ${preview(keys)}`);
+    if (!hit) throw new Error(`idsByKey ${table}: no seeded ${keyField} "${key}"; seeded: ${preview(k.keys)}`);
     return hit[0];
   };
   return Object.assign((key: string) => rowOf(key).id, {
@@ -424,68 +1054,62 @@ const SPINE = " › ";
 
 /**
  * Reads the child rows back with their `<fkField>_label` and compares each with the parent label the script
- * meant. `rows` are the child rows as sent (each carries `keyField`, a column unique across them: the label
- * column or a code); `parentLabels[i]` is the label of the parent intended for `rows[i]`, or `null` for a row
- * whose optional relationship is meant to be empty. A composed label shows ancestors first
- * ("Region › Vendor"); a label that ends with the intended one after " › " matches.
- * Throws naming every wrong row. On a real run only: the label columns exist on the live host.
+ * meant. `rows` are the child rows as planned (keyed by `keyField`, their label column or `_ref`);
+ * `parentLabels[i]` is the label of the parent intended for `rows[i]`, or `null` for a row whose optional
+ * relationship is meant to be empty. A composed label shows ancestors first ("Region › Vendor"); a label that
+ * ends with the intended one after " › " matches. Throws naming every wrong row. On a real pass only.
  */
 export async function assertParents(
   path: string, keyField: string, fkField: string,
   rows: ReadonlyArray<Row>, parentLabels: ReadonlyArray<string | null>,
 ): Promise<void> {
+  site();
   const table = tableOf(path);
   if (rows.length !== parentLabels.length) {
     throw new Error(`assertParents ${table}.${fkField}: ${rows.length} row(s) but ${parentLabels.length} intended parent label(s)`);
   }
-  const keys = keysOf("assertParents", table, keyField, rows);
+  keysOf("assertParents", table, keyField, rows);
   parentLabels.forEach((l, i) => {
     if (l === "") throw new Error(`assertParents ${table}.${fkField}: row ${i} has no intended parent label (null means the relationship is meant to be empty)`);
   });
   if (isCheckRun()) {
-    console.log(`  [check run] ${table}.${fkField}: parent labels are read back on the real run`);
+    say(`  [check run] ${table}.${fkField}: parent labels are read back on the real run`);
     return;
   }
   const column = `${fkField}_label`;
-  const stored = new Map<string, string>();
-  for (const part of chunk(keys)) {
-    for (const r of await pgRequest("GET", `${table}?select=${keyField},${column}&${inFilter(keyField, part)}`)) {
-      stored.set(String(r[keyField]), String(r[column] ?? ""));
-    }
-  }
+  const k = await keyer("assertParents", table, keyField, rows, [column]);
+  const stored = await readKeyed(k, table);
   const wrong: string[] = [];
-  keys.forEach((k, i) => {
-    const got = stored.get(k);
+  k.keys.forEach((key, i) => {
+    const got = stored.get(key)?.[0]?.[column];
+    const text = got === undefined ? undefined : String(got ?? "");
     const want = parentLabels[i];
-    const matches = want === null ? got === "" : got === want || (got ?? "").endsWith(`${SPINE}${want}`);
-    if (got === undefined || !matches) {
-      wrong.push(`${k}: intended ${want === null ? "no parent" : `parent "${want}"`}, stored "${got ?? "(row not found)"}"`);
-    }
+    const matches = text !== undefined && (want === null ? text === "" : text === want || text.endsWith(`${SPINE}${want}`));
+    if (!matches) wrong.push(`${key}: intended ${want === null ? "no parent" : `parent "${want}"`}, stored "${text ?? "(row not found)"}"`);
   });
   if (wrong.length) {
     throw new Error(
-      `assertParents ${table}.${fkField}: ${wrong.length} of ${keys.length} row(s) name the wrong parent:\n  - ${wrong.join("\n  - ")}\n` +
+      `assertParents ${table}.${fkField}: ${wrong.length} of ${k.keys.length} row(s) name the wrong parent:\n  - ${wrong.join("\n  - ")}\n` +
       `Fix each with patchById (or clearSeeded and seed again), then check again.`,
     );
   }
-  console.log(`  ✓ ${table}.${fkField}: all ${keys.length} row(s) name the intended parent`);
+  say(`  ✓ ${table}.${fkField}: all ${k.keys.length} row(s) name the intended parent`);
 }
 
 /**
- * Checks a connecting record (junction) table, which has no column that differs on every row, so
- * `assertParents` cannot key it. Reads every row of the table back with both `<fkA>_label` and `<fkB>_label`
- * and compares them with the pairs the script meant, as a set of rows: every intended pair must be there and
- * nothing else (a pair that is missing, wrong or left over from an earlier run halts, named). Meant for a
- * table this script just created, which holds at most the 20 seeded rows. Real run only, like `assertParents`.
+ * Checks a connecting record (junction) table as a set of rows: reads every row back with both `<fkA>_label`
+ * and `<fkB>_label` and compares them with the pairs the script meant; every intended pair must be there and
+ * nothing else. Meant for a table this script just created. Real pass only, like `assertParents`.
  *   await assertJunction("/seats", "application_id", "user_id", [["Slack", "Maria Lopez"], ["Figma", "Tom Becker"]]);
  */
 export async function assertJunction(
   path: string, fkA: string, fkB: string, pairs: ReadonlyArray<readonly [string, string]>,
 ): Promise<void> {
+  site();
   const table = tableOf(path);
   pairs.forEach(([a, b], i) => { if (!a || !b) throw new Error(`assertJunction ${table}: pair ${i} has an empty label`); });
   if (isCheckRun()) {
-    console.log(`  [check run] ${table}.${fkA}/${fkB}: pairs are read back on the real run`);
+    say(`  [check run] ${table}.${fkA}/${fkB}: pairs are read back on the real run`);
     return;
   }
   const [colA, colB] = [`${fkA}_label`, `${fkB}_label`];
@@ -505,15 +1129,16 @@ export async function assertJunction(
       `\nFix with patchById (or clearSeeded and seed again), then check again.`,
     );
   }
-  console.log(`  ✓ ${table}.${fkA}/${fkB}: all ${pairs.length} row(s) name the intended parents`);
+  say(`  ✓ ${table}.${fkA}/${fkB}: all ${pairs.length} row(s) name the intended parents`);
 }
 
 // ─────────────────────────────── generators ───────────────────────────────
 
 /**
  * Seeded random generator, one per table: `const r = rng("contracts")`. The seed is fixed (42) and the table
- * name gives each table its own sequence, so a re-run of the UNCHANGED script draws the same values (dates
- * from `days()` are relative to the run day). Never `Math.random()`.
+ * name gives each table its own sequence, so a re-run of the UNCHANGED script draws the same values, and each
+ * pass of one run restarts every stream (dates from `days()` and `at()` are relative to the run day). Never
+ * `Math.random()`.
  *   - `r.pick(pool)`         one random entry; repeats are fine (job title, email local part)
  *   - `r.int(min, max)`      an integer in [min, max] (house number, quantity, amount, day offset)
  *   - `r.chance(p)`          true with probability p (booleans with a realistic mix)
@@ -525,8 +1150,13 @@ export async function assertJunction(
  *                            throws when the pools cannot give n combinations
  */
 export function rng(stream: string, seed = 42) {
-  let s = seed >>> 0;
-  for (let k = 0; k < stream.length; k++) s = Math.imul(s ^ stream.charCodeAt(k), 0x01000193) >>> 0;
+  let s = 0;
+  const restart = (): void => {
+    s = seed >>> 0;
+    for (let k = 0; k < stream.length; k++) s = Math.imul(s ^ stream.charCodeAt(k), 0x01000193) >>> 0;
+  };
+  restart();
+  streams.add(restart);
   const next = (): number => {   // mulberry32
     s = (s + 0x6d2b79f5) >>> 0;
     let t = s;
@@ -613,11 +1243,17 @@ export function slugify(s: string): string {
 /** Email / web domain for an invented company: `exampleDomain("Beacon Foods")` → "beaconfoods.example.com". Subdomains of example.com are reserved and never receive mail. */
 export const exampleDomain = (companyName: string): string => `${slugify(companyName)}.example.com`;
 
-/** Collision-proof token for a CODE-LIKE `unique_value` field (account code, SKU, invoice number): `uniq("ACCT-", i)` → "ACCT-0", "ACCT-1", … Never on a field a person reads as a name. */
+/** Token for a code-like `unique_value` field the model already has (account code, SKU): `uniq("ACCT-", i)` → "ACCT-0", "ACCT-1", … Never on a field a person reads as a name, and never a reason to add a field. */
 export const uniq = (base: string, i: number, suffix = ""): string => `${base}${i}${suffix}`;
 
 /** A date `d` days from today (negative for the past) as `YYYY-MM-DD`: `days(-30)`, `days(rng.int(60, 400))`. */
 export const days = (d: number): string => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
+
+/** A date-time `d` days from today at `hhmm` UTC: `at(-3, "09:30")` → "2026-11-09T09:30:00Z". Built from the day, never the clock, so both passes plan the same rows. */
+export const at = (d: number, hhmm = "09:00"): string => {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(hhmm)) throw new Error(`at(${d}, "${hhmm}"): the time is HH:MM, from 00:00 to 23:59`);
+  return `${days(d)}T${hhmm}:00Z`;
+};
 
 // ─────────────────────────────── guards ───────────────────────────────
 
@@ -629,9 +1265,10 @@ class SeedPlanError extends Error {}
  * seat rows) stays between the number of those rows and twice that, because a small dataset cannot carry a real
  * company's numbers. Each entry is the parent's label, its figure and its number of child rows:
  *   assertItemized("subscriptions.seats_purchased", plan.map((p) => [p.name, p.seats_purchased, p.seats.length]));
- * Throws naming every parent outside the range. It reads nothing, so a check run applies it the same way.
+ * Throws naming every parent outside the range. It reads nothing, so a check pass applies it the same way.
  */
 export function assertItemized(column: string, parents: ReadonlyArray<readonly [label: string, figure: number, children: number]>): void {
+  site();
   if (!parents.length) throw new Error(`assertItemized ${column}: no parents given`);
   const wrong = parents
     .filter(([, figure, children]) => !(figure >= children && figure <= children * 2))
@@ -642,7 +1279,7 @@ export function assertItemized(column: string, parents: ReadonlyArray<readonly [
       `Set each figure from the parent's child rows in the plan.`,
     );
   }
-  console.log(`  ${tag()}✓ ${column}: ${parents.length} parent(s) at the scale of their child rows`);
+  say(`  ${tag()}✓ ${column}: ${parents.length} parent(s) at the scale of their child rows`);
 }
 
 /**
@@ -655,14 +1292,14 @@ export function assertItemized(column: string, parents: ReadonlyArray<readonly [
  *     hired: { needs: ["accepted"], only: ["accepted"] },
  *   });
  * A parent state the rules do not name allows any children; a rule whose state no parent has halts (a typo, or a
- * state the plan never deals). Throws naming every parent that disagrees. It reads nothing, so a check run applies
- * it the same way.
+ * state the plan never deals). Throws naming every parent that disagrees. It reads nothing.
  */
 export function assertStatesAgree(
   name: string,
   parents: ReadonlyArray<readonly [label: string, state: string, childStates: ReadonlyArray<string>]>,
   rules: Readonly<Record<string, { only?: ReadonlyArray<string>; needs?: ReadonlyArray<string> }>>,
 ): void {
+  site();
   if (!parents.length) throw new Error(`assertStatesAgree ${name}: no parents given`);
   if (!Object.keys(rules).length) throw new Error(`assertStatesAgree ${name}: no rules given; name each parent state that limits its children`);
   const emptyNeeds = Object.keys(rules).filter((s) => rules[s].needs?.length === 0);
@@ -688,47 +1325,56 @@ export function assertStatesAgree(
       `Set each parent's state and its children's states together in the plan.`,
     );
   }
-  console.log(`  ${tag()}✓ ${name}: ${parents.length} parent(s) agree with their children`);
+  say(`  ${tag()}✓ ${name}: ${parents.length} parent(s) agree with their children`);
+}
+
+/** In a check pass: the named columns exist (from the table's description; an unmanaged table is read with `limit=0`). */
+async function columnsExist(who: string, table: string, keyField: string, columns: ReadonlyArray<string>): Promise<void> {
+  const m = await metaOf(table);
+  if (!m.managed) {
+    await pgRequest("GET", `${table}?select=${[...(keyField === REF ? [] : [keyField]), ...columns].join(",")}&limit=0`);
+    return;
+  }
+  const F = fieldsOf(m);
+  const absent = columns.filter((c) => !F.has(c));
+  if (absent.length) throw new Error(`${who} ${table}: ${absent.join(", ")} is not a field of ${table}`);
 }
 
 /**
  * Read-back guard for `computed` and `rollup` columns: the platform writes them, so only a read shows them. Reads
- * `columns` for the seeded `rows` (`keyField` is a column unique across them) and halts when a column holds one
- * value on every row, which means its inputs do not differ between the rows. A `$user_id`, `$now` or `$today` stamp is
- * constant on a seed by design (one user, one day): such a column is left out with a printed line instead (`stampOf`).
- * Call it at the very end of the script,
- * before `assertSeedCounts`. A check run only proves the columns exist: the values appear on the real run.
+ * `columns` for the seeded `rows` (keyed by `keyField`, their label column or `_ref`) and halts when a column holds
+ * one value on every row, which means its inputs do not differ between the rows. A `$user_id`, `$now` or `$today`
+ * stamp is constant on a seed by design (one user, one day): such a column is left out with a printed line instead.
+ * Call it at the very end of the script, before `assertSeedCounts`. A check pass only proves the columns exist.
  */
 export async function assertComputedVary(
   path: string, keyField: string, rows: ReadonlyArray<Row>, columns: ReadonlyArray<string>,
 ): Promise<void> {
+  site();
   const table = tableOf(path);
-  const keys = keysOf("assertComputedVary", table, keyField, rows);
+  keysOf("assertComputedVary", table, keyField, rows);
   if (!columns.length) throw new Error(`assertComputedVary ${table}: no columns named`);
-  const select = [keyField, ...columns].join(",");
   if (isCheckRun()) {
-    await pgRequest("GET", `${table}?select=${select}&limit=0`);   // a missing column fails here, before the real run
-    console.log(`  [check run] ${table}: ${columns.join(", ")} are read back on the real run`);
+    await columnsExist("assertComputedVary", table, keyField, columns);
+    say(`  [check run] ${table}: ${columns.join(", ")} are read back on the real run`);
     return;
   }
-  const stored = new Map<string, any>();
-  for (const part of chunk(keys)) {
-    for (const r of await pgRequest("GET", `${table}?select=${select}&${inFilter(keyField, part)}`)) stored.set(String(r[keyField]), r);
-  }
-  const absent = keys.filter((k) => !stored.has(k));
+  const k = await keyer("assertComputedVary", table, keyField, rows, columns);
+  const stored = await readKeyed(k, table);
+  const absent = k.keys.filter((key) => !stored.has(key));
   if (absent.length) throw new Error(`assertComputedVary ${table}: ${absent.length} seeded ${keyField} value(s) not found on read-back: ${preview(absent)}`);
-  if (keys.length < 2) {
-    console.log(`  ${table}: one row, so ${columns.join(", ")} cannot be compared`);
+  if (k.keys.length < 2) {
+    say(`  ${table}: one row, so ${columns.join(", ")} cannot be compared`);
     return;
   }
   const fails: string[] = [];
   for (const c of columns) {
-    const values = new Set(keys.map((k) => String(stored.get(k)[c] ?? "")));
-    if (values.size > 1) { console.log(`  ✓ ${table}.${c}: ${values.size} distinct value(s) across ${keys.length} row(s)`); continue; }
+    const values = new Set(k.keys.map((key) => String(stored.get(key)![0][c] ?? "")));
+    if (values.size > 1) { say(`  ✓ ${table}.${c}: ${values.size} distinct value(s) across ${k.keys.length} row(s)`); continue; }
     const value = [...values][0];
     const stamp = await stampOf(table, c, value);
-    if (stamp) console.log(`  ${table}.${c}: "${value}" on every row, a ${stamp} stamp, so constant by design: left out of the check; name it in the report`);
-    else fails.push(`${table}.${c}: "${value}" on all ${keys.length} row(s)`);
+    if (stamp) say(`  ${table}.${c}: "${value}" on every row, a ${stamp} stamp, so constant by design: left out of the check; name it in the report`);
+    else fails.push(`${table}.${c}: "${value}" on all ${k.keys.length} row(s)`);
   }
   if (fails.length) {
     throw new SeedPlanError(
@@ -741,38 +1387,37 @@ export async function assertComputedVary(
 }
 
 /**
- * Approval-stamp guard, at the end of the script: every seeded row in one of `states` (the gated state and the states
- * after it) holds a value in each stamp column, read back from the platform. A row past the step without its stamp
- * means the seed did not send it, or the entity's rule does not keep what an insert sends (`rbac.md` → "Controls on a
- * gate", control 5). A check run only proves the columns exist.
- *   await assertStamped("/offers", "offer_code", offerRows, ["approved_by_user_id", "approved_at"], ["approved", "sent", "accepted", "declined"]);
+ * Approval-stamp proof, at the end of the script: every seeded row in one of `states` (the gated state and the states
+ * after it) holds a value in each stamp column, read back from the platform. The rows were already checked before
+ * the write; this proves the entity's rule kept what the insert sent (`rbac.md` → "Controls on a gate", control 5).
+ * A check pass only proves the columns exist.
+ *   await assertStamped("/offers", "_ref", offerRows, ["approved_by_user_id", "approved_at"], ["approved", "sent", "accepted"]);
  */
 export async function assertStamped(
   path: string, keyField: string, rows: ReadonlyArray<Row>, columns: ReadonlyArray<string>, states: ReadonlyArray<string>,
 ): Promise<void> {
+  site();
   const table = tableOf(path);
-  const keys = keysOf("assertStamped", table, keyField, rows);
+  keysOf("assertStamped", table, keyField, rows);
   if (!columns.length || !states.length) throw new Error(`assertStamped ${table}: name the stamp columns and the states past the step`);
-  const select = [keyField, "workflow_state", ...columns].join(",");
   if (isCheckRun()) {
-    await pgRequest("GET", `${table}?select=${select}&limit=0`);   // a missing column fails here, before the real run
-    console.log(`  [check run] ${table}: ${columns.join(", ")} are read back on the real run`);
+    await columnsExist("assertStamped", table, keyField, ["workflow_state", ...columns]);
+    say(`  [check run] ${table}: ${columns.join(", ")} are read back on the real run`);
     return;
   }
-  const past: any[] = [];
-  for (const part of chunk(keys)) {
-    for (const r of await pgRequest("GET", `${table}?select=${select}&${inFilter(keyField, part)}`)) if (states.includes(r.workflow_state)) past.push(r);
-  }
-  if (!past.length) { console.log(`  ${table}: no seeded row is in ${states.join(", ")}, so no stamp to check`); return; }
-  const empty = past.flatMap((r) => columns.filter((c) => r[c] === null || r[c] === undefined || r[c] === "").map((c) => `${r[keyField]} (${r.workflow_state}): ${c} is empty`));
+  const k = await keyer("assertStamped", table, keyField, rows, ["workflow_state", ...columns]);
+  const stored = await readKeyed(k, table);
+  const past = k.keys.map((key) => [key, stored.get(key)?.[0]] as const).filter(([, r]) => r && states.includes(r.workflow_state));
+  if (!past.length) { say(`  ${table}: no seeded row is in ${states.join(", ")}, so no stamp to check`); return; }
+  const empty = past.flatMap(([key, r]) => columns.filter((c) => r[c] === null || r[c] === undefined || r[c] === "").map((c) => `${key} (${r.workflow_state}): ${c} is empty`));
   if (empty.length) {
     throw new SeedPlanError(
       `SEED STAMP FAILURE, ${table}: ${empty.length} stamp(s) missing on rows past the step:\n  - ${empty.join("\n  - ")}\n` +
       `Send each stamp on the rows past the step (seed-data.md, "Approval stamps on rows past the step"), check that the ` +
-      `entity's stamp rules keep what an insert sends, then clearSeeded and seed again.`,
+      `entity's stamp rules keep what an insert sends (rbac.md → "Controls on a gate", control 5), then clearSeeded and seed again.`,
     );
   }
-  console.log(`  ✓ ${table}: all ${past.length} row(s) past the step carry ${columns.join(", ")}`);
+  say(`  ✓ ${table}: all ${past.length} row(s) past the step carry ${columns.join(", ")}`);
 }
 
 /**
@@ -782,25 +1427,14 @@ export async function assertStamped(
  * past its step), so that column is still checked.
  */
 async function stampOf(table: string, column: string, value: string): Promise<string> {
-  if (!rulesRead.has(table)) {
-    const [entity] = (await pgRequest("GET", `/entities?select=computed_fields&table_name=eq.${encodeURIComponent(table.slice(1))}`)) ?? [];
-    rulesRead.set(table, Array.isArray(entity?.computed_fields) ? entity.computed_fields : []);
-  }
-  const rule = rulesRead.get(table)!.find((r: any) => r?.name === column);
+  const rule = rulesOf(await metaOf(table)).find((r: any) => r?.name === column);
   if (!rule) return "";
   const text = JSON.stringify(rule.jsonlogic ?? null);
   if (text.includes(`"var":"${column}"`) || text.includes(`"var":["${column}"`)) return "";
   const today = days(0);
   if (text.includes('"$today"') && value === today) return "$today";
   if (text.includes('"$now"') && value.startsWith(today)) return "$now";
-  if (text.includes('"$user_id"')) {
-    if (seedUserId === undefined) {
-      const { code, out, err } = await transport(["semantius", "call", "crud", "getCurrentUser"], "{}");
-      if (code !== 0) throw new Error(`getCurrentUser failed (exit ${code}): ${err}`);
-      seedUserId = String(JSON.parse(out).user_id ?? "");
-    }
-    if (value === seedUserId) return "$user_id";
-  }
+  if (text.includes('"$user_id"') && value === (await currentUser()).id) return "$user_id";
   return "";
 }
 
@@ -810,17 +1444,18 @@ async function stampOf(table: string, column: string, value: string): Promise<st
  * (including a table never seeded) or when a table was tallied that `expected` does not name (a typo).
  */
 export function assertSeedCounts(counts: Record<string, number>, expected: Record<string, number>): void {
+  site();
   const fails: string[] = [];
   for (const [table, want] of Object.entries(expected)) {
     const n = counts[table] ?? 0;
-    if (n === want) console.log(`  ${tag()}✓ ${table}: ${n}`);
+    if (n === want) say(`  ${tag()}✓ ${table}: ${n}`);
     else fails.push(`${table} seeded ${n}, expected ${want}${table in counts ? "" : " (table never seeded)"}`);
   }
   for (const table of Object.keys(counts)) {
     if (!(table in expected)) fails.push(`${table} was seeded but is not in the expected counts (typo?)`);
   }
   if (fails.length) throw new Error(`SEED COUNT FAILURE, ${fails.length} problem(s):\n  - ${fails.join("\n  - ")}`);
-  console.log(`\n${tag()}All ${Object.keys(expected).length} table(s) at target${isCheckRun() ? " (nothing was sent)" : ""}.`);
+  say(`\n${tag()}All ${Object.keys(expected).length} table(s) at target${isCheckRun() ? " (nothing was sent)" : ""}.`);
 }
 
 /**
@@ -832,48 +1467,127 @@ export function assertSeedCounts(counts: Record<string, number>, expected: Recor
 export function assertSeedDistinct(
   table: string, rows: ReadonlyArray<Row>, fields: ReadonlyArray<string>, minDistinct = Math.min(rows.length, 8),
 ): void {
+  site();
   const fails: string[] = [];
   for (const f of fields) {
     const values = rows.map((r) => r[f]).filter((v) => v !== "" && v !== null && v !== undefined);
     const distinct = new Set(values.map((v) => String(v))).size;
-    if (distinct >= Math.min(minDistinct, values.length)) console.log(`  ${tag()}✓ ${table}.${f}: ${distinct} distinct`);
+    if (distinct >= Math.min(minDistinct, values.length)) say(`  ${tag()}✓ ${table}.${f}: ${distinct} distinct`);
     else fails.push(`${table}.${f}: ${distinct} distinct value(s) across ${rows.length} row(s), expected >= ${minDistinct}`);
   }
   if (fails.length) throw new Error(`SEED DISTINCTNESS FAILURE, ${fails.length} problem(s):\n  - ${fails.join("\n  - ")}\nDeal the field from a larger pool (r.deal / r.tuples).`);
 }
 
+const FIX_HINT = 'Change only the lines named, with edit-file.ts (cli-usage.md → "Ad-hoc JSON and file work in Bun"), never by retyping the script, then run it again.';
+
 /**
- * Halting harness: runs the seed script's body, owns the try/catch, and exits non-zero on any thrown error.
- * Success is printed only when the body resolved with no throw. After a halt, the tables written before the
- * failing call have landed; a re-run converges only for tables seeded with `seedEnsureMany`. A script that only
- * clears ends `Clear finished`, never `Seed finished`.
+ * Halting harness: runs the seed script's body as a check pass, then, only when that passed, as the real pass.
+ * `--check` (or `SEED_CHECK=1`) stops after the check pass. Exits non-zero on any thrown error, naming the script
+ * line of the failing call. A halt in the check pass sent nothing. After a halt in the real pass, the tables
+ * written before the failing call have landed; a re-run converges for tables seeded with `seedEnsureMany`. A
+ * script that only clears ends `Clear finished`, never `Seed finished`.
  */
 export async function runSeed(body: () => Promise<void>): Promise<void> {
+  const checkOnly = checkOnlyAsked();
+  let pass: Mode = "check";
   try {
+    passPlan.clear(); passSeen.clear();
+    mode = "check"; quiet = !checkOnly; resetPass();
+    await body();
+    quiet = false;
+    const clearOnlyCheck = clearStarted && !rowsInserted;
+    if (checkOnly) {
+      console.log(clearOnlyCheck
+        ? `\nCHECK RUN passed: ${writeCount} delete call(s) checked, none sent, nothing cleared. Run the script again without --check to clear.`
+        : `\nCHECK RUN passed: ${writeCount} write call(s) checked, none sent, nothing seeded. Run the script again without --check to seed.`);
+      return;
+    }
+    console.log(`Check pass: ${writeCount} ${clearOnlyCheck ? "delete" : "write"} call(s) checked, nothing sent. Real pass:`);
+    pass = "real"; mode = "real"; resetPass(); passSeen.clear();
     await body();
     const clearOnly = clearStarted && !rowsInserted;
-    console.log(
-      isCheckRun()
-        ? clearOnly
-          ? `\nCHECK RUN passed: ${writeCount} delete call(s) checked, none sent, nothing cleared. Run the script again without --check to clear.`
-          : `\nCHECK RUN passed: ${writeCount} write call(s) checked, none sent, nothing seeded. Run the script again without --check to seed.`
-        : clearOnly
-          ? `\nClear finished: ${writeCount} delete call(s) applied with no errors. Nothing was seeded: run the seed script next.`
-          : `\nSeed finished: ${writeCount} write call(s) applied with no errors.`,
-    );
+    console.log(clearOnly
+      ? `\nClear finished: ${writeCount} delete call(s) applied with no errors. Nothing was seeded: run the seed script next.`
+      : `\nSeed finished: ${writeCount} write call(s) applied with no errors.`);
   } catch (err) {
-    console.error(`\nSEED HALTED after ${writeCount} write call(s): ${err instanceof Error ? err.message : String(err)}`);
-    console.error(
-      isCheckRun()
-        ? "Nothing was sent. Edit the script in place (never retype it) and check-run it again."
-        : err instanceof SeedPlanError
-          ? "Every table landed, so a plain re-run changes nothing. Edit the plan in the script (never retype it), run clearSeeded, then seed again."
-          : clearStarted && !rowsInserted
+    quiet = false;
+    const message = err instanceof Error ? err.message : String(err);
+    const line = (err instanceof Error && scriptFrame(err.stack ?? "")) || lastSite;   // a throw in the script names its own line
+    const where = line ? `\n  at ${line}` : "";
+    const clearOnly = clearStarted && !rowsInserted;
+    if (pass === "check") {
+      console.error(`\nSEED HALTED in the check pass, nothing was sent: ${message}${where}`);
+      console.error(clearOnly ? "Nothing was deleted. Stop and tell the user." : FIX_HINT);
+    } else {
+      console.error(`\nSEED HALTED after ${writeCount} write call(s): ${message}${where}`);
+      console.error(
+        err instanceof SeedPlanError
+          ? "Every table landed, so a plain re-run changes nothing. Fix the plan, run clearSeeded, then seed again."
+          : clearOnly
             ? writeCount
               ? "The clear is INCOMPLETE: the tables listed before the failing one are already empty. Stop and tell the user."
               : "Nothing was deleted. Stop and tell the user."
-            : "The seed is INCOMPLETE. Tables written before this call have landed. Inspect them, then edit the script in place (never retype it) and run it again: only a table seeded with seedEnsureMany converges.",
-    );
+            : `The seed is INCOMPLETE: the tables written before this call have landed, and a re-run converges on them. ${FIX_HINT}`,
+      );
+    }
+    process.exit(1);
+  } finally {
+    mode = undefined;
+    quiet = false;
+  }
+}
+
+// ─────────────────────────────── --describe ───────────────────────────────
+
+/** What a seed of each table sends: the key, the fields to send, the values an enum takes, what never to send, the stamps. */
+export async function describeTables(names: ReadonlyArray<string>): Promise<string> {
+  const out: string[] = [];
+  for (const name of names) {
+    const table = tableOf(name.trim());
+    const m = await metaOf(table);
+    const F = fieldsOf(m);
+    const idType = String(m.entity.id_type ?? "auto_increment");
+    out.push(`${table.slice(1)}  (${idType} key: ${["bigint", "text"].includes(idType) ? "send an id on every row" : "never send id; a child takes it from idsByKey"})`);
+    if (!m.managed) { out.push("  unmanaged: its columns are not described here; a check pass reads them with limit=0", ""); continue; }
+    out.push(`  key: ${keyAdvice(m)}`);
+    const never: string[] = [];
+    const send: string[] = [];
+    const enums: string[] = [];
+    for (const f of F.values()) {
+      if (f.field_name === "id") continue;
+      const why = platformWrites(m, f.field_name, true);
+      if (why || ["id", "audit", "core"].includes(f.ctype)) { never.push(f.field_name); continue; }
+      const rel = f.reference_table ? ` → ${f.reference_table}` : "";
+      const req = f.input_type === "required" && emptyRule(f.input_type_rule) ? (String(f.default_value ?? "") === "" ? ", required" : `, default ${JSON.stringify(f.default_value)}`) : "";
+      const ruled = emptyRule(f.input_type_rule) ? "" : ", required in some states (input_type_rule)";
+      send.push(`${f.field_name} (${f.format}${rel}${req}${ruled}${NULLABLE.has(f.format) ? ", may be null" : ""})`);
+      if (f.format === "enum") enums.push(`${f.field_name}: ${enumEntries(f).map((e) => e.value).join(", ")}`);
+    }
+    out.push(`  send on every row: ${send.join("; ") || "nothing"}`);
+    if (enums.length) out.push(`  enum values (send the value, never the label): ${enums.join(" | ")}`);
+    out.push(`  never send (the platform writes them): ${never.join(", ") || "nothing"}`);
+    const stamps = rulesOf(m).map((r) => ({ col: String(r?.name), states: keptStates(r) })).filter((s) => s.states);
+    for (const s of stamps) {
+      const users = F.get(s.col)?.reference_table === "users" && rulesOf(m).some(isRequesterStamp) ? ", never the user running the seed" : "";
+      out.push(`  stamp: send ${s.col} on rows in ${s.states!.join(", ")}${users}; such rows need the module's admin`);
+    }
+    if (!emptyRule(m.entity.select_rule)) out.push("  select_rule: run the seed as the module's admin, or the read-back misses rows");
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+if (import.meta.main) {
+  const i = process.argv.indexOf("--describe");
+  const list = i >= 0 ? process.argv[i + 1] : undefined;
+  if (!list) {
+    console.error("Usage: bun seed-lib.ts --describe <table>[,<table>…]");
+    process.exit(1);
+  }
+  try {
+    console.log(await describeTables(list.split(",").filter(Boolean)));
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 }

@@ -215,7 +215,7 @@ The user confirms (or picks another column) in the mapping review. Mechanics for
 
 - Pass the chosen field name as `label_column` on `create_entity`. The platform **auto-creates** that field (plus a computed `label` field reading from it).
 - Therefore **exclude the label column from the `create_field` list** and **keep it in the import mapping**; the script writes to it like any other column.
-- The auto-created label field's `title` defaults to `singular_label`. When the CSV column implies a more specific title ("License Plate", "Product Code"), follow up with `update_field` to set the title, per data-modeling.md "Customizing the `label` field's title". This is the rename path for the default label field; `singular_label` itself stays the bare symmetric noun.
+- `create_entity` titles the auto-created label field: the label column in words without the entity's singular at its start (`product_name` on `products` → "Name", `license_plate` on `cars` → "License Plate"; a column ending in `_number`, `_no`, `_id` or `_code` keeps the entity's word). When the CSV header implies a better title, pass it as `label_column_label` in the `create_entity` payload, so no `update_field` follows (use-semantius `data-modeling.md` → "Customizing the label field's title"). `singular_label` itself stays the bare symmetric noun.
 
 **Mandatoriness.** The util already derives `input_type: "required"` (present only on columns with no empty cells). Treat it as the **proposal**: default to sending it through, but let the user downgrade any column to `"default"` in the review — a full-file scan can still be a lucky sample, and a later import of a sparser file would start failing. Columns without the property get `input_type: "default"`. Never send `required` itself.
 

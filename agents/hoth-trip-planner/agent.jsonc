@@ -2,7 +2,9 @@
   "$schema": "../../core/agent.schema.json",
   // instructions come from INSTRUCTIONS.md in this folder.
   // Model id from backend-b/agents_config.jsonc; a single model shows no dropdown.
-  "models": ["tencent/hy4-preview"],
+  // DeepSeek V4.1 Flash since 2026-11-12, asked for by Martin Amm (was
+  // tencent/hy4-preview, unused elsewhere; its title calls never produced a title).
+  "models": ["deepseek/deepseek-v4.1-flash-1017"],
   // The only egress this agent needs: the planner skill's opening-times.js
   // calls the (mock) Hoth Tourism API on this host — everything else is denied.
   "proxy_whitelist": [

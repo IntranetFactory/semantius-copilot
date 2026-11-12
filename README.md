@@ -477,6 +477,14 @@ as if instructions or skills are missing.
     (Done for 2.0.3: stock 2.0.3 still throws — same one-line removal, now
     in `dist/conversation-stream-store-CXwRWonS.mjs`. The chunk hash moves
     every release, so the patch is a rename + one path edit, not a rewrite.)
+  - `@flue/runtime` (second hunk, same file) — `runPersistedContextInput` gets a `catch` that
+    runs `flushResponseOutput()` (the `useResponseFinish` hooks) when the run unwinds from a
+    user abort (`signal.reason instanceof SubmissionAbortedError`), then rethrows. Stock Flue
+    only flushes on success, so a stopped response lost its `session_state` accounting (see
+    "session_state" → Limits). Shutdown aborts are excluded because Flue re-attempts those and
+    the response would count twice. A flush failure is logged and the abort still settles.
+    Added 2026-11-12, asked for by Martin Amm. **On every Flue bump:** re-add the `catch`
+    unless upstream runs finish hooks on abort.
   - `@durable-streams/client` — opens the held **SSE** connection on the first `updates`
     request in `live:'sse'` mode. The stock 0.2.6 client (still pinned by @flue/sdk v2) only
     opens SSE after reaching up-to-date, so while an agent is actively generating (never
@@ -1992,7 +2000,8 @@ unconditional `useResponseFinish`: the LLM fields are sums over the response's o
 calls (one per Flue `turn` event, compaction included, drained from the isolate-global
 `observe()` collector in `backend-b/src/usage.ts`; isolate-local, so a mid-response
 eviction loses rows — their cost comes back as an `unobserved` row reconciled against
-`response.usage` — and an aborted submission's rows fold into the next response), tool
+`response.usage` — and the rows of an abort the finish hook did not cover, see Limits below,
+fold into the next response), tool
 calls from `response.toolCalls.length`. Title side calls are NOT in here — they are in
 the request ledger only. `active_ms` is the sum over responses of finish time minus start
 time (`useResponseStart` stamps `started_at` on the response metadata, `useResponseFinish`
@@ -2003,8 +2012,16 @@ responses (an `AskUserQuestion` ends its response), so it is never counted. Limi
 not retroactive (a response that started before the timer shipped has no `started_at` and
 adds 0, so older sessions undercount); a response re-attempted after a Durable Object
 restart counts the restart's downtime as worked, since `started_at` is read back from the
-original attempt; a response that fails before `useResponseFinish` runs is not counted
-(untested whether Flue fires it for failed submissions). The authoritative copy lives
+original attempt. A response the user stops (Stop button → abort) counts up to the Stop: our
+`@flue/runtime` patch runs `useResponseFinish` on a user abort, so `active_ms`, the counters,
+the title and the turn-end backup all go through the one finish hook as for a completed
+response. Stock Flue skips the hook on abort, and the whole response went uncounted (seen on
+session `tests-user3-ccff6595…`, 2026-11-12: one 6-minute response stopped, no
+`session_state` at all; fixed at Martin Amm's request the same day). Still not counted: a
+response stopped before it wrote its first assistant message (the hook has no message to
+attach to), one stopped while its Durable Object was down, and a response that fails or
+times out. Flue settles those without the hook; that was read from the 2.0.3 source, not
+observed live. The authoritative copy lives
 in `usePersistentState('sessionState')` (the DO record stream); each response also
 (a) attaches `session_state` to the response metadata (visible via `?view=history`
 and the Raw JSON view) and (b) fire-and-forget merges state/data/payload into THE

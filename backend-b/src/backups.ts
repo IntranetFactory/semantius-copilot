@@ -101,8 +101,10 @@ export const RESTORE_MARKER = '/workspace/.restored';
 // by provisionWorkspace (which the lazy env calls only when an op genuinely
 // needs the container) and drained by the response-finish hook. A mark lost
 // to isolate eviction merely skips one backup and self-heals on the next
-// touched turn; a mark from an aborted submission folds into the next
-// response's drain, which then backs up whatever that turn left behind.
+// touched turn. A stopped response drains its own mark (the finish hook runs
+// on a user abort, via our @flue/runtime patch); a mark from an abort the hook
+// did not cover folds into the next response's drain, which then backs up
+// whatever that turn left behind.
 // ---------------------------------------------------------------------------
 
 const touchedByInstance = new Map<string, true>();

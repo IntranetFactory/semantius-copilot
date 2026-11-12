@@ -1,5 +1,5 @@
 diff --git a/dist/conversation-stream-store-CXwRWonS.mjs b/dist/conversation-stream-store-CXwRWonS.mjs
-index 3fa342b27631ffcf2a05f0f8dcf571fc2236e2cd..f2c9ac131815962fc149cad8cbbb6b19d494b77d 100644
+index 3fa342b27631ffcf2a05f0f8dcf571fc2236e2cd..4b88a7453a7ef9d9f3a5c193db5b7fe0c53f5b71 100644
 --- a/dist/conversation-stream-store-CXwRWonS.mjs
 +++ b/dist/conversation-stream-store-CXwRWonS.mjs
 @@ -389,7 +389,6 @@ function mergeSkillCatalog(definitionSkills, discoveredSkills) {
@@ -10,6 +10,22 @@ index 3fa342b27631ffcf2a05f0f8dcf571fc2236e2cd..f2c9ac131815962fc149cad8cbbb6b19
  		merged[name] = skill;
  	}
  	return merged;
+@@ -4470,6 +4469,15 @@ var Session = class {
+ 					signal: options.signal
+ 				});
+ 				await this.flushResponseOutput();
++			} catch (error) {
++				// semantius-copilot patch: a user abort (Stop) is the response's
++				// true end too, so run the useResponseFinish hooks before the run
++				// unwinds. Stock Flue skips them, and the per-response accounting
++				// (session_state.active_ms, counters, title) was lost. Only
++				// SubmissionAbortedError: a shutdown abort is re-attempted and
++				// would count twice. Best-effort: the abort still settles.
++				if (options.signal?.reason instanceof SubmissionAbortedError) await this.flushResponseOutput().catch((flushError) => console.error("[flue:submission-abort] useResponseFinish on abort failed:", flushError));
++				throw error;
+ 			} finally {
+ 				this.pendingSignalAppends = [];
+ 				this.agentLoop.clearSteeringQueue();
 diff --git a/dist/dispatch-nU3cIlT-.mjs b/dist/dispatch-nU3cIlT-.mjs
 index c661b214b2c1e0e33c5fe696e23f44e3ac96a474..967e7a0aae317aee9c6d75309df615494fe90664 100644
 --- a/dist/dispatch-nU3cIlT-.mjs

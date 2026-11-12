@@ -35,7 +35,7 @@ A new module, with its permissions and roles, is created by `references/module-r
 | `create_module` | `module_name` | `module_slug` |
 | `create_permission` | `permission_name`, `module_id` | `description` |
 | `create_role` | `role_name` | `slug`, `module_id` |
-| `create_entity` | `table_name`, `module_id` | `singular_label` (pass it), `entity_type`, `view_permission`, `edit_permission` |
+| `create_entity` | `table_name`, `module_id` | `singular_label` (pass it), `entity_type`, `view_permission`, `edit_permission`; `label_column_label` only when the label field's default title does not fit |
 | `create_field` | `table_name`, `field_name`, `title` | `format`; `reference_table` for a `reference` / `parent` field; `rollup` for an aggregate over a child entity |
 | `create_permission_hierarchy` | `including_permission_name`, `included_permission_name` | |
 | `create_role_permission` | `role_id`, `permission_name` | |

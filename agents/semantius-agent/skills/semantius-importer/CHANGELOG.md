@@ -2,6 +2,10 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## The label field's title goes in the entity payload
+
+2026-11-12. Asked for by Martin Amm, once CR 2 shipped: `create_entity` titles the label field itself. `SKILL.md`, `importer-essentials.md` and `schema-mapping.md` said the title defaults to `singular_label` and is changed with `update_field`; the platform had titled it "Name". They now give the platform's default (the label column in words without the entity's singular at its start; a column ending in `_number`, `_no`, `_id` or `_code` keeps it) and pass a better title from the CSV as `label_column_label` in the `create_entity` payload, so no `update_field` follows. The file format is unchanged; `version` stays `3.1`.
+
 ## A date, a real number or an amount never becomes an enum
 
 2026-11-10. Asked for by Martin Amm, after a test import of a 6-row file created a date column and a weight column as enums. `get_csvschema` reports any column with 10 or fewer distinct values as `enum`; the enum review in `schema-mapping.md` now sets dates, real numbers and amounts to their own format without asking, and `create-fields.ts` refuses such an enum in its dry run, before the gate, naming the format to set. An integer column counts as an amount when its name says so (`amount`, `price`, `cost`, `total`, `fee`, a currency code). The file format is unchanged; `version` stays `3.1`.

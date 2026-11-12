@@ -17,6 +17,12 @@
  * and be deployed. --model=<id> seeds a new session on that registry id
  * instead of the agent's default (the first of its `models`); it must be one
  * of them (added 2026-11-10 to probe the Muse Ember variants, unrequested).
+ * --abort-after=<seconds> stops the turn that long after sending it, with the
+ * same POST <conversation>/abort the chat's Stop button sends, and then
+ * expects the submission to settle `aborted` with its session_state written
+ * (active_ms included). It checks the @flue/runtime abort patch (README
+ * "session_state" → Limits). Added 2026-11-12 without being asked, to test
+ * the fix Martin Amm asked for.
  * --deadline=<seconds> extends the settle wait (default 180)
  * for turns that legitimately run long — e.g. the model-limits regression's
  * single-shot long write (fix_model_limits_plan.md).
@@ -64,7 +70,7 @@ const headers = { authorization: `Bearer ${semantiusToken}`, 'content-type': 'ap
 const adminHeaders = { authorization: `Bearer ${adminKey}`, 'content-type': 'application/json' };
 
 async function postJson(url, body) {
-  const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  const response = await fetch(url, { method: 'POST', headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await response.text();
   if (!response.ok) throw new Error(`POST ${url} -> ${response.status}: ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) : undefined;
@@ -113,6 +119,13 @@ console.log(`session ${sessionId} — sending: ${JSON.stringify(message)}`);
 const admission = await postJson(conversationUrl, sendBody);
 const submissionId = admission?.submissionId;
 if (!submissionId) throw new Error(`send admission carried no submissionId: ${JSON.stringify(admission)}`);
+const abortAfter = Number(args.find((arg) => arg.startsWith('--abort-after='))?.slice('--abort-after='.length) ?? 0);
+if (abortAfter > 0) {
+  await new Promise((resolve) => setTimeout(resolve, abortAfter * 1000));
+  await postJson(`${conversationUrl}/abort`);
+  console.log(`sent abort after ${abortAfter}s`);
+}
+const expectedOutcome = abortAfter > 0 ? 'aborted' : 'completed';
 
 const DEADLINE_MS = 1000 * Number(args.find((arg) => arg.startsWith('--deadline='))?.slice('--deadline='.length) ?? 180);
 const start = Date.now();
@@ -126,8 +139,8 @@ for (;;) {
     if (Date.now() - start > DEADLINE_MS) throw new Error('timed out waiting for the submission to settle');
     continue;
   }
-  if (settlement.outcome !== 'completed') {
-    throw new Error(`submission settled ${settlement.outcome}: ${JSON.stringify(settlement.error ?? null)}`);
+  if (settlement.outcome !== expectedOutcome) {
+    throw new Error(`submission settled ${settlement.outcome}, expected ${expectedOutcome}: ${JSON.stringify(settlement.error ?? null)}`);
   }
   const answeredBy = settlement.answeredBySubmissionId ?? submissionId;
   const assistant = snapshot.messages.filter((m) => m.role === 'assistant' && m.submissionId === answeredBy).at(-1)
@@ -136,7 +149,7 @@ for (;;) {
     .filter((part) => part.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text)
     .join('\n');
-  console.log(`settled completed in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+  console.log(`settled ${settlement.outcome} in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   console.log(`reply: ${text || JSON.stringify(assistant ?? null)}`);
   break;
 }
@@ -152,7 +165,7 @@ for (let attempt = 0; attempt < 12 && !sessionState; attempt++) {
   if (record.ok) sessionState = (await record.json())?.json?.session_state;
 }
 console.log(`session_state: ${JSON.stringify(sessionState ?? null)}`);
-if (!sessionState || !(sessionState.llm_calls_count >= 1) || !(sessionState.total_tokens > 0)) {
-  console.error('FAIL: session_state missing or counters not positive');
+if (!sessionState || !(sessionState.llm_calls_count >= 1) || !(sessionState.total_tokens > 0) || !(sessionState.active_ms > 0)) {
+  console.error('FAIL: session_state missing or counters (active_ms included) not positive');
   process.exitCode = 1;
 }

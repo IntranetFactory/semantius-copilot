@@ -206,7 +206,7 @@ A role of this kind can also take a gate (a customer who accepts a quote). Its b
 Create these roles with the gates and the roles that take them, in the same calls:
 
 1. **The permissions:** each `<slug>:write_<entity>` ("Write tickets") and the bundle `<slug>:<role_key>`, described by what it does ("File tickets and comment on your own"), each with `module_id`, in the same `create_permission` as the gates.
-2. **The hierarchy rows:** `<slug>:manage` includes each `<slug>:write_<entity>`; the bundle includes `<slug>:read`, each `<slug>:write_<entity>` the role writes and each gate it takes. They go in the same `create_permission_hierarchy` as the gates' rows.
+2. **The hierarchy rows:** `<slug>:manage` includes each `<slug>:write_<entity>`; each `<slug>:write_<entity>` includes `<slug>:read`, because a write without read is unusable under row-level security; the bundle includes `<slug>:read`, each `<slug>:write_<entity>` the role writes and each gate it takes. They go in the same `create_permission_hierarchy` as the gates' rows.
 3. **The role and its grant,** as for a role that takes gates: `role_name` "<Module Name> <Role Title>" ("Service Desk Requester"), `slug` `<module slug with - as _>_<role_key>`, `module_id`.
 4. **The entities:** each entity's `edit_permission`, `select_rule` and validation rules go in its `create_entity` payload, and the named field in its `create_field` call. A rollup over an entity with such a `select_rule` needs `include_hidden_rows: true` before the rule is set (`90269` otherwise). On the entity that holds the field, over an entity below it, it is set without asking, as in control 7, and the final response names it; any other such rollup follows `rollup-fields.md` → "Hidden child rows".
 

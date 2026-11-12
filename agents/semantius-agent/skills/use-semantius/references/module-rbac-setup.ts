@@ -18,8 +18,12 @@
  *          Optional: --domain <CODE>, --color <#rrggbb>, --dry-run (writes nothing),
  *          --adopt (fills a `custom` module that has entities, only after the user agreed).
  * Output:  first line `module_id: <id>` (`new` in a dry run), then what was created or kept
- *          per kind, the icon, the color and the role ids. A run that changed nothing ends
- *          `Nothing created or changed.`
+ *          per kind, the icon, the color and the role ids. For a module that has entities, the
+ *          verify report follows: a `report module` line with its access_scope, one `report entity` line per entity (class, view and edit
+ *          permission, the names of its validation rules and computed fields, whether it has a
+ *          select_rule), one `report hierarchy` line per row whose
+ *          including permission is `<slug>:*`, and one `report role` line per role of the
+ *          module with its grants. A run that changed nothing ends `Nothing created or changed.`
  * Exit:    0 done; 1 a conflict, named, that the user has to settle; 2 bad flags or the
  *          instance cannot be read; 3 a write was rejected, named
  */
@@ -27,6 +31,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { checkedPermissions, closest } from "./permission-names";
 
 type Row = Record<string, any>;
 type Reply = { code: number; out: string; err: string };
@@ -111,40 +116,8 @@ const spawnTransport: Transport = async (tool, args) => {
   return { code: await proc.exited, out, err };
 };
 
-/** Every permission a validation rule checks with `has_permission` or `require_permission`. */
-function checkedPermissions(value: unknown, out = new Set<string>()): Set<string> {
-  if (Array.isArray(value)) for (const v of value) checkedPermissions(v, out);
-  else if (value && typeof value === "object") {
-    for (const [key, v] of Object.entries(value)) {
-      if ((key === "has_permission" || key === "require_permission") && typeof v === "string") out.add(v);
-      else checkedPermissions(v, out);
-    }
-  }
-  return out;
-}
-
 /** A value for a PostgREST `in.()` list: plain when safe, else double-quoted with `\` and `"` escaped. */
 const pgValue = (s: string): string => (/^[A-Za-z0-9_$.\-:@]+$/.test(s) ? s : `"${s.replace(/[\\"]/g, "\\$&")}"`);
-
-/** The entry of `pool` nearest to `name` by edit distance, when it is at most 3 edits away. */
-function closest(name: string, pool: ReadonlyArray<string>): string | undefined {
-  const distance = (a: string, b: string): number => {
-    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    for (let i = 1; i <= a.length; i++) {
-      const next = [i];
-      for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-      row = next;
-    }
-    return row[b.length];
-  };
-  let best: string | undefined;
-  let bestDistance = 4;
-  for (const p of new Set(pool)) {
-    const d = distance(name, p);
-    if (d < bestDistance) [best, bestDistance] = [p, d];
-  }
-  return best;
-}
 
 /** `created a, b; kept c`, with `to create` in a dry run. */
 const summary = (dryRun: boolean, created: string[], kept: string[]): string =>
@@ -180,10 +153,16 @@ async function setup(o: Options, transport: Transport, print: (line: string) => 
   const roleSlugs = TIERS.map((t) => roleSlugOf(t.tier));
   const hierarchy = [[permissionOf("manage"), permissionOf("read")], [permissionOf("admin"), permissionOf("manage")]];
 
-  const entities = live ? await read("read_entity", { filters: `module_id=eq.${live.id}`, select: "table_name,entity_type,validation_rules,select_rule" }) : [];
-  const livePermissions = await read("read_permission", { filters: `permission_name=in.(${permissionNames.join(",")})`, select: "permission_name,module_id" });
+  // The reads that do not depend on each other go out together; the grants need the role ids.
   const roleColumns = { filters: `slug=in.(${roleSlugs.join(",")})`, select: "id,slug,module_id" };
-  let liveRoles = await read("read_role", roleColumns);
+  const [entities, livePermissions, firstRoles, moduleHierarchy, moduleRoles] = await Promise.all([
+    live ? read("read_entity", { filters: `module_id=eq.${live.id}`, select: "table_name,entity_type,view_permission,edit_permission,computed_fields,validation_rules,select_rule" }) : Promise.resolve([] as Row[]),
+    read("read_permission", { filters: `permission_name=in.(${permissionNames.join(",")})`, select: "permission_name,module_id" }),
+    read("read_role", roleColumns),
+    read("read_permission_hierarchy", { filters: `including_permission_name=ilike.${slug}:*`, select: "including_permission_name,included_permission_name" }),
+    live ? read("read_role", { filters: `module_id=eq.${live.id}`, select: "id,slug,module_id" }) : Promise.resolve([] as Row[]),
+  ]);
+  let liveRoles = firstRoles;
   const roleBySlug = (s: string) => liveRoles.find((r) => r.slug === s);
 
   const conflicts: string[] = [];
@@ -226,11 +205,11 @@ async function setup(o: Options, transport: Transport, print: (line: string) => 
 
   const heldPermissions = new Set(livePermissions.map((p) => p.permission_name));
   const missingPermissions = TIERS.filter((t) => !heldPermissions.has(permissionOf(t.level)));
-  const liveHierarchy = await read("read_permission_hierarchy", { filters: `including_permission_name=in.(${hierarchy.map(([a]) => a).join(",")})`, select: "including_permission_name,included_permission_name" });
-  const heldHierarchy = new Set(liveHierarchy.map((h) => `${h.including_permission_name}>${h.included_permission_name}`));
+  const heldHierarchy = new Set(moduleHierarchy.map((h) => `${h.including_permission_name}>${h.included_permission_name}`));
   const missingHierarchy = hierarchy.filter(([a, b]) => !heldHierarchy.has(`${a}>${b}`));
   const missingRoles = TIERS.filter((t) => !roleBySlug(roleSlugOf(t.tier)));
-  const liveGrants = liveRoles.length ? await read("read_role_permission", { filters: `role_id=in.(${liveRoles.map((r) => r.id).join(",")})`, select: "role_id,permission_name" }) : [];
+  const grantRoleIds = [...new Set([...liveRoles, ...moduleRoles].map((r) => r.id))];
+  const liveGrants = grantRoleIds.length ? await read("read_role_permission", { filters: `role_id=in.(${grantRoleIds.join(",")})`, select: "role_id,permission_name" }) : [];
   const heldGrants = new Set(liveGrants.map((g) => `${g.role_id}>${g.permission_name}`));
   const grantHeld = (t: (typeof TIERS)[number]) => {
     const role = roleBySlug(roleSlugOf(t.tier));
@@ -304,6 +283,22 @@ async function setup(o: Options, transport: Transport, print: (line: string) => 
     for (const c of missing) {
       const near = closest(c.name, own);
       print(`warning: ${c.where} checks "${c.name}", which is not a permission, so the check is false for every caller${near ? ` (did you mean "${near}"?)` : ""}: fix the name or create the permission (rbac.md, "Restricted steps (gates)"). The tiers are ${permissionNames.join(", ")}; viewer, manager and admin are role names.`);
+    }
+  }
+  // The verify report of a module that has entities: what a build checks, read in the same run.
+  if (live && entities.length) {
+    const names = (value: unknown) => (Array.isArray(value) && value.length ? value.map((x: any) => x?.name ?? x?.code ?? "?").join(", ") : "none");
+    const hasRule = (rule: unknown) => !!rule && typeof rule === "object" && Object.keys(rule as object).length > 0;
+    if (changed) print("report: read before this run's writes");
+    print(`report module ${slug}: access_scope ${scope}`);
+    for (const e of entities) {
+      print(`report entity ${e.table_name}: ${e.entity_type}, view ${e.view_permission}, edit ${e.edit_permission}; validation rules: ${names(e.validation_rules)}; computed fields: ${names(e.computed_fields)}; ${hasRule(e.select_rule) ? "a select_rule" : "no select_rule"}`);
+    }
+    for (const h of moduleHierarchy) print(`report hierarchy: ${h.including_permission_name} includes ${h.included_permission_name}`);
+    const roles = [...new Map([...liveRoles, ...moduleRoles].filter((r) => r.module_id === live.id).map((r) => [r.id, r])).values()];
+    for (const r of roles) {
+      const held = liveGrants.filter((g) => g.role_id === r.id).map((g) => g.permission_name);
+      print(`report role ${r.slug}: holds ${held.length ? held.join(", ") : "nothing"}`);
     }
   }
   print(!changed ? NOTHING : o.dryRun ? "Dry run: nothing was written." : "Done.");

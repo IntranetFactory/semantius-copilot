@@ -380,7 +380,30 @@ On Windows PowerShell 5.1 a pipe garbles non-ASCII text (`Zürich` arrives as `Z
 
 ### Ad-hoc JSON and file work in Bun
 
-Python is forbidden across these skills, and it may not be installed. Reshaping JSON, or changing a file you staged, is Bun or `jq`: `bun -e '<code>'` for a one-liner, or a scratch `.ts` file run by path for anything longer, reading with `await Bun.file(path).json()` (or `.text()`) and writing with `await Bun.write(path, text)`. To change a script you already wrote, edit it in place with your file-edit tool and change only the lines that need it; never write the whole script again. Without a file-edit tool, a `bun -e` that reads the file, replaces the exact text and writes it back does the same.
+Python is forbidden across these skills, and it may not be installed. The skill's scripts are Bun, every helper it ships is Bun, and a second language means a second set of quoting and escaping mistakes. Each need has a Bun tool that is shorter than the Python one:
+
+| Need | Bun tool |
+|---|---|
+| Where a JSON file is broken | `call-file.ts` names the line and column, with a caret and the bracket still open; `--check` validates without sending |
+| A payload with rules (`computed_fields`, `validation_rules`, `select_rule`, `input_type_rule`) | A Bun builder script on `jsonlogic-kit.ts` that names each part as a `const` and writes the file with `writePayload` |
+| A change to a file you wrote (a seed script after a halt, a builder) | `edit-file.ts`, or your file-edit tool |
+| Reshaping JSON (adding a key to every item, merging two files) | Change the builder and run it again; for a one-off, `bun -e '<code>'` or a scratch `.ts` file, reading with `await Bun.file(path).json()` and writing with `await Bun.write(path, text)`, or `jq` |
+
+**Writing a file with no file-write tool.** Use a quoted heredoc: `cat > <file> <<'EOF'` … `EOF` in bash, a single-quoted here-string `@'` … `'@` piped to `Set-Content -Encoding utf8 <file>` in PowerShell (without `-Encoding utf8`, Windows PowerShell 5.1 writes the file in the ANSI code page, and non-ASCII text such as "Søren" does not survive). The quotes keep the shell from expanding `$user_id`, `$mode` or `$old.<field>` and `${…}` inside the text. Unquoted, `"$user_id"` arrives as `""`, which `call-file.ts` refuses. Some harnesses cut a heredoc short (at an apostrophe, for one), so run what you wrote right away: `call-file.ts --check` for a payload, the script itself for a script. A file cut short fails at its end.
+
+**Changing a file you wrote.** Change only the lines that need it, never write the whole file again. With your file-edit tool, or without one with `edit-file.ts`:
+
+```bash
+bun "<skill-folder>/references/edit-file.ts" .tmp_deploy/seed_recruiting.ts <<'EOF'
+<<<<<<< OLD
+  { _ref: "OFF-02", base_salary: 88000, workflow_state: "sent" },
+=======
+  { _ref: "OFF-02", base_salary: 88000, workflow_state: "sent", approved_by_user_id: approverId, approved_at: at(-8, "09:00") },
+>>>>>>> NEW
+EOF
+```
+
+Each block's OLD text must occur exactly once in the file, and every block applies or none does. The script prints the changed lines with their numbers; an OLD text that is missing or occurs twice changes nothing and says why.
 
 ### Building a bulk payload in Bun
 

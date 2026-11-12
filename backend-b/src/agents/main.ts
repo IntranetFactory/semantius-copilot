@@ -260,6 +260,8 @@ type SessionState = {
    * Milliseconds the server worked: the sum over responses of start-to-finish
    * time. Time waiting for the user falls between responses, so it is not in
    * here. Only responses that started after the start hook existed are counted.
+   * A response the user stops counts up to the Stop (Flue patch, README
+   * "session_state" → Limits).
    * Absent on sessions persisted before this field existed.
    */
   active_ms?: number;
@@ -451,6 +453,8 @@ export function Main({ id }: AgentProps) {
   // Response timer for session_state.active_ms: the start hook stamps the
   // response metadata (read back from the durable record log at finish, so it
   // survives a re-attempt — the time a restart took then counts as worked).
+  // The finish hook also runs when the user stops a response (our
+  // @flue/runtime patch), so it must not assume the response completed.
   useResponseStart(() => ({ started_at: Date.now() }));
   useResponseFinish(({ metadata, response }) => {
     const { usage } = response;

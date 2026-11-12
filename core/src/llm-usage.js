@@ -187,9 +187,10 @@ export function llmRequestFromCompletion(body, { purpose = 'title', model, ms, a
  * agent steps. The observed `agent` rows normally equal it exactly; when the
  * Durable Object restarted mid-response the rows miss the pre-restart turns,
  * and the shortfall comes back as one `unobserved` row so the total never
- * understates. Rows ABOVE the durable figure are legitimate (turns of an
- * aborted submission, which never got a response of their own, fold into the
- * next one) and are kept as-is.
+ * understates. Rows ABOVE the durable figure are legitimate (a stopped
+ * response's last call, which Flue never durably completed; or the turns of
+ * an abort the finish hook did not cover, which fold into the next response)
+ * and are kept as-is.
  *
  * @param {ReturnType<typeof llmRequestFromTurn>[]} rows
  * @param {{ input?: number, output?: number, cacheRead?: number, cacheWrite?: number, totalTokens?: number,
