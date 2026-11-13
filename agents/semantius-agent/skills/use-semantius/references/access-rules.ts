@@ -64,7 +64,7 @@ export type AccessPlan = {
   fields: FieldRow[];
   rollups: Array<{ id: string; rollup: any }>;
   entities: Map<string, { entity_type?: string; edit_permission?: string; validation_rules?: any[]; computed_fields?: any[]; select_rule?: unknown }>;
-  accessLine: string;
+  accessSummary: string;
   takers: string[];
 };
 
@@ -455,6 +455,10 @@ function resolveGates(c: Ctx): Gate[] {
       if (!/_user_id$/.test(f)) c.problems.push(`role ${key}: "limitedTo" names ${t}.${f}; the field that names the person is <part>_user_id, such as requested_by_user_id or interviewer_user_id`);
       const live = fieldOf(c, t, f);
       if (live && !(live.format === "reference" && live.reference_table === "users")) c.problems.push(`role ${key}: ${t}.${f} is not a reference to users`);
+      // The entity a role is limited to is that role's own list across the records above it, which a parent child cannot have.
+      for (const p of (c.fieldsOf.get(t) ?? []).filter((x) => x.format === "parent")) {
+        c.problems.push(`role ${key}: "limitedTo" gives the ${role.title.toLowerCase()} a list of their own ${pluralOf(c, t)} across ${pluralOf(c, String(p.reference_table))}, and a parent child has no list or menu entry of its own. Make ${t}.${p.field_name} a reference (data-modeling.md, "Choosing the Right Format", question 3)`);
+      }
     }
     if ((role.limitedTo || role.hidden || role.leaves) && !part) c.problems.push(`role ${key}: "limitedTo", "hidden" and "leaves" belong to a role that does part of the work, which "writes" entities`);
     if (part && !Array.isArray(role.hidden)) c.problems.push(`role ${key}: say which entities the ${role.title.toLowerCase()} sees in the leading products besides what it writes ("sees": ["<table>", …]); every other entity of the module is hidden from them`);
@@ -522,7 +526,7 @@ function userFieldProblems(c: Ctx, raw: AccessRecord, gates: Gate[]): string[] {
  * model). `problems` lists what is wrong with the record; when there is any, nothing else is filled in.
  */
 export function planAccess(input: { slug: string; moduleName: string; record: unknown; entities: ReadonlyArray<EntityRow>; fields: ReadonlyArray<FieldRow>; otherRollups?: ReadonlyArray<{ id: string; table_name: string; rollup: any }> }): AccessPlan {
-  const plan: AccessPlan = { problems: [], warnings: [], notes: [], permissions: [], hierarchy: [], roles: [], gated: false, fields: [], rollups: [], entities: new Map(), accessLine: "", takers: [] };
+  const plan: AccessPlan = { problems: [], warnings: [], notes: [], permissions: [], hierarchy: [], roles: [], gated: false, fields: [], rollups: [], entities: new Map(), accessSummary: "", takers: [] };
   plan.problems.push(...shapeProblems(input.record));
   if (plan.problems.length) return plan;
   const raw = input.record as AccessRecord;
@@ -773,7 +777,7 @@ export function planAccess(input: { slug: string; moduleName: string; record: un
 
   // ---------- select rules and the rollups they affect ----------
   const ors = new Map<string, L[]>();
-  const narrowed = new Map<string, { role: string; parent?: string; fk?: string }>();
+  const narrowed = new Map<string, string>(); // the table, and the role whose rule it already holds
   const pushOr = (table: string, clause: L) => {
     if (!ors.has(table)) ors.set(table, []);
     ors.get(table)!.push(clause);
@@ -793,8 +797,8 @@ export function planAccess(input: { slug: string; moduleName: string; record: un
     for (const h of holders) {
       for (const node of treeOf(c, h.table)) {
         if ((role.hidden ?? []).includes(node.table)) continue;
-        if (narrowed.has(node.table) && narrowed.get(node.table)!.role === key) continue;
-        narrowed.set(node.table, { role: key, parent: node.parent, fk: node.fk });
+        if (narrowed.get(node.table) === key) continue;
+        narrowed.set(node.table, key);
         const named: L = node.parent
           ? SETREC(bindingOf(node.fk!), node.parent, V(node.fk!), NE(V(bindingOf(node.fk!)), null))
           : AND(NE(V(h.field), null), EQ(V(h.field), USER));
@@ -808,16 +812,9 @@ export function planAccess(input: { slug: string; moduleName: string; record: un
   for (const [table, list] of ors) {
     const e = byTable.get(table)!;
     const desired = AND(HAS(e.view_permission ?? read), ...list);
-    const blockers: string[] = [];
+    // The platform refuses this select_rule while a rollup over the table lacks the flag (90269), so each gets it.
     for (const r of allRollups.filter((x) => String(x.rollup.link_field).split(".")[0] === table && x.rollup.include_hidden_rows !== true)) {
-      const node = narrowed.get(table);
-      const auto = node?.parent === r.table_name && `${table}.${node.fk}` === r.rollup.link_field;
-      if (auto) plan.rollups.push({ id: r.id, rollup: { ...r.rollup, include_hidden_rows: true } });
-      else blockers.push(r.id);
-    }
-    if (blockers.length) {
-      plan.warnings.push(`${table}: the rollup(s) ${blockers.join(", ")} would show readers a total over ${table} rows they cannot see once it gets its select_rule; ask the user whether to set include_hidden_rows on each (rollup-fields.md, "Hidden child rows"), then run this again. Its select_rule was not set`);
-      continue;
+      plan.rollups.push({ id: r.id, rollup: { ...r.rollup, include_hidden_rows: true } });
     }
     const live = e.select_rule;
     const empty = !live || (typeof live === "object" && !Object.keys(live as object).length);
@@ -857,16 +854,16 @@ export function planAccess(input: { slug: string; moduleName: string; record: un
     plan.roles.push({ key, slug: `${slug.replace(/-/g, "_")}_${key}`, role_name: `${c.moduleName} ${role.title}`, description: `Can ${description.charAt(0).toLowerCase()}${description.slice(1)}`, bundle: bundle(key) });
   }
   plan.gated = gates.length > 0 || Object.values(record.entities ?? {}).some((e) => e.create?.length);
-  if (plan.rollups.length) plan.notes.push(`include_hidden_rows on ${plan.rollups.map((r) => r.id).join(", ")}: each totals child rows that are visible exactly when their parent is`);
+  if (plan.rollups.length) plan.notes.push(`include_hidden_rows on ${plan.rollups.map((r) => r.id).join(", ")}: every reader of each one's entity sees its total, also over rows they cannot open`);
 
-  // ---------- who takes each step, and the access line ----------
+  // ---------- who takes each step, and the access summary ----------
   for (const [t, e] of Object.entries(record.entities ?? {})) {
     for (const s of enumValues(fieldOf(c, t, WS))) {
       const spec = e.states?.[s];
       plan.takers.push(`${t}.${s}: ${isGate(spec) ? spec.takenBy.join("+") : "manager"}`);
     }
   }
-  plan.accessLine = accessLine(c, gates, plan, partRoles);
+  plan.accessSummary = accessSummary(c, gates, plan);
   return plan;
 }
 
@@ -907,46 +904,54 @@ export function sameJson(x: unknown, y: unknown): boolean {
   return kx.length === ky.length && kx.every((k) => sameJson((x as any)[k], (y as any)[k]));
 }
 
-function accessLine(c: Ctx, gates: Gate[], plan: AccessPlan, partRoles: Array<[string, RoleSpec]>): string {
+/**
+ * The module's access in plain words, as markdown (`rbac.md` → "The access summary"): the access level, a table of
+ * what each role does and sees, the entities only an admin changes, the restricted steps, and each lifecycle with none.
+ */
+function accessSummary(c: Ctx, gates: Gate[], plan: AccessPlan): string {
   const plural = (t: string) => c.byTable.get(t)?.plural_label ?? t;
-  const parts: string[] = [];
-  parts.push(plan.gated ? "Access: gated, some steps are restricted." : "Access: advanced, no step is restricted.");
-  parts.push(`${c.moduleName} Viewer: views every record.`);
-  parts.push(`${c.moduleName} Manager: does the everyday work.`);
-  const adminOnly = [...c.byTable.values()].filter((e) => e.edit_permission === `${c.slug}:admin`).map((e) => e.plural_label ?? e.table_name);
-  parts.push(`${c.moduleName} Admin: does the everyday work${plan.gated ? " and takes every gated step" : ""}${adminOnly.length ? `; only an admin can change ${listOf(adminOnly, "and")}` : ""}.`);
+  const low = (t: string) => plural(t).toLowerCase();
+  const title = (k: string) => cap(roleTitle(c, k));
+  const out: string[] = [];
+  out.push(`**Access: ${plan.gated ? "gated" : "advanced"}.** ${plan.gated ? "Some steps are restricted to a role." : "No step is restricted to a role."} Role names start with "${c.moduleName}".`);
+  out.push("", "| Role | Does | Sees |", "|---|---|---|");
+  out.push("| Viewer | reads only | everything |", "| Manager | the everyday work | everything |");
+  out.push(`| Admin | the everyday work${plan.gated ? " and every restricted step" : ""} | everything |`);
   for (const [key, role] of Object.entries(c.record.roles ?? {})) {
     const steps = [
-      ...gates.filter((g) => g.spec.takenBy.includes(key)).map((g) => `${third(g.spec.verb)} ${plural(g.table).toLowerCase()}`),
-      ...Object.entries(c.record.entities).filter(([, e]) => e.create?.includes(key)).map(([t]) => `creates ${plural(t).toLowerCase()}`),
+      ...gates.filter((g) => g.spec.takenBy.includes(key)).map((g) => `marks ${low(g.table)} ${cap(stateLabel(c, g.table, g.state))}`),
+      ...Object.entries(c.record.entities).filter(([, e]) => e.create?.includes(key)).map(([t]) => `creates ${low(t)}`),
     ];
-    if (role.writes?.length) {
-      const limited = Object.keys(role.limitedTo ?? {});
-      const above = new Set<string>();
-      for (const t of limited) for (const f of c.fieldsOf.get(t) ?? []) if (isRelationship(f) && f.reference_table && c.byTable.has(f.reference_table) && !limited.includes(f.reference_table)) above.add(f.reference_table);
-      parts.push(`${c.moduleName} ${role.title}: writes ${listOf(role.writes.map((t) => plural(t).toLowerCase()), "and")}${steps.length ? ` and ${listOf(steps, "and")}` : ""}` +
-        `${limited.length ? `; sees only the ${listOf(limited.map((t) => plural(t).toLowerCase()), "and")} that name them, and what is below those` : ""}` +
-        `${role.hidden?.length ? `; does not see ${listOf(role.hidden.map((t) => plural(t).toLowerCase()), "or")}` : ""}` +
-        `${above.size ? `; ${listOf([...above].map((t) => plural(t).toLowerCase()), "and")} above stay visible to them` : ""}.`);
-    } else {
-      parts.push(`${c.moduleName} ${role.title}: does the everyday work and ${listOf(steps, "and")}${role.seesOnlyNamed ? `; sees only the records they are named on, and what is below those` : ""}.`);
-    }
+    const does = [role.writes?.length ? `writes ${listOf(role.writes.map(low), "and")} only` : "the everyday work", ...steps].join("; ");
+    // The entities that name the role's holders, and those below them, are narrowed to their own; the rest stay visible.
+    const hidden = role.hidden ?? [];
+    const roots = role.writes?.length
+      ? Object.keys(role.limitedTo ?? {})
+      : role.seesOnlyNamed ? [...new Set(gates.filter((g) => g.named && g.spec.takenBy[0] === key).map((g) => g.named!.table))] : [];
+    const below = [...new Set(roots.flatMap((r) => treeOf(c, r).slice(1).map((n) => n.table)))].filter((t) => !roots.includes(t) && !hidden.includes(t));
+    const rest = [...c.byTable.keys()].filter((t) => !roots.includes(t) && !below.includes(t) && !hidden.includes(t));
+    const sees: string[] = [];
+    if (roots.length) sees.push(`only the ${listOf(roots.map(low), "and")} that name them${below.length ? `, with their ${listOf(below.map(low), "and")}` : ""}`);
+    if (hidden.length) sees.push(`not ${listOf(hidden.map(low), "or")}`);
+    if (rest.length) sees.push(roots.length || hidden.length ? "all other records" : "everything");
+    out.push(`| ${cap(role.title)} | ${does} | ${sees.join("; ")} |`);
   }
-  const gated: string[] = [];
+  const adminOnly = [...c.byTable.values()].filter((e) => e.edit_permission === `${c.slug}:admin`).map((e) => e.plural_label ?? e.table_name);
+  if (adminOnly.length) out.push("", `Only an admin can change ${listOf(adminOnly, "and")}.`);
+  const restricted: string[] = [];
   for (const g of gates) {
-    const who = g.spec.takenBy.map((k) => (k === "admin" ? "an admin" : `${c.moduleName} ${roleTitle(c, k)}`)).join(" or ");
-    const named = g.named ? `; while ${g.named.chain.length ? `the ${(c.byTable.get(g.named.table)?.singular_label ?? g.named.table).toLowerCase()}` : "the record"} names one, only that ${roleTitle(c, g.spec.takenBy[0]).toLowerCase()} or an admin` : "";
+    const named = g.named
+      ? ` When the ${(c.byTable.get(g.named.table)?.singular_label ?? g.named.table).toLowerCase()} names ${a(roleTitle(c, g.spec.takenBy[0]).toLowerCase())}, only that person or an admin.`
+      : "";
+    const waiting = g.spec.waiting ? stateLabel(c, g.table, g.spec.waiting) : "";
     const controls = g.kind === "approval"
-      ? `; the requester may not approve, only a ${stateLabel(c, g.table, g.spec.waiting!)} one is approved, what it covers is locked from ${stateLabel(c, g.table, g.spec.waiting!)} on, only the requester recalls it, only the approver rejects it or moves it back, and who approved it and when is recorded`
-      : g.kind === "payout" ? "; the requester may not take it" : "";
-    gated.push(`${plural(g.table)}: ${stateLabel(c, g.table, g.state)} by ${who}${named}${controls}.`);
+      ? ` The requester may not approve it; only ${a(waiting)} one is approved; what it covers is locked from ${waiting} on; only the requester recalls it; only the approver rejects it or moves it back; who approved it and when is recorded.`
+      : g.kind === "payout" ? " The requester may not take it." : "";
+    restricted.push(`- ${plural(g.table)} → ${cap(stateLabel(c, g.table, g.state))}: ${listOf(g.spec.takenBy.map(title), "or")}.${named}${controls}`);
   }
-  for (const [t, e] of Object.entries(c.record.entities)) if (e.create?.length) gated.push(`${plural(t)}: created only by ${e.create.map((k) => (k === "admin" ? "an admin" : `${c.moduleName} ${roleTitle(c, k)}`)).join(" or ")}.`);
-  if (gated.length) parts.push(`Gated steps: ${gated.join(" ")}`);
-  for (const [t] of Object.entries(c.record.entities)) {
-    if (!fieldOf(c, t, WS)) continue;
-    if (!gates.some((g) => g.table === t)) parts.push(`${plural(t)}: no step is gated; anyone who can edit one can move it through every state.`);
-  }
-  void partRoles;
-  return parts.join(" ");
+  for (const [t, e] of Object.entries(c.record.entities)) if (e.create?.length) restricted.push(`- ${plural(t)}: created only by ${listOf(e.create.map(title), "or")}.`);
+  if (restricted.length) out.push("", "**Restricted steps**", ...restricted);
+  const open = Object.keys(c.record.entities).filter((t) => fieldOf(c, t, WS) && !gates.some((g) => g.table === t));
+  if (open.length) out.push("", `**No restricted step** on ${listOf(open.map(plural), "or")}: anyone who can edit one can move it through every state.`);
+  return out.join("\n");
 }

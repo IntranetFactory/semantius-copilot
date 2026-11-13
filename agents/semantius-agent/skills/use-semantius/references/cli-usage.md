@@ -403,7 +403,7 @@ bun "<skill-folder>/references/edit-file.ts" .tmp_deploy/seed_recruiting.ts <<'E
 EOF
 ```
 
-Each block's OLD text must occur exactly once in the file, and every block applies or none does. The script prints the changed lines with their numbers; an OLD text that is missing or occurs twice changes nothing and says why.
+Each block's OLD text must occur exactly once in the file, and every block applies or none does. The script prints the changed lines with their numbers; an OLD text that is missing or occurs twice, or a NEW text that is the same as its OLD text, changes nothing and says why.
 
 ### Building a bulk payload in Bun
 

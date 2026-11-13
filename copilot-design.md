@@ -156,7 +156,8 @@ instructions, the allowed model ids, and every file of every skill:
   The POC defaults it to one value — the field exists now so 3-4 images later is a config change, not a
   rewrite.
 - Round-trip assert: each bundled skill → reconstruct → byte-identical to its source folder.
-- Limits (`core/src/agent.js`): ≤16 skills; per skill ≤64 files / ≤256 KiB file / ≤1 MiB; ≤4 MiB per
+- Limits (`core/src/agent.js`): ≤16 skills; per skill ≤64 files / ≤256 KiB file / ≤2 MiB (1 MiB until 2026-11-13, raised for
+  use-semantius; reason in `core/src/bundle.js`); ≤4 MiB per
   agent; instructions ≤64 KiB; tar entry names (`<skill>/<relPath>`) ≤100 bytes (ustar). **Zero skills
   is valid** — the bundle still carries instructions/model; nothing is provisioned.
 - **A bundle is immutable per session `id`** — a changed agent is a new `id` (§6), so reconstruction is

@@ -109,7 +109,7 @@ Settle two things first:
 | `width` is `default` unless a layout needs another value | `data-modeling.md` → "`width` Values" |
 | `unique_value` is set only where duplicates would harm integrity, and is set on a natural key that must not repeat | `data-modeling.md` → "`unique_value`" |
 | A value aggregated from child records is a rollup, never a rule or a number kept by hand | `SKILL.md` Golden Rule 8; `rollup-fields.md` |
-| A `sum` rollup is a `number` unless overflow cannot happen, and `include_hidden_rows: true` goes under To confirm | `rollup-fields.md` |
+| A `sum` rollup is a `number` unless overflow cannot happen | `rollup-fields.md` |
 
 ### Relationships
 
@@ -185,15 +185,12 @@ Then the three tables, numbered in one sequence across them, leaving out a table
 - **Risk** is the tier in `data-modeling.md` → "Safe Evolution Patterns": low, medium or high.
 - **Needs a rebuild** replaces the fix when the property cannot change in place: `id_type`, `id_refentity`, an `is_a` prefix, the format of a core column, or a format that changes the column type. It is high risk, because the field or entity is dropped and recreated.
 
-Then the access section, in every report, a verified module's too, as `rbac.md` → "The access line" describes it:
+Then the access section, in every report, a verified module's too, in the form of `rbac.md` → "The access summary": the access level, the table of what each role of the module does and sees, the entities only an admin can change, the restricted steps, and the entities with a `workflow_state` and no restricted step.
 
-> **Access:** \<access level in plain words\>. \<Role\>: \<what it can do\>, for every role of the module. Only an admin can change \<plural labels\>. Gated steps: \<step\> (\<roles that take it\>), ….
-
-- "Only an admin can change" names each entity whose write tier is the admin tier; in the per-entity shape, one whose `write_<entity>` is included by `<unit>:admin` and not by `<unit>:manage`. Leave the sentence out when there is none.
-- In a `raci` module, a gated step names the Accountable role from its matrix, or in `documentation` mode the role granted the gate.
-- A gated step also names any person named per record, an approval gate's controls and a payout gate's requester check.
-- A role that does part of the work says what it writes, which records it sees, what is hidden from it, and which records above stay visible to it.
-- For each entity with a `workflow_state` and no gate, it ends with "<Plural label>: no step is gated; anyone who can edit one can move it through every state."
+- "Only an admin can change" names each entity whose write tier is the admin tier; in the per-entity shape, one whose `write_<entity>` is included by `<unit>:admin` and not by `<unit>:manage`. Leave the line out when there is none.
+- In a `raci` module, a restricted step names the Accountable role from its matrix, or in `documentation` mode the role granted the gate.
+- A restricted step also names any person named per record, an approval gate's controls and a payout gate's requester check.
+- A role that does part of the work says what it writes, which records it sees, what is hidden from it, and that all other records stay visible to it.
 
 End with one line naming the other areas verified with no findings. No diagram, spec or export unless the user asked for one (`SKILL.md` Golden Rule 9).
 
@@ -227,4 +224,4 @@ Each change runs under the rules that govern it (`SKILL.md` → Quick Decision G
 - `computed_fields`, `validation_rules` and `enum_values` are replaced whole: read the current list and send it back in full with the change.
 - Before a change that depends on the records (adding `unique_value`, removing an enum value, making a field required), read the records it touches. When they block it, say so and leave it for the user to decide.
 
-Then read back only what changed, and close with what was applied, what was left, and the UI links of the changed entities (`SKILL.md` → "Linking to the web UI").
+Then read back only what changed, and close with what was applied, what was left, and the module's UI link (`{ui_baseurl}/{module_slug}`), with no link to an entity list or a record (`SKILL.md` → "Linking to the web UI").

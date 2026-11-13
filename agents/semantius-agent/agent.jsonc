@@ -31,6 +31,10 @@
     //"anthropic/claude-haiku-5.5@max"
     //"xiaomi/mimo-v2.6-pro"
   ],
+  // No TaskCreate/TaskUpdate/TaskList/TaskGet and no task-tracking paragraph in the system
+  // prompt. Asked for by Martin Amm, 2026-11-13. The semantius-importer skill calls the task
+  // tools, so it fails at its first task step on this agent.
+  "disable_task_list": true,
   "proxy_whitelist": [
     "registry.npmjs.org", // for  dependencies
     "registry.npmjs.org", // for  dependencies

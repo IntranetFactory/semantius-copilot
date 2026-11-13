@@ -2,6 +2,95 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## Rollups over hidden rows are set without asking; the module is verified before the seed
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build ran `module-rbac-setup.ts --access` twice more than needed. One run stopped on `applications.interview_count`, a rollup over the interviews an interviewer is limited to: its warning asked whether to set `include_hidden_rows`, and the interviews `select_rule` waited. A last run after the seed repeated the report of the run before it.
+
+- `access-rules.ts`: `planAccess` sets `include_hidden_rows: true` on every rollup over an entity whose `select_rule` it writes, and always plans that `select_rule`. A rollup's value is stored once per parent record, so it cannot total only the rows a reader sees; without the flag the platform refuses the `select_rule` (`90269`). The note that names these rollups says every reader of each one's entity sees its total.
+- `call-file.ts`: a rollup over hidden rows without the flag is told to set it, without asking, and to name it in the final response.
+- `module-rbac-setup.ts --access`: a run that wrote ends `Done. Run this once more: that run is the verification.`
+- `rollup-fields.md` → "Hidden child rows", `rbac.md` → "Roles that do part of the work" and "Controls on a gate": the flag is set without asking and named. `data-modeling.md` → "High-Risk" and `review-module.md` no longer treat it as something to confirm.
+- `build-module.md`: new step 5.9 verifies the module before any sample row; "Verify, then stop" says no `module-rbac-setup.ts` run follows the seed; "Final response" names each rollup that got the flag.
+- `scripts/access-rules.test.ts` and `scripts/module-rbac-setup.test.ts` cover both.
+
+`flows.md` row 8.9 says so. The file format is unchanged; `version` stays `3.1`.
+
+## A seed names a parent keyed on `_ref` by that `_ref`; `edit-file.ts` refuses a change that changes nothing
+
+2026-11-13. Asked for by Martin Amm, after a recruiting seed took seven runs instead of one. Its interviews and offers named their applications, which are keyed on `_ref`, by that `_ref` in `assertParents`, where the stored label was expected. The check pass never compares parents, so each table halted in a real pass of its own, and the halt hint said to change only the lines it named. A later run repeated the whole seed after an `edit-file.ts` change whose new text was its old text, which the tool reported as one changed line.
+
+- `seed-lib.ts`: `idsByKey` on a table keyed on `_ref` keeps each row's stored label for the pass. `assertParents` and `assertJunction` take a parent's `_ref` where they take its label, and compare it with that stored label. The halt hint says to fix, in the same edit, every other call of the script that makes the same mistake, and to run the script again only once the cause is fixed.
+- `seed-data.md` → "Run", "The functions" and "Parents and children": a child names its parent by its key in the plan, its label or its `_ref`, in its row and in `assertParents` alike; a junction's pairs do the same. `labelOf` is no longer described. The same two lines on fixing a halt as the hint.
+- `edit-file.ts`: a block whose NEW part is the same as its OLD part changes nothing and exits 1. `cli-usage.md` → "Changing a file you wrote" says so.
+- `scripts/seed-lib.test.ts` and `scripts/edit-file.test.ts` cover both.
+
+`flows.md` has no row on a `use-semantius` seed and is unchanged. The file format is unchanged; `version` stays `3.1`.
+
+## The access line becomes an access summary in markdown
+
+2026-11-13. Asked for by Martin Amm, after an applicant-tracking build's final response gave its access as one paragraph: every role under its full name ("Applicant Tracking and Recruiting Hiring Manager"), "Gated steps:" followed by the lifecycles that have no gate, and "hires job openings" for a move into Filled.
+
+- `access-rules.ts`: `accessSummary` (was `accessLine`) writes markdown: the access level in bold, with the module name every role name starts with; a Role | Does | Sees table, with a row for the viewer, the manager and the admin and one per role of the record, each step as "marks \<plural\> \<State\>" from the state's label, and Sees naming the records a role is limited to with those below them, what is hidden from it, and "all other records"; "Only an admin can change …"; a **Restricted steps** list, "\<Plural\> → \<State\>: \<roles\>.", with the named person ("When the job opening names a hiring manager, only that person or an admin."), an approval gate's controls and a payout gate's requester check; and **No restricted step** on each lifecycle with no gate.
+- `module-rbac-setup.ts --access`: prints it between the lines `access summary:` and `end of access summary`.
+- `rbac.md` → "The access summary" (was "The access line"): the form, in five parts, with the purchase request's summary as its example; `scripts/access-rules.test.ts` compares the example with the generator's output.
+- `build-module.md` → "Confirm the entity list", point 9, and "Final response", and `review-module.md` → the access section: use that form. The final response pastes the lines between the two markers unchanged.
+- `SKILL.md`, `data-modeling.md` and `select-rule.md`: name the access summary.
+- `tests/crud-tools-eval.ts`: the check for a final text that says a lifecycle has no gate also counts "No restricted step".
+
+`flows.md` rows 8.7, 8.9 and 9.2 say so. The file format is unchanged; `version` stays `3.1`.
+
+## A build and a review close with only the module's UI link
+
+2026-11-13. Asked for by Martin Amm, after an applicant-tracking build closed with a UI link to each of its five entity lists beside the module's link. Only the module's link was wanted, after a build and after applying a review.
+
+- `build-module.md` → "Final response": the module's UI link (`{ui_baseurl}/{module_slug}`), and no link to an entity list or a record. "Building a module from a request" says a build returns the module's UI link.
+- `review-module.md` → the close-out after applying: the module's UI link, with no link to an entity list or a record.
+- `SKILL.md` → Quick Decision Guide (the build entry) and Golden Rule 9: a build's default is the module's UI link. Golden Rule 6 says a build's final response and a review's close-out give only the module's link.
+- `data-modeling.md` → "Agent Workflow Tips", tip 9: says the same.
+
+`flows.md` rows 8.9 and 9.6 say so. The file format is unchanged; `version` stays `3.1`.
+
+## The entity list is confirmed in plain text; sample data is asked after it
+
+2026-11-13. Asked for by Martin Amm, after the change "The entity list goes above the build-scope question, not inside it" made a recruiting build ask "Build all 6 listed above (…), or adjust the list?" in an `AskUserQuestion` dialog while the list, written in the same response as the dialog, never appeared: that host does not show the text of a response that calls a tool. A dialog cannot carry the list either, since a long question runs together into one paragraph. A message with no tool call, which ends the turn, is always shown, as `review-module.md` already relies on.
+
+- `build-module.md` → "Confirm the entity list": the list, its step lines and its access line go in one message with no tool call, never with `AskUserQuestion` or a picker, on any host. The message closes with the choice in plain text. With more than 4 new entities: A, build all of them (recommended), and B, build only the core ones, named, each its own paragraph, then "Reply with a letter, or tell me what to add, drop or rename." With 4 or fewer: "Build the \<Module\> with these \<N\> entities? Reply yes, or tell me what to add, drop or rename." A reply that changes the list gets the changed list and its choice again.
+- `build-module.md` → "Model it like the leading products", step 5, and "Order of a build", steps 1 and 3: the lines on what the module is based on open that message.
+- `build-module.md` → "Order of a build", step 4, and "The sample-data question": the sample-data question is no longer paired with the entity list. It is asked on its own once the list is confirmed, in the run's question format, with the exact total and the tables of the confirmed scope, so it needs nothing shown before it. The consent rule on a scope answer given in the same call is gone.
+- `preflight.md` → "Question format": with `AskUserQuestion`, every question is asked with it except a question a reference file says to ask as plain text, as this choice and the review's fixes are.
+
+`flows.md` rows 8.1, 8.7 and 8.8, the section 8 entry in "Which flow a run uses", and the note on question formats say so. The file format is unchanged; `version` stays `3.1`.
+
+## A field a computed_fields rule fills is disabled
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build left `applications.application_name`, filled by a `composedLabel` rule, `input_type: required`: the form asked for a value the rule replaced on save. The platform turns only a `default` or `readonly` field a rule fills into `disabled`, and `create_entity` makes the label field `required`.
+
+- `jsonlogic-kit.ts` → `writeModel`: writes each field a `computed_fields` rule fills with `input_type: disabled` (a `hidden` one stays `hidden`), and `labels.json`, one `update_field` that sets each label column a rule fills to `disabled`, in the send order after `fields.json`.
+- `data-modeling.md` → "Mandatory Creation Order": names both.
+
+## An entity a role is limited to is never a parent child; relationship answers carry evidence
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build made `interviews.application_id` a `parent` with three yes answers, so Interviews had no menu entry and interviewers had no list of their own interviews, while the same build limited its Interviewer role to the interviews that name them. The 50 saved Haiku runs of the same build (task t4 in `tests/crud-tools-eval.ts`, paper builds), read from their payload files, did the same: interview → application `parent` in 45 of 48, application → job opening in 30 of 48, application → candidate in 20 of 46, offer → application in 31 of 47. Their `relationships.txt` answers said Q1 with cardinality, Q2 with "someone creates it for the parent", and Q3 with what deleting does or with the example's own words ("handled only inside its …"); none named a list. In 7 of the 16 runs that wrote both files, the access record limited the Interviewer to interviews (`limitedTo`) while interviews were a `parent` child.
+
+- `access-rules.ts`: an entity in a role's `limitedTo` with a `parent` field is a problem of the record, so `writeModel` and `call-file.ts` refuse it before the first write. The role works those records in a list of their own across their parents, which question 3 rules out. A role that only writes a `parent` child (the requester's ticket comments) is not affected.
+- `data-modeling.md` → "Choosing the Right Format", question 3: says so.
+- `build-module.md` → step 5.6: each answer in `relationships.txt` gives the evidence its question asks for (the ways the child is saved; who creates it and who works the parent; each list across parents and whether people cite it by its own number, or `none`), and a single no makes the field a `reference`. The example is two lines, a `parent` (`order_lines.order_id`) and a `reference` whose first answer is yes (`issues.project_id`).
+- `build-module.md` → "Confirm the entity list": a `parent` entity's line says it has no list of its own and who opens it from where, not only that it has no menu entry.
+- `tests/crud-tools-eval.ts`: new task t5, a sales quotes build through the whole skill, as the control whose quote lines must stay `parent`; `summary` lists each skill run's relationship fields with their format and counts each format across the runs.
+
+Measured on Haiku, 10 paper runs each, after the change: interview → application `parent` in 3 of 9 (the refusal fired in 3 runs, and each switched to `reference`; the 3 left had no `limitedTo` on interviews), application → candidate in 2 of 9, offer → application in 5 of 9, application → job opening in 6 of 9, unchanged. Only 1 of the 10 runs wrote `relationships.txt` (22 of 50 before), and it chose `parent` for application → job opening against its own "3 no". The t5 control kept quote line → quote `parent` in 10 of 10, before and after.
+
+`flows.md` row 8.7 says so. The file format is unchanged; `version` stays `3.1`.
+
+## The entity list goes above the build-scope question, not inside it
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build put its whole confirmation into the `AskUserQuestion` question text: the lines on what the module is based on, all five entity lines, the step lines and the access line, about 1,500 characters that ran together into one paragraph, with only a status line above the dialog. The question tool's own description asks for questions that stand on their own, and "show the list in the message" did not say where the list goes. Three Haiku 5.5 runs as subagents and three as headless Claude Code sessions with the question tool did not repeat it: all six put the list in the response text and asked a question of at most 109 characters.
+
+- `build-module.md` → "Model it like the leading products", step 5: the lines on what the module is based on go in the response text before the first question, never inside a question.
+- `build-module.md` → "Confirm the entity list": the list goes in the response text above the question and never inside it, one bullet per entity. The question is one sentence: the choice and the plural labels of the new entities, with nothing from the lines above it.
+
+`flows.md` rows 8.1 and 8.7 say so. The file format is unchanged; `version` stays `3.1`.
+
 ## Gates and roles are written from the module's access record
 
 2026-11-12. Asked for by Martin Amm, after a recruiting module came out with only its viewer, manager and admin roles: no gate on hiring, no Hiring Manager role, no Interviewer role. The 22 saved Haiku runs of the same build (task t4 in `tests/crud-tools-eval.ts`) showed why:

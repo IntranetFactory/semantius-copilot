@@ -32,7 +32,10 @@
  *   - a `workflow_state` field (a create, or an update of its values) is refused unless `access.json`
  *     in the payload's folder, the module's access record, says who moves a record into each of its
  *     states (`access-rules.ts`), and so is a lifecycle under another name (an enum named `status`,
- *     `state`, `stage`, or `<the entity's singular>_status` / `_state` / `_stage`).
+ *     `state`, `stage`, or `<the entity's singular>_status` / `_state` / `_stage`);
+ *   - a `create_field` row with `format: parent` is refused unless `relationships.json` in the payload's
+ *     folder, the relationship record, has its entry and that entry's facts make it a parent
+ *     (`relationship-rules.ts`); a row whose entry there names another format is refused too.
  *
  * Usage:   bun call-file.ts [--check] <tool> <file.json>
  *          --check validates the file (the permission read included) and sends nothing.
@@ -45,6 +48,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { coverageProblems, labelColumnProblems, lifecycleNameProblems, planAccess, type AccessRecord } from "./access-rules";
 import { checkedPermissions, closest } from "./permission-names";
+import { relationshipProblems } from "./relationship-rules";
 
 export type Send = (tool: string, payload: string) => Promise<number>;
 /** The permissions on the host whose names are in `names`, or that start with one of `prefixes`; null when the read failed. */
@@ -81,7 +85,8 @@ export function entityItems(tool: string, payload: any): any[] {
     .map((t: string) => ({ ...(payload?.data ?? {}), table_name: t }));
 }
 
-const hasRule = (rule: unknown) => !!rule && typeof rule === "object" && Object.keys(rule as object).length > 0;
+
+const hasRule =(rule: unknown) => !!rule && typeof rule === "object" && Object.keys(rule as object).length > 0;
 
 /**
  * The keys a field and an entity take, as the `crud` server's create_field and create_entity schemas name them
@@ -258,7 +263,7 @@ export function fieldProblems(fields: ReadonlyArray<any>, entities: ReadonlyMap<
     const why = hasRule(child.select_rule) ? `${childTable} has a select_rule`
       : childView !== parentView ? `${childTable} is read with ${childView}, ${f.table_name} with ${parentView}` : "";
     if (why) {
-      out.push(`${where}: the rollup aggregates ${childTable} rows that readers of ${f.table_name} may not see (${why}), so the platform refuses it without "include_hidden_rows": true (90269). Set it without asking when a ${childTable} row shows exactly when its ${f.table_name} record does (rbac.md, "Controls on a gate", control 7, and "Roles that do part of the work"); otherwise ask the user first (rollup-fields.md, "Hidden child rows"). Never leave the rollup out to get past this.`);
+      out.push(`${where}: the rollup aggregates ${childTable} rows that readers of ${f.table_name} may not see (${why}), so the platform refuses it without "include_hidden_rows": true (90269). Set "include_hidden_rows": true in its rollup, without asking, and name it in the final response (rollup-fields.md, "Hidden child rows"). Never leave the rollup out to get past this.`);
     }
   }
   return out;
@@ -513,6 +518,27 @@ export function lifecycleProblems(file: string, fields: ReadonlyArray<any>, tool
   return plan.problems.map((p) => `access record: ${p} (${path})`);
 }
 
+/**
+ * The relationship fields of a `create_field` payload checked against the relationship record, `relationships.json` in
+ * the payload's folder (`writeModel` writes it), with the access record beside it for the people it names. A payload
+ * with no `parent` field and no record passes.
+ */
+export function relationshipFileProblems(file: string, fields: ReadonlyArray<any>): string[] {
+  const related = fields.filter((f) => f?.format === "parent" || f?.format === "reference");
+  if (!related.length) return [];
+  const path = join(dirname(file), "relationships.json");
+  let record: unknown;
+  try {
+    record = JSON.parse(readFileSync(path, "utf8").replace(/^﻿/, ""));
+  } catch (e) {
+    if ((e as { code?: string })?.code !== "ENOENT") return [`${path} could not be read as JSON: ${e instanceof Error ? e.message : e}`];
+    record = undefined;
+  }
+  let access: AccessRecord | null = null;
+  try { access = JSON.parse(readFileSync(join(dirname(file), "access.json"), "utf8").replace(/^﻿/, "")); } catch { access = null; }
+  return relationshipProblems(related, record, access, path);
+}
+
 /** Runs the script and returns its exit code. */
 export async function main(
   argv: string[], send: Send = spawnSend, printError: (line: string) => void = console.error,
@@ -581,6 +607,7 @@ export async function main(
   }
   problems.push(...fieldProblems(fields, entities));
   problems.push(...lifecycleProblems(file, fields, tool));
+  if (tool === "create_field") problems.push(...relationshipFileProblems(file, created));
   if (tool === "create_entity") problems.push(...labelColumnProblems(entityItems(tool, payload)));
   let checked = 0;
   if (PERMISSION_TOOLS.has(tool)) {

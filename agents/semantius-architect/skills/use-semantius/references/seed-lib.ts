@@ -171,7 +171,7 @@ const streams = new Set<() => void>();              // every rng(), restarted at
 function resetPass(): void {
   dryRows.clear(); dryDeleted.clear(); dryWarned.clear(); dryId = 0;
   writeCount = 0; clearStarted = false; rowsInserted = false; lastSite = ""; lastFrame = undefined;
-  stateChecks.length = 0; seededStates.clear();
+  stateChecks.length = 0; seededStates.clear(); refLabels.clear();
   for (const restart of streams) restart();
 }
 
@@ -1102,14 +1102,28 @@ export async function clearSeeded(tables: ReadonlyArray<readonly [path: string, 
 
 // ─────────────────────────────── relationships ───────────────────────────────
 
+/** Per table, `_ref` → stored label of every row `idsByKey` read back by its `_ref` in this pass. */
+const refLabels = new Map<string, Map<string, string>>();
+
+/** The table that `fk` of `table` points at, as "/<table>"; undefined when no `_ref` was read back in this pass. */
+async function refTableOf(table: string, fk: string): Promise<string | undefined> {
+  if (!refLabels.size) return undefined;
+  const ref = fieldsOf(await metaOf(table)).get(fk)?.reference_table;
+  return ref ? `/${ref}` : undefined;
+}
+
+/** The label to compare for `want`, a parent in `parentTable`: its stored label when `want` is a `_ref` read back from that table, else `want`. */
+const asLabel = (parentTable: string | undefined, want: string): string =>
+  (parentTable ? refLabels.get(parentTable)?.get(want) : undefined) ?? want;
+
 /**
  * Turns a parent's key (its label, or its `_ref`) into its id, read back from the platform:
  *   const vendorId = await idsByKey("/vendors", "vendor_name", vendorRows);
  *   vendor_id: vendorId("Adobe")
  * The function throws on a key that was not seeded, so a typo is a halt, not a wrong id. Throws here when a
- * seeded key is absent from the table or matches more than one row. `labelOf(key)` gives the parent's stored
- * `_label`, for `assertParents` when the platform computes the parent's label and the plan cannot know it:
- * `assertParents(…, plan.map((p) => offerId.labelOf(p.offer)))`. A check pass gives the key back.
+ * seeded key is absent from the table or matches more than one row. For a table keyed on `_ref`, it also
+ * remembers each row's stored label, so `assertParents` and `assertJunction` take the parent's `_ref` as the
+ * child rows name it. `labelOf(key)` gives the parent's stored `_label`; a check pass gives the key back.
  */
 export async function idsByKey(
   path: string, keyField: string, rows: ReadonlyArray<Row>,
@@ -1127,6 +1141,14 @@ export async function idsByKey(
   if (absent.length) throw new Error(`idsByKey ${table}: ${absent.length} seeded ${keyField} value(s) not found on read-back: ${preview(absent)}`);
   const repeated = k.keys.filter((key) => found.get(key)!.length > 1);
   if (repeated.length) throw new Error(`idsByKey ${table}: ${keyField} matches more than one row for ${preview(repeated)}; clear the earlier rows with clearSeeded or rename`);
+  if (keyField === REF) {
+    const labels = refLabels.get(table) ?? new Map<string, string>();
+    for (const key of k.keys) {
+      const label = found.get(key)![0]._label;
+      if (label !== undefined && label !== null) labels.set(key, String(label));
+    }
+    refLabels.set(table, labels);
+  }
   const rowOf = (key: string) => {
     const hit = found.get(key);
     if (!hit) throw new Error(`idsByKey ${table}: no seeded ${keyField} "${key}"; seeded: ${preview(k.keys)}`);
@@ -1140,9 +1162,10 @@ export async function idsByKey(
 const SPINE = " › ";
 
 /**
- * Reads the child rows back with their `<fkField>_label` and compares each with the parent label the script
- * meant. `rows` are the child rows as planned (keyed by `keyField`, their label column or `_ref`);
- * `parentLabels[i]` is the label of the parent intended for `rows[i]`, or `null` for a row whose optional
+ * Reads the child rows back with their `<fkField>_label` and compares each with the parent the script meant.
+ * `rows` are the child rows as planned (keyed by `keyField`, their label column or `_ref`); `parentLabels[i]`
+ * names the parent intended for `rows[i]` by its key, as the child rows do: its label, or its `_ref` when it is
+ * keyed on one (compared with the label `idsByKey` read back for that `_ref`), or `null` for a row whose optional
  * relationship is meant to be empty. A composed label shows ancestors first ("Region › Vendor"); a label that
  * ends with the intended one after " › " matches. Throws naming every wrong row. On a real pass only.
  */
@@ -1158,7 +1181,7 @@ export async function assertParents(
     [typeof fkField === "string" && fkField !== "", `fkField is ${show(fkField)}; it is the child's relationship field, such as "vendor_id"`],
     [isRows(rows), "rows is the list of planned child rows"],
     [Array.isArray(parentLabels) && parentLabels.every((l) => l === null || typeof l === "string"),
-      `parentLabels holds ${Array.isArray(parentLabels) ? badEntries(parentLabels, (l) => l === null || typeof l === "string") : show(parentLabels)}; each entry is the intended parent's label (from the plan, or idsByKey(…).labelOf(key) when the platform computes it), or null for an empty relationship, never an id`],
+      `parentLabels holds ${Array.isArray(parentLabels) ? badEntries(parentLabels, (l) => l === null || typeof l === "string") : show(parentLabels)}; each entry is the intended parent's key from the plan (its label, or its _ref when it is keyed on one), or null for an empty relationship, never an id`],
   ]);
   const table = tableOf(path);
   if (rows.length !== parentLabels.length) {
@@ -1175,13 +1198,16 @@ export async function assertParents(
   const column = `${fkField}_label`;
   const k = await keyer("assertParents", table, keyField, rows, [column]);
   const stored = await readKeyed(k, table);
+  const parentTable = await refTableOf(table, fkField);
   const wrong: string[] = [];
   k.keys.forEach((key, i) => {
     const got = stored.get(key)?.[0]?.[column];
     const text = got === undefined ? undefined : String(got ?? "");
-    const want = parentLabels[i];
+    const named = parentLabels[i];
+    const want = named === null ? null : asLabel(parentTable, named);
     const matches = text !== undefined && (want === null ? text === "" : text === want || text.endsWith(`${SPINE}${want}`));
-    if (!matches) wrong.push(`${key}: intended ${want === null ? "no parent" : `parent "${want}"`}, stored "${text ?? "(row not found)"}"`);
+    const intended = want === null ? "no parent" : `parent "${want}"${want !== named ? ` (_ref "${named}")` : ""}`;
+    if (!matches) wrong.push(`${key}: intended ${intended}, stored "${text ?? "(row not found)"}"`);
   });
   if (wrong.length) {
     throw new Error(
@@ -1195,7 +1221,8 @@ export async function assertParents(
 /**
  * Checks a connecting record (junction) table as a set of rows: reads every row back with both `<fkA>_label`
  * and `<fkB>_label` and compares them with the pairs the script meant; every intended pair must be there and
- * nothing else. Meant for a table this script just created. Real pass only, like `assertParents`.
+ * nothing else. Each side names its parent by its key, as `assertParents` does: its label, or its `_ref` when it
+ * is keyed on one. Meant for a table this script just created. Real pass only, like `assertParents`.
  *   await assertJunction("/seats", "application_id", "user_id", [["Slack", "Maria Lopez"], ["Figma", "Tom Becker"]]);
  */
 export async function assertJunction(
@@ -1218,8 +1245,9 @@ export async function assertJunction(
   const stored: Array<{ a: string; b: string }> = (await pgRequest("GET", `${table}?select=${colA},${colB}`))
     .map((r: Row) => ({ a: String(r[colA] ?? ""), b: String(r[colB] ?? "") }));
   const same = (got: string, want: string) => got === want || got.endsWith(`${SPINE}${want}`);
+  const [tableA, tableB] = [await refTableOf(table, fkA), await refTableOf(table, fkB)];
   const missing: string[] = [];
-  for (const [a, b] of pairs) {
+  for (const [a, b] of pairs.map(([a, b]) => [asLabel(tableA, a), asLabel(tableB, b)] as const)) {
     const at = stored.findIndex((s) => same(s.a, a) && same(s.b, b));
     if (at < 0) missing.push(`${a} + ${b}`); else stored.splice(at, 1);
   }
@@ -1856,10 +1884,11 @@ export function assertSeedDistinct(
 
 /** What to do after a halt the script can fix: `shown` when the halt printed the call as the file holds it now. */
 const fixHint = (shown: boolean): string =>
-  `Change only ${shown ? "these lines" : "the lines named"} with your file-edit tool, or edit-file.ts when there is none ` +
-  `(cli-usage.md → "Ad-hoc JSON and file work in Bun"), copying the old text from ${shown ? "the lines above" : "the file"}, never from ` +
-  `memory. Never Python, and never retype the script. Fix the plan's rows or the shape of a call; never widen a rule until ` +
-  `it passes: that leaves the contradiction in the data. Then run the script again.`;
+  `Change ${shown ? "these lines" : "the lines named"}, and every other call of the script that makes the same mistake, in one edit, ` +
+  `with your file-edit tool, or edit-file.ts when there is none (cli-usage.md → "Ad-hoc JSON and file work in Bun"), copying the ` +
+  `old text from ${shown ? "the lines above" : "the file"}, never from memory. Never Python, and never retype the script. Fix the ` +
+  `plan's rows or the shape of a call; never widen a rule until it passes: that leaves the contradiction in the data. Run the ` +
+  `script again only once the cause is fixed: an unchanged script against unchanged tables halts the same way.`;
 
 /**
  * Halting harness: runs the seed script's body as a check pass, then, only when that passed, as the real pass.

@@ -31,8 +31,10 @@
  *          select_rule), one `report hierarchy` line per row whose
  *          including permission is `<slug>:*`, and one `report role` line per role of the
  *          module with its grants. With --access, `access …` lines say what was created, set or kept, and
- *          `access line:` is the module's access in plain words, for the final response. A run that changed
- *          nothing ends `Nothing created or changed.`; a run with --access that printed a `warning:` ends
+ *          the lines between `access summary:` and `end of access summary` are the module's access in plain
+ *          words, as markdown, for the final response. A run that changed
+ *          nothing ends `Nothing created or changed.`; a run with --access that wrote ends `Done. Run this once
+ *          more: that run is the verification.`; a run with --access that printed a `warning:` ends
  *          `Not verified: <n> problem(s) above; fix them and run this again.`
  * Exit:    0 done; 1 a conflict, named, that the user has to settle; 2 bad flags, a bad access
  *          record (nothing written), or the instance cannot be read; 3 a write was rejected, named;
@@ -53,6 +55,8 @@ export type Options = { slug: string; name?: string; description?: string; icon?
 
 const USAGE = 'Usage: bun module-rbac-setup.ts --name "<Module Name>" --slug <module-slug> --description "<at most 60 characters>" --icon <icon-name> [--domain <CODE>] [--color <#rrggbb>] [--dry-run] [--adopt]\n       bun module-rbac-setup.ts --slug <module-slug> --access <access.json> [--dry-run]';
 const NOTHING = "Nothing created or changed.";
+// With --access, the run after one that wrote is the verification; a run that changed nothing needs no other.
+const DONE_ACCESS = "Done. Run this once more: that run is the verification.";
 const FIELD_COLUMNS = "table_name,field_name,title,format,enum_values,reference_table,reference_delete_mode,input_type,ctype,rollup,field_order,default_value";
 const ENTITY_COLUMNS = "table_name,singular,singular_label,plural_label,label_column,entity_type,id_type,id_prefix,view_permission,edit_permission,computed_fields,validation_rules,select_rule";
 const MODULE_COLUMNS = "id,module_name,module_slug,description,icon_name,logo_color,domain_code,access_scope,view_permission,manage_permission,admin_permission,default_viewer_role_id,default_manager_role_id,default_admin_role_id";
@@ -294,7 +298,7 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
 
   // --access: the gates and roles of the module's access record (access-rules.ts), after the tiers they build on.
   let scope = update.access_scope ?? live?.access_scope;
-  let accessLine = "";
+  let accessSummary = "";
   let reread = false;
   if (o.access && live) {
     let record: unknown;
@@ -368,7 +372,7 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
     print(`access entities: ${entityChanges.length ? `${o.dryRun ? "to update" : "updated"} ${entityChanges.map((c) => `${c.table} (${c.keys.join(", ")})`).join(", ")}` : "kept"}`);
     if (ruleLines.length) print(`access rules: ${ruleLines.join(", ")}`);
     for (const w of plan.warnings) print(`warning: ${w}`);
-    accessLine = plan.accessLine;
+    accessSummary = plan.accessSummary;
     if (accessChanged) changed = true;
     if (accessChanged && !o.dryRun) {
       // The report and the checks below read the module as these writes left it.
@@ -434,13 +438,13 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
       print(`report role ${r.slug}: holds ${held.length ? held.join(", ") : "nothing"}`);
     }
   }
-  if (accessLine) print(`access line: ${accessLine}`);
+  if (accessSummary) print(`access summary:\n${accessSummary}\nend of access summary`);
   // With --access, a warning means the module does not match its record yet: the run is not a verification.
   if (o.access && warned) {
     print(`Not verified: ${warned} problem(s) above; fix them and run this again.`);
     return 4;
   }
-  print(!changed ? NOTHING : o.dryRun ? "Dry run: nothing was written." : "Done.");
+  print(!changed ? NOTHING : o.dryRun ? "Dry run: nothing was written." : o.access ? DONE_ACCESS : "Done.");
   return 0;
 }
 

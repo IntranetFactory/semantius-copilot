@@ -110,6 +110,9 @@ const seed = {
   instructions: bundle.instructions,
   modelId: modelArg ?? bundle.models[0],
   ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
+  // Same as the frontend's seed (it forwards /meta's disableTaskList). Added
+  // 2026-11-13 without being asked, to verify disable_task_list live.
+  ...(bundle.disableTaskList ? { disableTaskList: true } : {}),
   ...(payload !== undefined ? { payload } : {}),
 };
 const conversationUrl = `${base}/agents/main/${sessionId}`;

@@ -4,10 +4,26 @@
  * The agent-level bundle format that composes these lives in ./agent.js.
  */
 
+/**
+ * Caps on ONE skill's files. Why caps exist: a bundle is untrusted input
+ * (design §8). It is stored as one KV value (Cloudflare allows 25 MiB) and
+ * unpacked into every session's sandbox, so the caps bound what an upload
+ * can make the server hold and copy into each session. Uploading takes the
+ * API token, so they guard against a token holder's mistake, not strangers.
+ * Our own numbers, set for the tiny Hoth proof of concept, not from any
+ * platform limit.
+ *
+ * maxTotalBytes was 1 MiB until 2026-11-13, when use-semantius (~1.1 MB)
+ * outgrew it and semantius-agent could no longer be deployed; raised to
+ * 2 MiB, asked for by Martin Amm. The server runs the same check at
+ * PUT /agents/:name and on every bundle read, so a raise needs backend-b
+ * deployed BEFORE the agent, and rolling backend-b back below the new number
+ * makes every stored bundle above it fail to load.
+ */
 export const BUNDLE_LIMITS = {
   maxFiles: 64,
   maxFileBytes: 256 * 1024,
-  maxTotalBytes: 1024 * 1024,
+  maxTotalBytes: 2 * 1024 * 1024,
 };
 
 /** Naming rule shared by agent names and skill names (folder-name charset). */

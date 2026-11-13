@@ -12,18 +12,20 @@
  * accept and then get wrong: an empty variable name, a permission name that is a role name, a rule code outside
  * class 99, a repeated rule code or name. `composedLabel` builds the label of a record its related records name.
  *
- * A build writes its model with `writeModel(".tmp_deploy", { entities, fields, access })`: it checks the entities,
- * the fields and the access record together (`modelProblems`), names every problem, and writes `entities.json`,
- * `fields.json` and `access.json` only when there is none. The access record says who moves a record into each
- * state of each `workflow_state` (`access-rules.ts`); `module-rbac-setup.ts --access` writes the gates and roles
- * from it once the entities exist. For a module that already has its entities, `writeAccess(dir, access)` writes
- * `access.json` alone.
+ * A build writes its model with `writeModel(".tmp_deploy", { entities, fields, access, relationships })`: it checks
+ * the entities, the fields, the access record and the relationship record together (`modelProblems`), names every
+ * problem, and writes `entities.json`, `fields.json`, `access.json` and `relationships.json` only when there is none.
+ * The access record says who moves a record into each state of each `workflow_state` (`access-rules.ts`);
+ * `module-rbac-setup.ts --access` writes the gates and roles from it once the entities exist. The relationship record
+ * holds the facts that decide each relationship field's format (`relationship-rules.ts`). For a module that already
+ * has its entities, `writeAccess(dir, access)` writes `access.json` alone.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { coverageProblems, labelColumnProblems, lifecycleNameProblems, lifecyclesOf, planAccess, shapeProblems, type AccessRecord } from "./access-rules";
 import { FIELD_FORMATS as FORMATS, fieldProblems, iconProblems, keyProblems, madeFieldProblems, type EntityInfo } from "./call-file";
+import { relationshipProblems, type RelationshipRecord } from "./relationship-rules";
 
 export type Logic = unknown;
 
@@ -262,10 +264,12 @@ const NO_EMPTY_VALUE = new Set(["boolean", "integer", "int32", "int64", "number"
  *   (`data-modeling.md` → "Fields that apply only to some enum or boolean values");
  * - a field its `input_type_rule` shows `readonly` while no `computed_fields` rule of its entity fills it;
  * - a `computed_fields` entry that fills neither a field of the model nor the label column;
- * - a `workflow_state` whose states the access record does not cover, and every problem of the record itself.
- * A field whose entity is not in `entities` is checked by `call-file.ts` alone.
+ * - a `workflow_state` whose states the access record does not cover, and every problem of the record itself;
+ * - a `parent` field without an entry in the relationship record whose facts make it a parent, an entry whose format
+ *   is not its field's, and every other problem of that record (`relationship-rules.ts`).
+ * A field whose entity is not in `entities` is checked by `call-file.ts` alone, except against the relationship record.
  */
-export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArray<any>, access?: AccessRecord): string[] {
+export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArray<any>, access?: AccessRecord, relationships?: RelationshipRecord): string[] {
   const byTable = new Map<string, any>(entities.filter((e) => typeof e?.table_name === "string").map((e) => [e.table_name, e]));
   const out = [
     ...keyProblems("create_entity", entities), ...keyProblems("create_field", fields),
@@ -299,6 +303,7 @@ export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArra
     }
   }
   out.push(...accessProblems(entities, fields, access));
+  out.push(...relationshipProblems(fields, relationships, access, "relationships (writeModel)"));
   return out;
 }
 
@@ -329,11 +334,13 @@ export function writeAccess(dir: string, access: AccessRecord): void {
 /**
  * Writes a new model's payloads into `dir` once `modelProblems` finds nothing: `entities.json` (or `entities-1.json`,
  * `entities-2.json`, … for an `is_a` / `has_a` family, one file per level, bases first), `fields.json`, with the
- * rollups after every other field, and `access.json` when the model has an access record. Throws, naming every
- * problem, and writes nothing otherwise.
+ * rollups after every other field and each field a `computed_fields` rule fills `disabled`, `labels.json` (the
+ * `update_field` that sets each label column a rule fills to `disabled`) when there is one, `access.json` when the model
+ * has an access record, and `relationships.json` when it has a relationship record. Throws, naming every problem, and
+ * writes nothing otherwise.
  */
-export function writeModel(dir: string, model: { entities: ReadonlyArray<any>; fields: ReadonlyArray<any>; access?: AccessRecord }): void {
-  const problems = modelProblems(model.entities, model.fields, model.access);
+export function writeModel(dir: string, model: { entities: ReadonlyArray<any>; fields: ReadonlyArray<any>; access?: AccessRecord; relationships?: RelationshipRecord }): void {
+  const problems = modelProblems(model.entities, model.fields, model.access, model.relationships);
   if (problems.length) throw new Error(`writeModel ${dir}: nothing written, ${problems.length} problem(s):\n  - ${problems.join("\n  - ")}`);
   const tables = new Set(model.entities.map((e) => e.table_name));
   const level = new Map<string, number>();
@@ -354,13 +361,29 @@ export function writeModel(dir: string, model: { entities: ReadonlyArray<any>; f
     written.push(`${path} with create_entity`);
   }
   const isRollup = (f: any) => !!f?.rollup && typeof f.rollup === "object" && Object.keys(f.rollup).length > 0;
+  // A field a computed_fields rule fills is disabled: the platform leaves a required one required.
+  const filled = (table: string, field: string) => (model.entities.find((e) => e.table_name === table)?.computed_fields ?? [])
+    .some((c: any) => String(c?.name ?? "").split(".")[0] === field);
+  const fields = model.fields.map((f) => (filled(f.table_name, f.field_name) && f.input_type !== "hidden" ? { ...f, input_type: "disabled" } : f));
   const fieldsPath = join(dir, "fields.json");
-  writePayload(fieldsPath, { data: [...model.fields.filter((f) => !isRollup(f)), ...model.fields.filter(isRollup)] });
+  writePayload(fieldsPath, { data: [...fields.filter((f) => !isRollup(f)), ...fields.filter(isRollup)] });
   written.push(`${fieldsPath} with create_field`);
+  // create_entity makes the label field required, so a label a rule fills is disabled with update_field.
+  const labels = model.entities.filter((e) => e.label_column && filled(e.table_name, e.label_column)).map((e) => `${e.table_name}.${e.label_column}`);
+  if (labels.length) {
+    const labelsPath = join(dir, "labels.json");
+    writePayload(labelsPath, { id: labels, data: { input_type: "disabled" } });
+    written.push(`${labelsPath} with update_field`);
+  }
   if (model.access !== undefined) {
     const accessPath = join(dir, "access.json");
     writeFileSync(accessPath, `${JSON.stringify(model.access, null, 2)}\n`);
     console.log(`wrote ${accessPath}`);
+  }
+  if (model.relationships !== undefined) {
+    const relationshipsPath = join(dir, "relationships.json");
+    writeFileSync(relationshipsPath, `${JSON.stringify(model.relationships, null, 2)}\n`);
+    console.log(`wrote ${relationshipsPath}`);
   }
   console.log(`send in this order with call-file.ts: ${written.join(", then ")}` +
     (model.access !== undefined ? `; then run module-rbac-setup.ts --slug <module-slug> --access ${join(dir, "access.json")}` : ""));

@@ -269,7 +269,7 @@ Artifact per run: `dist-bundle/<name>.agent.json` (canonical, used by acceptance
 chat-probe). The frontend consumes NO bundler output — the UI reads the agent registry at
 runtime (`GET /agents` for the dropdown, `GET /agents/:name/meta` for welcome + seed), so a
 NEW agent shows up on every page after `pnpm deploy:agent <name>`, with no frontend
-rebuild. Limits: ≤16 skills, ≤64 files & ≤1 MiB per skill, ≤4 MiB per agent,
+rebuild. Limits: ≤16 skills, ≤64 files & ≤2 MiB per skill (1 MiB until 2026-11-13; why, in `core/src/bundle.js`), ≤4 MiB per agent,
 instructions ≤64 KiB (`core/src/agent.js`). Zero-skill agents (no `skills/` folder) are
 valid — nothing is provisioned, the bundle still carries instructions/model.
 

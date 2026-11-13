@@ -13,8 +13,8 @@
  *          EOF
  *          Several blocks may follow one another. An empty NEW part deletes the OLD lines.
  * Output:  each changed line, numbered as in the changed file
- * Exit:    0 when every block was applied; 1 on wrong arguments, a block that is not found, or one that
- *          matches more than once (nothing is changed then)
+ * Exit:    0 when every block was applied; 1 on wrong arguments, a block that is not found, one that
+ *          matches more than once, or one whose NEW part is the same as its OLD part (nothing is changed then)
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -60,6 +60,7 @@ export function applyBlocks(text: string, blocks: ReadonlyArray<Block>): { text:
     const old = b.old.split("\n").join(eol);
     const next = b.next.split("\n").join(eol);
     if (!old.trim()) throw new Error(`block ${n + 1}: the OLD part is empty; name the lines to replace`);
+    if (b.old === b.next) throw new Error(`block ${n + 1}: the NEW part is the same as the OLD part, so nothing would change; the halt is not fixed`);
     const hits = count(out, old);
     if (hits === 0) {
       const first = b.old.split("\n").find((l) => l.trim()) ?? "";

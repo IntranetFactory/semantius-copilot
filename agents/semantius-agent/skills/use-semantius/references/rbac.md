@@ -206,7 +206,7 @@ Once the entities exist, one command writes the module's access from the record:
 bun "<skill-folder>/references/module-rbac-setup.ts" --slug <module-slug> --access .tmp_deploy/access.json
 ```
 
-It writes only what is missing or different, and names each write: permissions, hierarchy rows, roles and grants, the access level, the fields the gates need, the validation rules, computed stamps and `select_rule`s, `include_hidden_rows` on the rollups those affect, and each entity's class and `edit_permission`. A generated rule is recognized by its name and replaced when it differs; any other rule is kept. Run again, it is the verification: it ends `Nothing created or changed.` when the module matches the record, and `Not verified: <n> problem(s) above; fix them and run this again.` (exit 4) after any `warning:`. A problem in the record stops it before any write (exit 2). Its `access line:` is the module's access in plain words ("The access line" below). It refuses a `raci` module ("A gate in a `raci` module" below).
+It writes only what is missing or different, and names each write: permissions, hierarchy rows, roles and grants, the access level, the fields the gates need, the validation rules, computed stamps and `select_rule`s, `include_hidden_rows` on the rollups those affect, and each entity's class and `edit_permission`. A generated rule is recognized by its name and replaced when it differs; any other rule is kept. Run again, it is the verification: it ends `Nothing created or changed.` when the module matches the record, and `Not verified: <n> problem(s) above; fix them and run this again.` (exit 4) after any `warning:`. A problem in the record stops it before any write (exit 2). Its access summary, between `access summary:` and `end of access summary`, is the module's access in plain words ("The access summary" below). It refuses a `raci` module ("A gate in a `raci` module" below).
 
 For each gate of the record it writes:
 
@@ -235,7 +235,7 @@ For each gate of the record it writes:
    The `has_permission` branch is the gate's check, here for a gate without controls; an approval gate puts its whole check there ("Controls on a gate"), so a requester cannot skip past their own approval. A state the record can also reach without the gate (`rejected` beside `approved`, `canceled` before signing) is not in `after`, even when it can be reached after the gate too. For an offer whose gate is `approved`, with `draft`, `submitted`, `approved`, `rejected`, `sent`, `accepted` and `declined`: an offer is sent only once approved, and accepted or declined only once sent, so `after` is `sent`, `accepted`, `declined`; `rejected` is reached instead of `approved`, so it is not. A state after the gate stays in `after` when it has a gate of its own (`terminated` after `signed`, `ordered` after `approved`): its own gate rule still decides who takes it.
 6. **The entity's class:** `operational_workflow`. An entity with a lifecycle and no gate is `operational_record`, and a module with no gate is `advanced`.
 
-**Another role for a step, or none.** The access line names each gated step and the roles that take it. When the user names another role for a step, change the record (give the state to that role's person, adding the role to `roles` when it is new) and run the command again. Naming the module's Manager role means every editor may take the step, so it is not a gate: give the state to the everyday person in the record, with the user's choice as its `because`, then drop the gate in this order: its gate rule, its sequence rule and its controls (below) first, then its permission and its hierarchy rows. When a role takes no other gate, move its users to the Manager role after the user agrees, then delete its grant, the role, its bundle and the bundle's hierarchy rows, and take it out of the record. Running the command then sets the entity's class and the module's access level.
+**Another role for a step, or none.** The access summary names each gated step and the roles that take it. When the user names another role for a step, change the record (give the state to that role's person, adding the role to `roles` when it is new) and run the command again. Naming the module's Manager role means every editor may take the step, so it is not a gate: give the state to the everyday person in the record, with the user's choice as its `because`, then drop the gate in this order: its gate rule, its sequence rule and its controls (below) first, then its permission and its hierarchy rows. When a role takes no other gate, move its users to the Manager role after the user agrees, then delete its grant, the role, its bundle and the bundle's hierarchy rows, and take it out of the record. Running the command then sets the entity's class and the module's access level.
 
 The platform saves a rule that names a permission that does not exist, and that check is then false for every caller, admins included, so the step is closed to everyone; inside a `!` a misspelled name fails open instead, and the clause admits everyone. The command creates every permission before a rule that names it. A rule written by hand (a `select_rule` of its own, a rule outside the record) is checked the same way: collect every `has_permission` and `require_permission` name in it and read them in one `read_permission` with `permission_name=in.(…)`; `call-file.ts` does this for every payload it sends. The module's tier permissions are `<slug>:read`, `<slug>:manage` and `<slug>:admin`; viewer, manager and admin are role names, so `recruiting:manager` and `recruiting:viewer` are never permissions. The direct path marks no gate as high risk, so every gate is included in `<slug>:admin`.
 
@@ -269,7 +269,7 @@ Such a role never gets `<slug>:manage`, which writes every entity of the module.
 4. **Writes stay within those rows.** A `select_rule` limits which records the role's holders change, not which they create, and the platform checks a new row only against `edit_permission`. A validation rule on each entity the role writes therefore refuses a write by a holder without `<slug>:manage` unless the record, or its parent read with `set_record`, names them after the write.
 5. **Fields it may not change.** A field the products leave to the everyday workers (a ticket's priority and its assignee) gets a validation rule that, for a holder without `<slug>:manage`, refuses any value but the default on insert and any change on update.
 
-The records above the one that names the person (the application and candidate above an interview, the customer above a ticket) cannot be narrowed to the role's records: `set_record` reads one row by id, so no rule can look for the rows below it that name the user. They stay visible to the role's holders, and the access line says so. An entity above that the products hide from the role is hidden whole, as in part 3.
+The records above the one that names the person (the application and candidate above an interview, the customer above a ticket) cannot be narrowed to the role's records: `set_record` reads one row by id, so no rule can look for the rows below it that name the user. They stay visible to the role's holders, and the access summary says so. An entity above that the products hide from the role is hidden whole, as in part 3.
 
 A role of this kind can also take a gate (a customer who accepts a quote). Its bundle then includes that gate, still without `<slug>:manage`, and `<slug>:admin` includes the gate as it includes every gate.
 
@@ -294,7 +294,7 @@ From it the command creates:
 1. **The permissions:** each `<slug>:write_<entity>` ("Write tickets") and the bundle `<slug>:<role_key>`, described by what it does ("Write your own tickets and ticket comments"), each with `module_id`.
 2. **The hierarchy rows:** `<slug>:manage` includes each `<slug>:write_<entity>`; each `<slug>:write_<entity>` includes `<slug>:read`, because a write without read is unusable under row-level security; the bundle includes `<slug>:read`, each `<slug>:write_<entity>` the role writes and each gate it takes.
 3. **The role and its grant,** as for a role that takes gates: `role_name` "<Module Name> <Role Title>" ("Service Desk Requester"), `slug` `<module slug with - as _>_<role_key>`, `module_id`.
-4. **The entities:** each written entity's `edit_permission`; the field that names the holders (`requested_by_user_id`, stamped on insert, or the assigned field, such as `interviewer_user_id`) when it is missing; the write and field rules; and the `select_rule`s on each limited entity, on each entity below it (one whose `parent` field, or required `reference`, points at it) and on each hidden entity. A rollup over an entity with such a `select_rule` needs `include_hidden_rows: true` before the rule is set (`90269` otherwise). On an entity whose own rows are narrowed, over an entity below it, the command sets it and names it, as in control 7; any other such rollup is a warning, and that entity's `select_rule` waits until the user has decided (`rollup-fields.md` → "Hidden child rows").
+4. **The entities:** each written entity's `edit_permission`; the field that names the holders (`requested_by_user_id`, stamped on insert, or the assigned field, such as `interviewer_user_id`) when it is missing; the write and field rules; and the `select_rule`s on each limited entity, on each entity below it (one whose `parent` field, or required `reference`, points at it) and on each hidden entity. A rollup over an entity with such a `select_rule` needs `include_hidden_rows: true` before the rule is set (`90269` otherwise). The command sets it on each such rollup, without asking, and names it (`rollup-fields.md` → "Hidden child rows").
 
 In the per-entity shape the bundle is `<unit>:<role_key>` and includes `<unit>:read` and the role's `write_<entity>` permissions, and `<unit>:manage` includes each of those.
 
@@ -365,9 +365,33 @@ Where control 7 also narrows an entity, its `select_rule` is one `and` of the en
 
 On a delete `value_changed` is `false` for every field, so the rule passes, and the ticket's own write rule (part 4) decides.
 
-#### The access line
+#### The access summary
 
-`module-rbac-setup.ts --access` prints the module's access as its `access line:`, from the live module and the record; the final response uses that line, unchanged. A build's entity list and a review's access section describe a module's access the same way, in plain words: its access level; what each role of the module can do (viewer, manager, admin, each role that takes gates, with its steps, and each role that does part of the work, with what it writes, which records it sees, what is hidden from it and the records above that stay visible to it); the entities only an admin can change; each gated step with who takes it, any named person, an approval gate's controls and a payout gate's requester check; and, for each entity with a `workflow_state` and no gate, "<Plural label>: no step is gated; anyone who can edit one can move it through every state."
+`module-rbac-setup.ts --access` prints the module's access as markdown, between the lines `access summary:` and `end of access summary`, from the live module and the record; the final response uses the lines between them, unchanged. A build's entity list and a review's access section write a module's access in the same form, in plain words:
+
+1. **The access level**, in bold ("**Access: gated.** Some steps are restricted to a role." or "**Access: advanced.** No step is restricted to a role."), and that the module's role names start with the module's name, so the table names roles by their title alone.
+2. **A table, Role | Does | Sees,** one row per role: viewer, manager and admin, then each role that takes gates, with each step it takes ("marks applications Hired") or the records it alone creates, and each role that does part of the work, with what it writes. Sees names the records the role is limited to and those below them, what is hidden from it, and "all other records" when the rest stay visible to it, as the records above the ones that name it do ("Roles that do part of the work").
+3. **"Only an admin can change \<plural labels\>."**, when any entity's write tier is the admin tier.
+4. **Restricted steps:** one bullet per gate, "\<Plural label\> → \<State\>: \<roles that take it\>.", then the named person, an approval gate's controls and a payout gate's requester check; and one bullet per restricted create, "\<Plural label\>: created only by \<roles\>."
+5. **No restricted step** on each entity with a `workflow_state` and no gate: "anyone who can edit one can move it through every state."
+
+The summary of the purchase request's record ("The access record"):
+
+```markdown
+**Access: gated.** Some steps are restricted to a role. Role names start with "Spend".
+
+| Role | Does | Sees |
+|---|---|---|
+| Viewer | reads only | everything |
+| Manager | the everyday work | everything |
+| Admin | the everyday work and every restricted step | everything |
+| Approver | the everyday work; marks purchase requests Approved | everything |
+| Buyer | the everyday work; marks purchase requests Ordered | everything |
+
+**Restricted steps**
+- Purchase Requests → Approved: Approver. When the purchase request names an approver, only that person or an admin. The requester may not approve it; only a submitted one is approved; what it covers is locked from submitted on; only the requester recalls it; only the approver rejects it or moves it back; who approved it and when is recorded.
+- Purchase Requests → Ordered: Buyer.
+```
 
 #### Controls on a gate
 
@@ -438,7 +462,7 @@ The check is who may take it; on an approval or payout gate it is `{"and": [<who
    - Each other bundle of a role that takes gates and is not narrowed gets its own `{"has_permission": "<slug>:<role_key>"}` in the `or`, after `<slug>:admin`; never `<slug>:read` or `<slug>:manage`, which the narrowed role's bundle includes. Without one, holding the narrowed role narrows what a person sees even when they hold another role, so a person who must see every record and also take the step gets the admin role.
    - The rule also limits which records the role's holders may change, but not which they may create.
    - Reading the parent with `set_record` here is the case `select-rule.md` → "Performance note" reserves it for: one parent row by its id, in a module with light read traffic.
-   - A rollup on a narrowed entity, over an entity below it, needs `include_hidden_rows: true`. The command sets it without asking, because the child shows exactly when its parent does, and names it; the final response names it too. Any other rollup over these entities is a warning that follows `rollup-fields.md` → "Hidden child rows".
+   - A rollup over these entities needs `include_hidden_rows: true`. The command sets it without asking and names it; the final response names it too (`rollup-fields.md` → "Hidden child rows").
    - A role that does part of the work narrows rows with the same rule ("Roles that do part of the work"). Where both narrow one entity, its `select_rule` is one `and` of the entity's `view_permission` and both `or`s.
 
 **Complete rules for a purchase request.** What the command writes for the record in "The access record" above, in a Spend module (`spend`). Its states are `draft`, `submitted`, `approved`, `rejected` and `ordered`. An Approver approves or rejects it, and a Buyer orders it. The products name an approver per request (`approver_user_id`). Its fields are `supplier_id`, `needed_by_date`, `po_number`, filled when the request is ordered, and `total_amount`, a rollup of its lines (`quantity`, `unit_price`); both labels are composed. The `computed_fields` of `purchase_requests`, after its label rule:
