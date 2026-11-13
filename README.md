@@ -259,6 +259,7 @@ scripts/     bundle.mjs (agent bundler CLI) · deploy-agent.mjs (bundle one agen
   "models": ["deepseek/deepseek-v4.1-flash-1017", "z-ai/glm-5.3-flash"],  // model registry ids = upstream model ids, first = default (see LLM configuration)
   "proxyWhitelist": ["postman-echo.com"],  // optional — hosts/URLs, `*` anywhere; unioned with the org's list at egress
   "webTools": [{ "type": "openrouter:web_search", "parameters": {} }],  // optional — agent.jsonc `web_tools`, see below
+  "disableTaskList": true,             // optional — agent.jsonc `disable_task_list`: no task tools, no task paragraph
   "welcome": { "title": "…", "subtitle": "…", "sections": [] },  // optional — see "Welcome card"
   "skills": { "planner": { "SKILL.md": "…", "references/…": "…" } }  // 0..16 skills
 }
@@ -2240,6 +2241,9 @@ Ids are sequential strings from a high-watermark (a deleted id is never reused);
 (subagent delegation) is unrelated — the descriptions say so. Mounted on **every channel**
 (`agents/main.ts`, `taskTools(id)`), and a static `TASK_TRACKING_INSTRUCTIONS` paragraph
 (literal text — the cached prompt prefix stays byte-identical) tells the model when to use them.
+An agent whose `agent.jsonc` sets `disable_task_list: true` gets neither (bundle
+`disableTaskList`; it reaches turn 1 through the `/agents/:name/meta` seed and later turns
+through `AgentMeta`). Asked for by Martin Amm, 2026-11-13.
 
 **On disk: one JSON document, `/workspace/.tasks/tasks.json`** (`{ version, highwatermark,
 tasks[] }`, pretty-printed — `cat` it). It is a workspace file like any other, so it rides the

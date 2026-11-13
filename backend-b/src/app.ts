@@ -543,6 +543,8 @@ app.get('/agents/:name/meta', userTokenGuard(), async (c) => {
     // Returned regardless of the org's firewall — the conversation gate strips
     // it from the seed unless the session's copilot firewall is off.
     ...(bundle.webTools ? { webTools: bundle.webTools } : {}),
+    // Seed field: turn 1 already runs without the task tools and their paragraph.
+    ...(bundle.disableTaskList ? { disableTaskList: true } : {}),
     ...(bundle.welcome ? { welcome: bundle.welcome } : {}),
   });
 });

@@ -210,6 +210,9 @@ type AgentMeta = {
    * (app.ts) strips them otherwise. Part of the bundle version hash, so a
    * change re-lands meta at the next start. */
   webTools?: Record<string, unknown>[];
+  /** The agent's `disable_task_list`: true = neither the task tools nor
+   * TASK_TRACKING_INSTRUCTIONS. Part of the bundle version hash. */
+  disableTaskList?: boolean;
 };
 
 type SkillCatalogEntry = { name: string; description: string };
@@ -335,6 +338,7 @@ function metaFromSeed(seed: AgentSeed | undefined): AgentMeta | null {
     ...(modelId ? { modelId } : {}),
     ...(skillCatalog && skillCatalog.length > 0 ? { skillCatalog } : {}),
     ...(webTools && webTools.length > 0 ? { webTools } : {}),
+    ...(seed.disableTaskList === true ? { disableTaskList: true } : {}),
     binding,
   };
 }
@@ -612,6 +616,7 @@ export function Main({ id }: AgentProps) {
         modelId,
         ...(skillCatalog.length > 0 ? { skillCatalog } : {}),
         ...(webTools ? { webTools } : {}),
+        ...(bundle.disableTaskList ? { disableTaskList: true } : {}),
         binding,
       });
       // Mirrored onto the session record so the UI shows the locked model
@@ -666,7 +671,9 @@ export function Main({ id }: AgentProps) {
   // have session records too, so their file persists the same way); the chat
   // UI additionally folds the tool events into its pinned progress panel. The
   // factory closes over the session id, the key of the per-session write mutex.
-  for (const tool of taskTools(id)) useTool(tool);
+  // An agent with `disable_task_list` gets neither the tools nor their paragraph.
+  const taskTracking = active?.disableTaskList ? '' : TASK_TRACKING_INSTRUCTIONS;
+  if (!active?.disableTaskList) for (const tool of taskTools(id)) useTool(tool);
 
   const instructions = active?.instructions ?? DEFAULT_INSTRUCTIONS;
   // The session model's registry `system_prompt` (agents_config.jsonc):
@@ -694,7 +701,7 @@ export function Main({ id }: AgentProps) {
       'IMPORTANT: the issue author can ONLY see comments you post with the comment_on_github_issue tool — a plain text ' +
       'reply reaches nobody. You MUST finish every event by calling comment_on_github_issue exactly once with your full ' +
       'answer in Markdown. If the request is unclear, post a comment asking for clarification.' +
-      TASK_TRACKING_INSTRUCTIONS +
+      taskTracking +
       modelInstructions +
       suffix
     );
@@ -704,7 +711,7 @@ export function Main({ id }: AgentProps) {
   // render the question card, so the tool is not mounted there at all.
   useTool(askUserQuestion);
 
-  return instructions + WORKSPACE_LINK_INSTRUCTIONS + TASK_TRACKING_INSTRUCTIONS + modelInstructions + suffix;
+  return instructions + WORKSPACE_LINK_INSTRUCTIONS + taskTracking + modelInstructions + suffix;
 }
 
 // The generic multi-agent host: durable identity `main` (generated DO class

@@ -20,6 +20,8 @@
  * @property {Record<string, unknown>[]} [webTools] OpenRouter server tools (`openrouter:web_search`,
  *   `openrouter:web_fetch`, ...) appended verbatim to the request-body `tools` of every
  *   OpenRouter model turn
+ * @property {boolean} [disableTaskList] true = the session gets no task tools
+ *   (TaskCreate / TaskUpdate / TaskList / TaskGet) and no task-tracking paragraph
  * @property {Record<string, Record<string, string>>} skills skillName -> (rel-path -> utf-8 content)
  */
 
@@ -335,14 +337,14 @@ function checkModels(value, label) {
  * not-yet-supported keys (future egress allow list etc.) fail at bundle time.
  *
  * @param {unknown} raw
- * @returns {{ instructions?: string, models: string[], welcome?: AgentWelcome, web_tools?: Record<string, unknown>[] }}
+ * @returns {{ instructions?: string, models: string[], welcome?: AgentWelcome, web_tools?: Record<string, unknown>[], disable_task_list?: boolean }}
  */
 export function validateAgentConfig(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BundleValidationError('agent.jsonc must be a JSON object');
   }
   const config = /** @type {Record<string, unknown>} */ (raw);
-  const allowed = ['$schema', 'instructions', 'models', 'proxy_whitelist', 'web_tools', 'welcome'];
+  const allowed = ['$schema', 'instructions', 'models', 'proxy_whitelist', 'web_tools', 'disable_task_list', 'welcome'];
   for (const key of Object.keys(config)) {
     if (!allowed.includes(key)) {
       throw new BundleValidationError(`agent.jsonc has unknown key: ${key} (allowed: ${allowed.join(', ')})`);
@@ -357,6 +359,9 @@ export function validateAgentConfig(raw) {
   }
   if (config.web_tools !== undefined) {
     validateWebTools(config.web_tools, 'agent.jsonc "web_tools"');
+  }
+  if (config.disable_task_list !== undefined && typeof config.disable_task_list !== 'boolean') {
+    throw new BundleValidationError('agent.jsonc "disable_task_list" must be a boolean when present');
   }
   if (config.welcome !== undefined) {
     validateWelcome(config.welcome, 'agent.jsonc "welcome"');
@@ -422,6 +427,9 @@ export function validateAgentBundle(raw) {
   }
   if (bundle.webTools !== undefined) {
     validateWebTools(bundle.webTools, 'webTools');
+  }
+  if (bundle.disableTaskList !== undefined && typeof bundle.disableTaskList !== 'boolean') {
+    throw new BundleValidationError('disableTaskList must be a boolean when present');
   }
   if (bundle.welcome !== undefined) {
     validateWelcome(bundle.welcome, 'welcome');

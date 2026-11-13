@@ -37,6 +37,10 @@
       "items": { "type": "object" },
       "description": "OpenRouter server tools (e.g. { \"type\": \"openrouter:web_search\", \"parameters\": { ... } }, { \"type\": \"openrouter:web_fetch\", ... }). Every entry is appended VERBATIM to the request-body `tools` array of each model turn on an OpenRouter model — no field validation here, OpenRouter is the authority on its own tool shapes (an ill-formed entry fails the turn with OpenRouter's error). Ignored for openai-provider models. Capped at 16 entries / 16 KiB serialized."
     },
+    "disable_task_list": {
+      "type": "boolean",
+      "description": "true = this agent's sessions get no task tools (TaskCreate, TaskUpdate, TaskList, TaskGet) and the harness's task-tracking paragraph is left out of the system prompt. Absent or false = both, as before. A skill that calls the task tools fails on such an agent."
+    },
     "welcome": {
       "$ref": "welcome.schema.json",
       "description": "Welcome card for the chat UI (schema: core/welcome.schema.json). Alternatively put it in agents/<name>/welcome.jsonc — not both."

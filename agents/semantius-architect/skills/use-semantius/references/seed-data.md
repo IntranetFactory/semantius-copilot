@@ -32,9 +32,9 @@ Write the script as `.tmp_deploy/seed_<module_slug>.ts` and run it from the repo
 bun run .tmp_deploy/seed_<module_slug>.ts
 ```
 
-One command runs the script twice. First comes a check pass: it records every write and sends none, reads the tables, and checks every row. Only when the check pass passes does the real pass run, building the same rows and writing them. A halt in the check pass sent nothing; its output says `SEED HALTED in the check pass` and names the script line. `--check` runs the check pass alone and ends `CHECK RUN passed … nothing seeded`, which is not a seed. If `semantius` is not found, put its folder on PATH in the same command (`cli-usage.md` § "Installing from an agent").
+One command runs the script twice. First comes a check pass: it records every write and sends none, reads the tables, and checks every row. Only when the check pass passes does the real pass run, building the same rows and writing them. A halt in the check pass sent nothing; its output says `SEED HALTED in the check pass`, names the script line and prints that call as the file holds it now. `--check` runs the check pass alone and ends `CHECK RUN passed … nothing seeded`, which is not a seed. If `semantius` is not found, put its folder on PATH in the same command (`cli-usage.md` § "Installing from an agent").
 
-To change your own script after a halt, change only the lines the halt names, with your file-edit tool or `edit-file.ts` (`cli-usage.md` → "Ad-hoc JSON and file work in Bun"); never write the whole script again.
+To change your own script after a halt, change only the lines the halt names, with your file-edit tool, or `edit-file.ts` when there is none (`cli-usage.md` → "Ad-hoc JSON and file work in Bun"). Copy the old text from the lines the halt printed, never from memory. Never write the whole script again, and never use Python. A halt is fixed in the plan's rows or in the shape of a call: a rule widened until it passes leaves the contradiction in the data.
 
 ## The pattern
 
@@ -84,6 +84,8 @@ await runSeed(async () => {
 
 ## The functions
 
+Every function first checks the shape of its arguments: a wrong one halts with the function's signature and a right call.
+
 - `seedEnsureMany(path, rows, keyField)`: the insert for every table, a junction included.
   - **The key.** `keyField` is the table's label column when the seed sends it. When the platform computes the label, or the table is a junction, use `"_ref"`: every planned row carries a `_ref` name that is never sent, and stored rows are found by the values the rows send. `--describe` names the key for each table.
   - **What it does.** It checks the rows before anything is read or sent. It reads the rows already stored under those keys, halts when one of them differs from its planned row, inserts the missing ones in one POST, and returns all rows with their ids (and their `_ref`) in input order.
@@ -92,10 +94,13 @@ await runSeed(async () => {
 - `idsByKey(path, keyField, rows)`: returns `(key) => id`, read back from the platform by the same key as the insert (the label, or the `_ref`). It halts on a key that is missing or appears twice. Its `.labelOf(key)` gives the parent's stored label, for a parent whose label the platform computes.
 - `assertParents(path, keyField, fkField, rows, parentLabels)`: reads the child rows back with their `<fk>_label` and halts, naming the rows, if one names a different parent than `parentLabels[i]` (`null` for an optional relationship meant to be empty).
 - `assertJunction(path, fkA, fkB, pairs)`: for a connecting record. It reads the whole table back with both `<fk>_label` columns. It halts on an intended `[labelA, labelB]` pair that is missing or wrong, and on a stored row that was not intended.
-- `assertStatesAgree(name, parents, rules)`: before the first write, for a parent table and a child table that both carry `workflow_state`.
-  - Each entry is `[parent label, parent state, child states]`; a parent keyed on `_ref` is named by its `_ref`.
-  - `rules` maps a parent state to the child states it allows (`only`, `[]` for no child rows) and the child states it needs one of (`needs`).
+- `assertStatesAgree(name, parents, rules)`: for a parent table and a child table that both carry `workflow_state`, called at the top of the script, right after the plan and before the first write; called after a write, it halts.
+  - `name` is `"<parent table>.<child table>"`, such as `"applications.offers"`.
+  - Each entry of `parents` is `[parent key, parent state, child states]`: the parent's label, or its `_ref` when it is keyed on one, then the states of its child rows, taken from the same plan the child rows are built from.
+  - `rules` maps a parent state to its rule. `only` lists the child states allowed, one string each (`only: ["draft", "sent"]`): `only: []` allows no child rows, and a parent with no child rows passes every `only`. `needs` lists the child states of which the parent needs at least one child (`needs: ["accepted"]`).
   - It halts, naming the parents, when a parent's state and its children's states disagree, or when a rule names a state no parent has.
+  - It is required for every pair of a parent and a child table that both carry `workflow_state` and that the seed fills: a seed without it halts at the end of the check pass, naming the pair.
+  - Then the rows are held to the plan. The first insert of the script checks that both tables exist and carry `workflow_state`, and that the child has one relationship field to the parent. Before the child rows are sent, their own parents and states are compared with the plan and with the rules. A check whose child table is never seeded halts at the end of the pass. A plan written apart from the rows therefore cannot pass for them.
 - `assertStamped(path, keyField, rows, columns, states)`: for an entity with an approval gate, at the end of the script. It proves, by reading the rows back, that the entity's rules kept the stamps the rows sent.
 - `assertComputedVary(path, keyField, rows, columns)`: reads `computed` and `rollup` columns back for the seeded rows and halts when a column holds one value on every row. A `$user_id`, `$now` or `$today` stamp that holds this run's user, time or date on every row is constant by design: it is left out with a printed line, not a halt.
 - `assertItemized(column, parents)`: before the first write. Each entry is `[parent label, figure, number of child rows]`, as in `assertItemized("subscriptions.seats_purchased", plan.map((p) => [p.name, p.seats_purchased, p.seats.length]))`. It halts, naming the parents, when a figure is below its child count or above twice it.
@@ -150,7 +155,7 @@ Never add a field to the schema to key or ease a seed.
 
 ## Rows that read as records
 
-- Decide where each chain of records stands first: the state each parent ends in, and the states of its children that agree with it. An application at `hired` has an `accepted` offer; an application at `applied` has no offer. The plan holds each parent with its children and their states. When a parent table and a child table both carry `workflow_state`, check the plan with `assertStatesAgree` before the first write, with a rule for each parent state that limits its children:
+- Decide where each chain of records stands first: the state each parent ends in, and the states of its children that agree with it. An application at `hired` has an `accepted` offer; an application at `applied` has no offer. The plan holds each parent with its children and their states. When a parent table and a child table both carry `workflow_state`, check the plan with `assertStatesAgree` at the top of the script, before the first write, with a rule for each parent state that limits its children, and take its child states from the plan the child rows come from:
 
   ```typescript
   assertStatesAgree("applications.offers", plan.map((a) => [a.name, a.state, a.offers.map((o) => o.state)]), {
@@ -175,7 +180,7 @@ Never add a field to the schema to key or ease a seed.
 - Nothing a person reads is a base plus an index (`100 + i`, `Slack 0`, `days(-7 * i)`). Write it or draw it (`r.int`, `r.pick`). An index belongs only in a code-like unique field the model already has, through `uniq("INV-", i)`.
 - Names, cities and companies vary. `assertSeedDistinct(table, rows, [columns])` fails when a column that should vary does not; use `r.tuples` for names built from two pools.
 - Real company and product names are fine.
-  - Every email address is at a subdomain of `example.com`, which never receives mail. Build it with `exampleDomain(company)` (`support@adobe.example.com`), never with the company's real domain; the insert refuses any other address, in any text column.
+  - Every email address is at a subdomain of `example.com`, which never receives mail. Build it with `exampleDomain(company)` (`support@adobe.example.com`), never with the company's real domain and never at `example.com` itself; the insert refuses any other address, in any text column. A person's address takes the company they work for, or any made-up one when the record names none: `` `ana.silva@${exampleDomain("Globex")}` `` → `ana.silva@globex.example.com`, never `ana.silva@example.com`.
   - A US phone uses `555-0100` to `555-0199` behind the area code; a phone in any other country stays empty.
 
 ## Computed and rollup columns

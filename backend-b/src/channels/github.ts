@@ -111,6 +111,7 @@ async function githubAgentSeed(): Promise<{ initialData?: Record<string, unknown
         baseImage: bundle.baseImage,
         instructions: bundle.instructions,
         ...(Array.isArray(bundle.models) ? { modelId: bundle.models[0] } : {}),
+        ...(bundle.disableTaskList === true ? { disableTaskList: true } : {}),
       },
     };
   } catch {

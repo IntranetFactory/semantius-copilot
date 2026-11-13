@@ -2,6 +2,89 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## Gates and roles are written from the module's access record
+
+2026-11-12. Asked for by Martin Amm, after a recruiting module came out with only its viewer, manager and admin roles: no gate on hiring, no Hiring Manager role, no Interviewer role. The 22 saved Haiku runs of the same build (task t4 in `tests/crud-tools-eval.ts`) showed why:
+- No run wrote the entity list with who takes each step, and every later step read "the confirmed list", so no gate was due anywhere and verification passed. At least 12 runs modeled a `hired` or `approved` state, and at least 15 marked an entity `operational_workflow`.
+- Of 5 runs that decided on a gate, 4 ended without the gate, its rule, `gated` or the role that takes it.
+- `module-rbac-setup.ts` warned about an `operational_workflow` in an `advanced` module in 8 runs; all 8 went on, because the run still ended `Nothing created or changed.`.
+- The final access line described the plan, not the build: 3 of 22 runs said a lifecycle had no gate.
+- The viewer, manager and admin setup the script writes was complete in 15 of 15 live runs.
+
+The decision is now data the build cannot skip, and a script writes everything else from it:
+- **The access record** (`access.json`, `rbac.md` → "Restricted steps (gates)" → "The access record") answers who does what, the questions the leading products answer: who does the everyday work (`everyday`), every other kind of person who uses the module (`roles`: `seesOnlyNamed`; for a role that does part of the work `writes`, `limitedTo`, `hidden`, `leaves`), and, for each entity with a `workflow_state`, the person who moves a record into each state. A state another person moves records into is a gate for that person's role: the script applies rbac.md's test, so the record never asks "is this a gate?", the question the measured runs answered "no" by default. A gate's verb comes from its state (`hired` → `hire`) and an approval's waiting state from the enum, unless the record says them (`verb`, `after`, `waiting`, `namedPerson`, `filledLater`, `covers`); an entity can have a restricted `create`.
+- **The record cannot leave a decision open.** A state where the role usually changes (`approved`, `signed`, `issued`, `released`, `posted`, `committed`, `hired`, `void`, `terminated`, `paid`, `reimbursed`, `disbursed`, `verified`) given to the everyday person needs a `because`. Every user field that names a person is a gate's named person, a role's `limitedTo` field, or an entry of `userFields` (with a `because` when it names someone other than the everyday person). A lifecycle named `status`, `state`, `stage` or `<singular>_status` / `_state` / `_stage` is refused: it is `workflow_state`. In the runs, the escapes were every state given to the manager, and lifecycles named `status`.
+- **`writeModel(dir, { entities, fields, access })`** refuses a `workflow_state` the record does not cover, and every problem of the record, and writes `access.json`. `writeAccess(dir, access)` writes it for a module that has its entities. **`call-file.ts`** refuses a `workflow_state` field unless `access.json` beside its payload covers every state.
+- **`module-rbac-setup.ts --slug <slug> --access <file>`** (new `access-rules.ts`) writes what is missing or different: gate permissions, bundles, hierarchy rows, roles and grants, `access_scope`, the fields the gates need, the gate, sequence and control rules, the computed stamps, the `select_rule`s of control 7 and of a role that does part of the work, `include_hidden_rows` on the rollups those affect, and each entity's class and `edit_permission`. A generated rule is recognized by its name; any other rule is kept. Run again, it is the verification. It prints the `access line:` the final response uses. Any `warning:` in such a run ends it `Not verified: …` with exit 4; a problem in the record is exit 2 with nothing written. It refuses a `raci` module and a module with per-entity permissions.
+- `rbac.md`: the gate steps, "Roles that take gates" and "Roles that do part of the work" describe what the command writes. The complete rules are its output for their examples, with the generated names and messages (`approve_purchase_request_first`, `requester_own_ticket_comments`, `requester_leaves_ticket_fields`, the lock messages, the `purchase_request` binding). `scripts/access-rules.test.ts` compares them with the generator, read from the file.
+- `build-module.md`: step 5.4 writes the access record and no gate by hand; new step 5.8 runs `--access`; with no answer the entity list is still shown; verification runs `--access`; the final access line is the verification's. `data-modeling.md` → "Mandatory Creation Order" gains step 9; `review-module.md` applies access findings through the record; `SKILL.md` names the new parts of the three scripts.
+
+`flows.md` rows 8.7 and 8.9 say so. The file format is unchanged; `version` stays `3.1`.
+
+## Key prefixes are short abbreviations of the singular
+
+2026-11-12. Asked for by Martin Amm, after the Muse recruiting build gave each entity its whole singular as its key prefix (`job_opening_…`, `application_…`), where products such as Stripe use short abbreviations (`cus_…`).
+
+- `data-modeling.md` → "Choosing the key type": a key prefix is 2 to 6 lowercase letters, taken in order from the entity's singular and starting with its first letter (`jo` for a job opening, `cand` for a candidate). An `is_a` entity's prefix follows the same rule. A prefix that is taken is replaced by another abbreviation, without a question.
+- `call-file.ts` and `writeModel` refuse a prefix that breaks the rule, and one prefix on two entities of a payload, naming a prefix that fits. `call-file.ts` also checks the prefix of an `update_entity`, and its message for a prefix another entity has asks for another abbreviation.
+- `build-module.md` step 1 chooses the prefixes, `is_a` entities included, and reads them; step 2 no longer asks about a taken one.
+- `module-rbac-setup.ts --slug` shows each entity's key type and prefix on its `report entity` line, and warns about a prefix that breaks the rule: it is changed only on an entity the build created that has no records yet, and an `is_a` prefix never.
+- `review-module.md` leaves a live entity's prefix as it is.
+
+`flows.md` row 8.6 says so. The file format is unchanged; `version` stays `3.1`.
+
+## call-file.ts refuses what the platform would refuse one call at a time
+
+2026-11-12. Asked for by Martin Amm, after 3 Haiku builds of the recruiting request with sample data (`SEED=1` of task t4 in `tests/crud-tools-eval.ts`), run with the skill as it was:
+- every build skipped the gate test (access `advanced`, no Hiring Manager gate, no Interviewer role), as the Muse build had;
+- no seed called `assertStatesAgree`;
+- every seed halted once on a person's email at `example.com` itself;
+- one build sent a `create_field` payload a second time after filtering away the output of the first send (`23505`);
+- one sent `required: true` past `call-file.ts` (`PGRST204`).
+
+A later run took key prefixes another module already had (`23505`, `unique_current_id_prefix`).
+
+`call-file.ts` now also refuses:
+- a `create_field` row for a field that already exists on the host, with one `read_field`;
+- a key `create_field` or `create_entity` does not take, with the key to write instead (`required` → `input_type: "required"`);
+- a value outside a key's list (`width`, `format`, `input_type`, `id_type`, …);
+- `ctype`, which is derived and never sent;
+- `label_parent` on `create_entity` (90226);
+- an `id_prefix` that does not fit the `id_type` (23514), and one another entity already has (23505), with one `read_entity`.
+
+`writeModel` refuses the same keys and values. `scripts/crud-tools-drift.test.ts` checks the key lists against the live tool schemas.
+
+`seed-lib.ts`:
+- A seed that fills a parent and a child table that both carry `workflow_state` with no `assertStatesAgree` halts at the end of the check pass. The verification already asked its line for each such pair.
+- An address at `example.com` itself is answered with a person's address to write (`ana.silva@globex.example.com`), and `seed-data.md` → "Rows that read as records" shows one.
+
+The skipped gate test is the entry above, "Gates and roles are written from the module's access record". The file format is unchanged; `version` stays `3.1`.
+
+## Seed and kit helpers check their own arguments, and a state check is held to the rows sent
+
+2026-11-12. Asked for by Martin Amm, after the second Muse recruiting build:
+- Its seed check pass halted 4 times in a row on `assertStatesAgree`, with 3 failed edits and a Python attempt in between.
+  - The agent wrote `only: [[], ["completed"]]` (allowed combinations) where `only` takes child states as strings, and nothing refused the shape.
+  - The message read `completed not allowed, only , completed`, as if `completed` were allowed.
+  - Each try cost about 90 s, because the call came after the tables were read.
+  - The edits failed on old text typed from memory.
+- Its last edit widened the rules until they passed. The offers check was given a hand-made list that named 2 of the 5 offers. The run reported "16 parent(s) agree", while 3 offers contradicted their application.
+- Its builder threw on `isSet(v("rejection_reason"))`, in a message that named `v`, not `isSet`.
+
+`seed-lib.ts`:
+- Every exported helper checks the shape of its arguments and halts with its signature and a right call.
+- `assertStatesAgree` refuses a rule that is not a list of states and gives the rule to write instead (`write only: ["completed", "scheduled"]`). Its messages quote every state.
+- `assertStatesAgree` and `assertItemized` halt when called after the pass's first write.
+- Inside `runSeed`, `assertStatesAgree` is held to the rows. The first insert checks that both tables exist and carry `workflow_state`, and that the child relates to the parent. The child insert compares the rows actually sent, their parents and their states, with the plan and the rules. A check whose child table is never seeded halts at the end of the pass.
+- A halt prints the failing call as the file holds it now. Its hint names the agent's own edit tool, with `edit-file.ts` when there is none. It says to copy the old text from those lines, never to use Python, and never to widen a rule until it passes.
+
+`jsonlogic-kit.ts`:
+- The helpers that take a field name check it and name their own call: `isSet(field, format): field is {"var":"rejection_reason"}, not a field name; the helper builds the v() itself`.
+- `isSet` refuses a missing or unknown format, which used to compare with `""` and pass an empty date. It also refuses a boolean.
+- `data-modeling.md` → "Mandatory Creation Order" lists every function of the kit with its parameters, because `SKILL.md` says not to read the kit. A test fails when an export is missing from that table.
+
+`seed-data.md` → "Run", "The functions" and "Rows that read as records" describe the above, and the jsonlogic-kit row of `SKILL.md` points to the table. The file format is unchanged; `version` stays `3.1`.
+
 ## The label field gets its title from create_entity
 
 2026-11-12. Asked for by Martin Amm, once CR 2 (`C:\dev\semantius\plans\CR-2-label-field-title.md`) shipped. `create_entity` now titles the label field, so a build no longer renames it with one `update_field` per entity. That step cost the Muse recruiting build a probe and left three label fields titled "Name". `bun tests/platform-probes.ts cr2` confirmed the behavior on `tests`:

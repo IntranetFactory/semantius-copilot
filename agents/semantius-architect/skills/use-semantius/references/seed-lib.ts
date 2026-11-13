@@ -37,7 +37,9 @@
  *            readRows, seedUser, rng, days, at, uniq, slugify, exampleDomain, patchById, clearSeeded, runSeed } from "./seed-lib";
  */
 
+import { readFileSync } from "node:fs";
 import { relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Row = Record<string, unknown>;
 
@@ -69,6 +71,7 @@ const say = (line: string): void => { if (!quiet) console.log(line); };
 const SELF_PATH = String((import.meta as { path?: string }).path ?? "seed-lib.ts");
 const SELF = SELF_PATH.replace(/\\/g, "/").toLowerCase();
 let lastSite = "";
+let lastFrame: { path: string; line: number } | undefined;
 
 /** This file's path as the user runs it from the repo root (`.tmp_deploy/seed-lib.ts`). */
 const libPath = (): string => {
@@ -76,22 +79,48 @@ const libPath = (): string => {
   return rel && !rel.startsWith("..") ? rel : SELF_PATH.replace(/\\/g, "/");
 };
 
-/** The first frame of `stack` outside this file, as `<file>:<line>`; "" when there is none. */
-function scriptFrame(stack: string): string {
+/** The first frame of `stack` outside this file: the script file and line. */
+function scriptFrameOf(stack: string): { path: string; line: number } | undefined {
   for (const line of stack.split("\n").slice(1)) {
     const m = line.match(/((?:[A-Za-z]:)?[^\s()]+\.(?:ts|js|mjs|tsx)):(\d+)(?::\d+)?/);
     if (!m) continue;
     const file = m[1].replace(/\\/g, "/");
     const lower = file.toLowerCase();
     if (lower === SELF || lower.endsWith("/seed-lib.ts")) continue;
-    return `${file.split("/").pop()}:${m[2]}`;
+    return { path: m[1].startsWith("file:") ? fileURLToPath(m[1]) : m[1], line: Number(m[2]) };
   }
-  return "";
+  return undefined;
 }
 
-/** Remembers the script line that called the current helper, so a halt names it. */
+/** The first frame of `stack` outside this file, as `<file>:<line>`; "" when there is none. */
+function scriptFrame(stack: string): string {
+  const f = scriptFrameOf(stack);
+  return f ? `${f.path.replace(/\\/g, "/").split("/").pop()}:${f.line}` : "";
+}
+
+/** Remembers the script line that called the current helper, so a halt names it and shows it. */
 function site(): void {
-  lastSite = scriptFrame(new Error().stack ?? "") || lastSite;
+  const f = scriptFrameOf(new Error().stack ?? "");
+  if (f) { lastFrame = f; lastSite = `${f.path.replace(/\\/g, "/").split("/").pop()}:${f.line}`; }
+}
+
+/**
+ * The statement at `frame` as the file holds it now, numbered: from its line until its brackets close (at most 30
+ * lines), so an edit copies its old text from the file, never from memory. "" when the file cannot be read.
+ */
+function callSource(frame: { path: string; line: number }): string {
+  let text: string;
+  try { text = readFileSync(frame.path, "utf8"); } catch { return ""; }
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  let depth = 0;
+  for (let i = frame.line - 1; i >= 0 && i < lines.length && out.length < 30; i++) {
+    out.push(`${String(i + 1).padStart(5)}  ${lines[i]}`);
+    depth += (lines[i].match(/[([{]/g) ?? []).length - (lines[i].match(/[)\]}]/g) ?? []).length;
+    if (depth <= 0) break;
+  }
+  if (depth > 0 && out.length === 30) out.push("    …");
+  return out.join("\n");
 }
 
 const passPlan = new Map<string, string[]>();   // check pass: table → what each insert planned
@@ -141,7 +170,8 @@ const streams = new Set<() => void>();              // every rng(), restarted at
 
 function resetPass(): void {
   dryRows.clear(); dryDeleted.clear(); dryWarned.clear(); dryId = 0;
-  writeCount = 0; clearStarted = false; rowsInserted = false; lastSite = "";
+  writeCount = 0; clearStarted = false; rowsInserted = false; lastSite = ""; lastFrame = undefined;
+  stateChecks.length = 0; seededStates.clear();
   for (const restart of streams) restart();
 }
 
@@ -237,6 +267,26 @@ const tableOf = (path: string): string => {
   const t = path.split("?")[0];
   return t.startsWith("/") ? t : `/${t}`;
 };
+
+// ─────────────────────────────── argument checks ───────────────────────────────
+// bun does not type-check a script, so every exported helper checks the shape of what it was given and names its
+// signature and a right call; a wrong call then halts with what to write, not with a misleading later failure.
+
+const isPath = (p: unknown): boolean => typeof p === "string" && p.replace(/^\//, "") !== "";
+const isRows = (rows: unknown): boolean => Array.isArray(rows) && rows.every((r) => !!r && typeof r === "object" && !Array.isArray(r));
+const isStrings = (xs: unknown): boolean => Array.isArray(xs) && xs.every((x) => typeof x === "string" && x !== "");
+const isCount = (n: unknown): boolean => typeof n === "number" && Number.isFinite(n);
+const show = (v: unknown): string => (JSON.stringify(v) ?? String(v)).slice(0, 80);
+
+/** Throws `<signature>: <every problem>. A right call: <example>` when a check fails. */
+function checkArgs(signature: string, example: string, checks: ReadonlyArray<readonly [ok: boolean, problem: string]>): void {
+  const bad = checks.filter(([ok]) => !ok).map(([, problem]) => problem);
+  if (bad.length) throw new Error(`${signature}: ${bad.join("; ")}. A right call: ${example}`);
+}
+
+/** The entries of `list` that fail `ok`, shown with their index, for a message (at most three). */
+const badEntries = (list: ReadonlyArray<unknown>, ok: (x: unknown) => boolean): string =>
+  list.map((x, i) => [x, i] as const).filter(([x]) => !ok(x)).slice(0, 3).map(([x, i]) => `[${i}] ${show(x)}`).join(", ");
 
 /** The keys of `rows` as strings (their `_ref` for `REF`); throws on an empty or repeated key. */
 function keysOf(who: string, table: string, keyField: string, rows: ReadonlyArray<Row>): string[] {
@@ -593,9 +643,14 @@ export function assertExampleEmails(table: string, rows: ReadonlyArray<Row>): vo
     }
   });
   if (bad.length) {
+    const bare = bad.some((b) => /@example\.com$/i.test(b));
     throw new Error(
       `${table}: ${bad.length} email address(es) not at a subdomain of example.com:\n  - ${bad.join("\n  - ")}\n` +
-      `Build each one with exampleDomain(company), e.g. \`support@\${exampleDomain("Adobe")}\` → support@adobe.example.com.`,
+      `Build each one with exampleDomain(company), e.g. \`support@\${exampleDomain("Adobe")}\` → support@adobe.example.com.` +
+      (bare
+        ? ` example.com itself is not enough: a person's address takes the company they work for, or any made-up one, ` +
+          `e.g. \`ana.silva@\${exampleDomain("Globex")}\` → ana.silva@globex.example.com.`
+        : ""),
     );
   }
 }
@@ -842,12 +897,21 @@ async function sendRows(table: string, rows: ReadonlyArray<Row>, size = BATCH_SI
  */
 export async function postMany(path: string, rows: ReadonlyArray<Row>, size = BATCH_SIZE): Promise<any[]> {
   site();
-  if (!rows.length) return [];
+  checkArgs("postMany(path, rows, size?)", 'postMany("/vendors", vendorRows)', [
+    [isPath(path), `path is ${JSON.stringify(path)}; it is the table as "/<table_name>"`],
+    [isRows(rows), "rows is a list of row objects"],
+    [Number.isInteger(size) && size > 0, `size is ${JSON.stringify(size)}; leave it out, or give a whole number above 0`],
+  ]);
   const table = tableOf(path);
+  if (!rows.length) { await compareStates(table, []); return []; }
   assertShape("postMany", table, rows);
   await checkRows("postMany", table, rows, rows.map((_, i) => `row ${i}`));
+  await settleStateTables();
+  await compareStates(table, rows);
   samePlanAsCheck(table, `post ${rows.length}`);
-  return sendRows(table, rows, size);
+  const out = await sendRows(table, rows, size);
+  recordStates(table, out, out.map((r) => r?.id));   // each returned row carries its own id and state
+  return out;
 }
 
 /** The key advice for `table`: its label column when the seed sends it, `_ref` when the platform computes it. */
@@ -893,13 +957,20 @@ class SeedDriftError extends Error {}
  */
 export async function seedEnsureMany(path: string, rows: ReadonlyArray<Row>, keyField: string): Promise<any[]> {
   site();
+  checkArgs("seedEnsureMany(path, rows, keyField)", 'seedEnsureMany("/vendors", vendorRows, "vendor_name")', [
+    [isPath(path), `path is ${JSON.stringify(path)}; it is the table as "/<table_name>"`],
+    [isRows(rows), "rows is a list of row objects"],
+    [typeof keyField === "string" && keyField !== "", `keyField is ${JSON.stringify(keyField)}; it is the label column, or "_ref"`],
+  ]);
   const table = tableOf(path);
-  if (!rows.length) return [];
+  if (!rows.length) { await compareStates(table, []); return []; }
   const planKeys = keysOf("seedEnsureMany", table, keyField, rows);
   if (keyField !== REF) await assertSeedOwnsKey(table, keyField);
   const send = keyField === REF ? rows.map(withoutRef) : [...rows];
   assertShape("seedEnsureMany", table, send);
   await checkRows("seedEnsureMany", table, send, planKeys);
+  await settleStateTables();
+  await compareStates(table, send);
   samePlanAsCheck(table, `ensure ${keyField}: ${planKeys.join("\u0001")}`);
   const m = await metaOf(table);
   const cols = Object.keys(send[0]).filter((c) => send[0][c] !== undefined);
@@ -949,6 +1020,7 @@ export async function seedEnsureMany(path: string, rows: ReadonlyArray<Row>, key
   }
   const still = k.keys.filter((key) => !byKey.get(key));
   if (still.length) throw new Error(`seedEnsureMany ${table}: ${still.length} row(s) neither found nor returned by the insert: ${preview(still)}`);
+  recordStates(table, send, k.keys.map((key) => byKey.get(key)?.id), k.keys);   // matched by key, never by position
   return k.keys.map((key) => (keyField === REF ? { ...byKey.get(key), [REF]: key } : byKey.get(key)));
 }
 
@@ -958,6 +1030,7 @@ export async function seedEnsureMany(path: string, rows: ReadonlyArray<Row>, key
  */
 export async function readRows(path: string): Promise<any[]> {
   site();
+  checkArgs("readRows(path)", 'readRows("/users?select=id,display_name&limit=20")', [[isPath(path), `path is ${show(path)}; it is a read path such as "/users?select=id,display_name"`]]);
   const res = await pgRequest("GET", path.startsWith("/") ? path : `/${path}`);
   return Array.isArray(res) ? res : res ? [res] : [];
 }
@@ -971,6 +1044,11 @@ export async function seedUser(): Promise<{ id: string | number; permissions: st
 /** Updates ONE record by id: `PATCH <table>?id=eq.<id>` with `body`. Throws unless exactly one row came back. */
 export async function patchById(table: string, id: string | number, body: Row): Promise<any> {
   site();
+  checkArgs("patchById(table, id, body)", 'patchById("/contracts", contractId("Figma Organization"), { notes: "Renews automatically." })', [
+    [isPath(table), `table is ${show(table)}; it is the table as "/<table_name>"`],
+    [(typeof id === "string" && id !== "") || typeof id === "number", `id is ${show(id)}; it is the row's id, from idsByKey`],
+    [!!body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length > 0, "body is an object with the columns to change"],
+  ]);
   const res = await pgRequest("PATCH", `${tableOf(table)}?id=eq.${encodeURIComponent(String(id))}`, body);
   if (!Array.isArray(res) || res.length !== 1) {
     throw new Error(`patchById ${table}: expected 1 row back, got ${Array.isArray(res) ? res.length : typeof res}`);
@@ -989,6 +1067,10 @@ export async function patchById(table: string, id: string | number, body: Row): 
  */
 export async function clearSeeded(tables: ReadonlyArray<readonly [path: string, expected: number]>): Promise<void> {
   site();
+  const isTable = (x: unknown) => Array.isArray(x) && x.length === 2 && isPath(x[0]) && Number.isInteger(x[1]) && x[1] >= 0;
+  checkArgs("clearSeeded(tables)", 'clearSeeded([["/contracts", 4], ["/vendors", 3]])', [
+    [Array.isArray(tables) && tables.length > 0 && tables.every(isTable), `tables holds ${Array.isArray(tables) ? badEntries(tables, isTable) || "nothing" : show(tables)}; each entry is ["/<table_name>", the rows it holds], children first`],
+  ]);
   clearStarted = true;
   const ids = new Map<string, Array<string | number>>();
   const wrong: string[] = [];
@@ -1033,6 +1115,11 @@ export async function idsByKey(
   path: string, keyField: string, rows: ReadonlyArray<Row>,
 ): Promise<((key: string) => string | number) & { labelOf: (key: string) => string }> {
   site();
+  checkArgs("idsByKey(path, keyField, rows)", 'idsByKey("/vendors", "vendor_name", vendorRows)', [
+    [isPath(path), `path is ${show(path)}; it is the table as "/<table_name>"`],
+    [typeof keyField === "string" && keyField !== "", `keyField is ${show(keyField)}; it is the key the rows were seeded with (the label column, or "_ref")`],
+    [isRows(rows), "rows is the list of planned rows seeded into that table"],
+  ]);
   const table = tableOf(path);
   const k = await keyer("idsByKey", table, keyField, rows, ["id", "_label"]);
   const found = await readKeyed(k, table);
@@ -1064,6 +1151,15 @@ export async function assertParents(
   rows: ReadonlyArray<Row>, parentLabels: ReadonlyArray<string | null>,
 ): Promise<void> {
   site();
+  checkArgs("assertParents(path, keyField, fkField, rows, parentLabels)",
+    'assertParents("/contracts", "contract_name", "vendor_id", contractRows, plan.map((p) => p.vendor))', [
+    [isPath(path), `path is ${show(path)}; it is the child table as "/<table_name>"`],
+    [typeof keyField === "string" && keyField !== "", `keyField is ${show(keyField)}; it is the child's key (its label column, or "_ref")`],
+    [typeof fkField === "string" && fkField !== "", `fkField is ${show(fkField)}; it is the child's relationship field, such as "vendor_id"`],
+    [isRows(rows), "rows is the list of planned child rows"],
+    [Array.isArray(parentLabels) && parentLabels.every((l) => l === null || typeof l === "string"),
+      `parentLabels holds ${Array.isArray(parentLabels) ? badEntries(parentLabels, (l) => l === null || typeof l === "string") : show(parentLabels)}; each entry is the intended parent's label (from the plan, or idsByKey(…).labelOf(key) when the platform computes it), or null for an empty relationship, never an id`],
+  ]);
   const table = tableOf(path);
   if (rows.length !== parentLabels.length) {
     throw new Error(`assertParents ${table}.${fkField}: ${rows.length} row(s) but ${parentLabels.length} intended parent label(s)`);
@@ -1106,6 +1202,12 @@ export async function assertJunction(
   path: string, fkA: string, fkB: string, pairs: ReadonlyArray<readonly [string, string]>,
 ): Promise<void> {
   site();
+  const isPair = (x: unknown) => Array.isArray(x) && x.length === 2 && x.every((v) => typeof v === "string");
+  checkArgs("assertJunction(path, fkA, fkB, pairs)", 'assertJunction("/seats", "application_id", "user_id", [["Slack", "Maria Lopez"]])', [
+    [isPath(path), `path is ${show(path)}; it is the connecting record's table as "/<table_name>"`],
+    [typeof fkA === "string" && fkA !== "" && typeof fkB === "string" && fkB !== "", "fkA and fkB are its two parent fields"],
+    [Array.isArray(pairs) && pairs.every(isPair), `pairs holds ${Array.isArray(pairs) ? badEntries(pairs, isPair) : show(pairs)}; each pair is [label of A, label of B]`],
+  ]);
   const table = tableOf(path);
   pairs.forEach(([a, b], i) => { if (!a || !b) throw new Error(`assertJunction ${table}: pair ${i} has an empty label`); });
   if (isCheckRun()) {
@@ -1150,6 +1252,10 @@ export async function assertJunction(
  *                            throws when the pools cannot give n combinations
  */
 export function rng(stream: string, seed = 42) {
+  checkArgs("rng(stream, seed?)", 'rng("contracts")', [
+    [typeof stream === "string" && stream !== "", `stream is ${show(stream)}; it names the table the values are for`],
+    [Number.isInteger(seed), `seed is ${show(seed)}; leave it out`],
+  ]);
   let s = 0;
   const restart = (): void => {
     s = seed >>> 0;
@@ -1247,7 +1353,10 @@ export const exampleDomain = (companyName: string): string => `${slugify(company
 export const uniq = (base: string, i: number, suffix = ""): string => `${base}${i}${suffix}`;
 
 /** A date `d` days from today (negative for the past) as `YYYY-MM-DD`: `days(-30)`, `days(rng.int(60, 400))`. */
-export const days = (d: number): string => new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
+export const days = (d: number): string => {
+  checkArgs("days(n)", "days(-30)", [[isCount(d), `n is ${show(d)}; it is a number of days from today`]]);
+  return new Date(Date.now() + d * 864e5).toISOString().slice(0, 10);
+};
 
 /** A date-time `d` days from today at `hhmm` UTC: `at(-3, "09:30")` → "2026-11-09T09:30:00Z". Built from the day, never the clock, so both passes plan the same rows. */
 export const at = (d: number, hhmm = "09:00"): string => {
@@ -1269,6 +1378,12 @@ class SeedPlanError extends Error {}
  */
 export function assertItemized(column: string, parents: ReadonlyArray<readonly [label: string, figure: number, children: number]>): void {
   site();
+  const isEntry = (x: unknown) => Array.isArray(x) && x.length === 3 && typeof x[0] === "string" && isCount(x[1]) && isCount(x[2]);
+  checkArgs("assertItemized(column, parents)", 'assertItemized("subscriptions.seats_purchased", plan.map((p) => [p.name, p.seats_purchased, p.seats.length]))', [
+    [typeof column === "string" && column !== "", `column is ${show(column)}; it is "<table>.<figure column>"`],
+    [Array.isArray(parents) && parents.every(isEntry), `parents holds ${Array.isArray(parents) ? badEntries(parents, isEntry) : show(parents)}; each entry is [parent label, figure, number of child rows]`],
+  ]);
+  beforeFirstWrite(`assertItemized ${column}`);
   if (!parents.length) throw new Error(`assertItemized ${column}: no parents given`);
   const wrong = parents
     .filter(([, figure, children]) => !(figure >= children && figure <= children * 2))
@@ -1282,24 +1397,123 @@ export function assertItemized(column: string, parents: ReadonlyArray<readonly [
   say(`  ${tag()}✓ ${column}: ${parents.length} parent(s) at the scale of their child rows`);
 }
 
+type StateRules = Readonly<Record<string, { only?: ReadonlyArray<string>; needs?: ReadonlyArray<string> }>>;
+
+/** A state check of this pass: its plan, and the relationship field of its child once the tables are read. */
+type StateCheck = {
+  name: string; parent: string; child: string; rules: StateRules;
+  plan: Map<string, { state: string; children: string[] }>;
+  fk?: string; compared: boolean;
+};
+const stateChecks: StateCheck[] = [];
+/** `table` (no slash) → row id → the row's key (label or `_ref`, when seeded with one) and its workflow_state. */
+const seededStates = new Map<string, Map<string, { key?: string; state: string }>>();
+
+const quoted = (xs: ReadonlyArray<unknown>): string => xs.map((x) => JSON.stringify(x)).join(", ");
+const STATE_RULE_SHAPE =
+  'A rule is { only: [...], needs: [...] }, each a list of child states written as strings: only: ["draft", "sent"] allows ' +
+  'child rows in those states, only: [] allows no child rows, and needs: ["accepted"] asks for at least one child in one of ' +
+  "them. A parent with no child rows passes every only.";
+
+/** What is wrong with the arguments of `assertStatesAgree`, each with the call that would be right. */
+function stateArgProblems(name: unknown, parents: unknown, rules: unknown): string[] {
+  const out: string[] = [];
+  if (typeof name !== "string" || !/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(name)) {
+    out.push(`the name ${JSON.stringify(name)} is "<parent table>.<child table>", e.g. "applications.offers"`);
+  }
+  if (!Array.isArray(parents)) {
+    out.push(`parents is a list of [label, state, child states] entries, e.g. [["Ana Silva", "hired", ["accepted"]]]`);
+  } else {
+    parents.forEach((p, i) => {
+      const ok = Array.isArray(p) && p.length === 3 && typeof p[0] === "string" && typeof p[1] === "string" &&
+        Array.isArray(p[2]) && p[2].every((s: unknown) => typeof s === "string");
+      if (!ok && out.length < 6) {
+        out.push(`parents[${i}] is ${JSON.stringify(p)?.slice(0, 80)}; an entry is [label, state, child states], e.g. ["Ana Silva", "hired", ["accepted"]]`);
+      }
+    });
+  }
+  if (!rules || typeof rules !== "object" || Array.isArray(rules)) {
+    out.push(`rules maps each parent state to its rule, e.g. { applied: { only: [] }, hired: { needs: ["accepted"] } }`);
+    return out;
+  }
+  for (const [state, rule] of Object.entries(rules as Record<string, unknown>)) {
+    if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+      out.push(`rules.${state} is ${JSON.stringify(rule)}; a rule is an object such as { only: ["draft", "sent"] }`);
+      continue;
+    }
+    for (const [key, list] of Object.entries(rule as Record<string, unknown>)) {
+      if (key !== "only" && key !== "needs") { out.push(`rules.${state} has "${key}"; a rule takes only "only" and "needs"`); continue; }
+      if (!Array.isArray(list)) { out.push(`rules.${state}.${key} is ${JSON.stringify(list)}; write it as a list of states, e.g. ${key}: ["sent"]`); continue; }
+      const bad = list.filter((s) => typeof s !== "string");
+      if (bad.length) {
+        const flat = [...new Set((list as unknown[]).flat(Infinity).filter((s): s is string => typeof s === "string"))];
+        out.push(`rules.${state}.${key} holds ${quoted(bad)}, which are not states; ${key} lists child states, one string each: write ${key}: [${quoted(flat)}]`);
+      }
+    }
+  }
+  return out;
+}
+
+/** The problems of one parent whose state is `state` and whose child rows are in `children`. */
+function agreementProblems(who: string, state: string, children: ReadonlyArray<string>, rules: StateRules): string[] {
+  const rule = rules[state];
+  if (!rule) return [];
+  const out: string[] = [];
+  const outside = rule.only ? [...new Set(children.filter((c) => !rule.only!.includes(c)))] : [];
+  if (outside.length) {
+    out.push(`${who} (${JSON.stringify(state)}): child state ${quoted(outside)} not allowed; ${rule.only!.length ? `allowed: ${quoted(rule.only!)}` : "no child rows allowed"}`);
+  }
+  if (rule.needs && !children.some((c) => rule.needs!.includes(c))) {
+    out.push(`${who} (${JSON.stringify(state)}): needs a child in ${rule.needs.map((s) => JSON.stringify(s)).join(" or ")}, has ${children.length ? quoted(children) : "none"}`);
+  }
+  return out;
+}
+
+/** A plan check (it reads nothing) belongs before the first write of the pass, so a mistake in the plan halts at once. */
+function beforeFirstWrite(who: string): void {
+  if (mode && writeCount > 0) {
+    throw new Error(
+      `${who}: called after ${writeCount} write call(s) of this pass. Call it before the first write, right after the plan at ` +
+      `the top of runSeed's body: it reads nothing, so there a mistake in the plan halts at once instead of after the tables are read.`,
+    );
+  }
+}
+
 /**
  * Lifecycle guard, before the first write: a parent's state and the states of its child rows tell one story (a
- * hired application has an accepted offer; an application still at applied has no offer). Each entry is the
- * parent's label, its state and its child rows' states; `rules` maps a parent state to the child states it allows
- * (`only`, empty for no child rows) and the child states it needs at least one of (`needs`):
+ * hired application has an accepted offer; an application still at applied has no offer). `name` is
+ * "<parent table>.<child table>", for two tables that both carry `workflow_state`. Each entry is the parent's key
+ * (its label, or its `_ref`), its state and its child rows' states; `rules` maps a parent state to the child states
+ * it allows (`only`, a list of strings; `[]` for no child rows) and the child states it needs at least one of (`needs`):
  *   assertStatesAgree("applications.offers", plan.map((a) => [a.name, a.state, a.offers.map((o) => o.state)]), {
  *     applied: { only: [] },
  *     hired: { needs: ["accepted"], only: ["accepted"] },
  *   });
  * A parent state the rules do not name allows any children; a rule whose state no parent has halts (a typo, or a
- * state the plan never deals). Throws naming every parent that disagrees. It reads nothing.
+ * state the plan never deals). Throws naming every parent that disagrees, and on arguments of the wrong shape with the
+ * call that would be right. It reads nothing. Inside `runSeed` it also registers the check: the first insert of the pass
+ * checks both tables, and the insert of the child table compares the rows actually sent with this plan and these rules.
  */
 export function assertStatesAgree(
   name: string,
   parents: ReadonlyArray<readonly [label: string, state: string, childStates: ReadonlyArray<string>]>,
-  rules: Readonly<Record<string, { only?: ReadonlyArray<string>; needs?: ReadonlyArray<string> }>>,
+  rules: StateRules,
 ): void {
   site();
+  // Everything knowable now goes in one halt: the shape, a late call, and (once the module's tables are read) the tables.
+  const shape = stateArgProblems(name, parents, rules);
+  const problems = [...shape];
+  if (mode && writeCount > 0) {
+    problems.push(`it is called after ${writeCount} write call(s) of this pass. Call it before the first write, right after the plan at the top of runSeed's body: it reads nothing, so there a mistake in the plan halts at once instead of after the tables are read`);
+  }
+  if (typeof name === "string" && name.includes(".")) {
+    const [parent, child] = name.split(".");
+    const pm = metaCache.get(`/${parent}`), cm = metaCache.get(`/${child}`);
+    if (pm && cm) problems.push(...stateTableProblems(parent, child, pm, cm).problems);
+  }
+  if (problems.length) {
+    throw new Error(`assertStatesAgree ${String(name)}: ${problems.length} problem(s):\n  - ${problems.join("\n  - ")}${shape.length ? `\n${STATE_RULE_SHAPE}` : ""}`);
+  }
   if (!parents.length) throw new Error(`assertStatesAgree ${name}: no parents given`);
   if (!Object.keys(rules).length) throw new Error(`assertStatesAgree ${name}: no rules given; name each parent state that limits its children`);
   const emptyNeeds = Object.keys(rules).filter((s) => rules[s].needs?.length === 0);
@@ -1307,25 +1521,160 @@ export function assertStatesAgree(
   const states = new Set(parents.map(([, state]) => state));
   const unused = Object.keys(rules).filter((s) => !states.has(s));
   if (unused.length) throw new Error(`assertStatesAgree ${name}: no parent is in state ${unused.join(", ")}; fix the state name, give a parent that state in the plan, or drop that rule`);
-  const wrong: string[] = [];
-  for (const [label, state, children] of parents) {
-    const rule = rules[state];
-    if (!rule) continue;
-    const outside = rule.only ? [...new Set(children.filter((c) => !rule.only!.includes(c)))] : [];
-    if (outside.length) {
-      wrong.push(`${label} (${state}): ${outside.join(", ")} not allowed, ${rule.only!.length ? `only ${rule.only!.join(", ")}` : "no child rows"}`);
-    }
-    if (rule.needs && !children.some((c) => rule.needs!.includes(c))) {
-      wrong.push(`${label} (${state}): needs a child in ${rule.needs.join(" or ")}, has ${children.length ? children.join(", ") : "none"}`);
-    }
-  }
+  const twice = [...new Set(parents.map(([label]) => label).filter((l, i, all) => all.indexOf(l) !== i))];
+  if (twice.length) throw new Error(`assertStatesAgree ${name}: ${quoted(twice)} appear more than once among the parents; list each parent once, with all its child states`);
+  const wrong = parents.flatMap(([label, state, children]) => agreementProblems(JSON.stringify(label), state, children, rules));
   if (wrong.length) {
     throw new Error(
       `SEED LIFECYCLE FAILURE, ${name}: ${wrong.length} problem(s):\n  - ${wrong.join("\n  - ")}\n` +
-      `Set each parent's state and its children's states together in the plan.`,
+      `Set each parent's state and its children's states together in the plan. Fix the plan's rows, or the shape of a rule; ` +
+      `never widen a rule until it passes: that leaves the contradiction in the data.`,
     );
   }
+  if (mode) {
+    const [parent, child] = name.split(".");
+    stateChecks.push({
+      name, parent, child, rules, compared: false,
+      plan: new Map(parents.map(([label, state, children]) => [label, { state, children: [...children].sort() }])),
+    });
+  }
   say(`  ${tag()}✓ ${name}: ${parents.length} parent(s) agree with their children`);
+}
+
+/** The `workflow_state` default of `table`, for a row that does not send one. */
+const defaultState = (table: string): string => String(metaCache.get(`/${table}`)?.fields.get("workflow_state")?.default_value ?? "");
+
+/** What is wrong with the two tables of a state check: both carry workflow_state, and the child has one relationship field to the parent. */
+function stateTableProblems(parent: string, child: string, pm: TableMeta, cm: TableMeta): { problems: string[]; fk?: string } {
+  const problems: string[] = [];
+  for (const [t, m] of [[parent, pm], [child, cm]] as const) {
+    const F = fieldsOf(m);
+    if (!F.has("workflow_state")) {
+      const enums = [...F.values()].filter((f) => f.format === "enum").map((f) => f.field_name);
+      problems.push(
+        `${t} has no workflow_state${enums.length ? ` (its states are in ${enums.join(", ")})` : ""}. ` +
+        `The check pairs a parent and a child table that both carry workflow_state, so remove this check`,
+      );
+    }
+  }
+  const fks = [...fieldsOf(cm).values()].filter((f) => ["reference", "parent"].includes(f.format) && f.reference_table === parent).map((f) => f.field_name);
+  if (fks.length !== 1) {
+    problems.push(`${child} has ${fks.length ? `${fks.length} relationship fields to ${parent} (${fks.join(", ")}), so the check cannot tell which one counts` : `no relationship field to ${parent}`}`);
+  }
+  return { problems, fk: fks.length === 1 ? fks[0] : undefined };
+}
+
+/** At an insert: both tables of every state check exist and carry workflow_state, and the child relates to the parent. */
+async function settleStateTables(): Promise<void> {
+  for (const c of stateChecks) {
+    if (c.fk) continue;
+    const meta = async (t: string) => {
+      try { return await metaOf(`/${t}`); } catch {
+        throw new Error(`assertStatesAgree ${c.name}: ${t} is not an entity on this host; the name is "<parent table>.<child table>"`);
+      }
+    };
+    const { problems, fk } = stateTableProblems(c.parent, c.child, await meta(c.parent), await meta(c.child));
+    if (problems.length) throw new Error(`assertStatesAgree ${c.name}: ${problems.join("; ")}.`);
+    c.fk = fk;
+  }
+}
+
+/** After an insert: the key and workflow_state of each row, so a later child insert can be compared with its parents. */
+function recordStates(table: string, rows: ReadonlyArray<Row>, ids: ReadonlyArray<unknown>, keys?: ReadonlyArray<string>): void {
+  const name = table.slice(1);
+  if (!metaCache.get(table)?.fields.has("workflow_state")) return;
+  const byId = seededStates.get(name) ?? new Map();
+  rows.forEach((r, i) => {
+    if (ids[i] === undefined || ids[i] === null) return;
+    byId.set(String(ids[i]), { key: keys?.[i], state: String(r.workflow_state ?? defaultState(name)) });
+  });
+  seededStates.set(name, byId);
+}
+
+/**
+ * Before the child rows of a state check are sent: their states, read from the rows themselves, against the rules and
+ * against the plan the check was given. A plan built apart from the rows (a hand-made list) cannot pass for them.
+ */
+async function compareStates(table: string, rows: ReadonlyArray<Row>): Promise<void> {
+  const checks = stateChecks.filter((c) => c.child === table.slice(1));
+  if (!checks.length) return;
+  await settleStateTables();
+  const problems: string[] = [];
+  for (const c of checks) {
+    c.compared = true;
+    const fk = c.fk!;
+    const parents = new Map(seededStates.get(c.parent) ?? []);
+    const unknown = [...new Set(rows.map((r) => r[fk]).filter((v) => v !== null && v !== undefined && !parents.has(String(v))).map(String))];
+    for (const part of chunk(unknown)) {
+      for (const r of await pgRequest("GET", `/${c.parent}?select=id,workflow_state&${inFilter("id", part)}`)) parents.set(String(r.id), { state: String(r.workflow_state) });
+    }
+    const byParent = new Map<string, string[]>();
+    for (const r of rows) {
+      if (r[fk] === null || r[fk] === undefined) continue;
+      const pid = String(r[fk]);
+      byParent.set(pid, [...(byParent.get(pid) ?? []), String(r.workflow_state ?? defaultState(c.child))]);
+    }
+    const who = (pid: string) => (parents.get(pid)?.key !== undefined ? JSON.stringify(parents.get(pid)!.key) : `${c.parent} ${pid}`);
+    // the plan against the rows: the same parents, in the same states, with the same child states
+    const seeded = [...(seededStates.get(c.parent) ?? [])];
+    const keyed = seeded.filter(([, p]) => p.key !== undefined);
+    for (const [pid, p] of keyed) {
+      const planned = c.plan.get(p.key!);
+      const sent = [...(byParent.get(pid) ?? [])].sort();
+      if (!planned) { problems.push(`${who(pid)} (${JSON.stringify(p.state)}) was seeded, but the check's plan does not list it`); continue; }
+      if (planned.state !== p.state) problems.push(`${who(pid)}: the plan says ${JSON.stringify(planned.state)}, the row seeded is ${JSON.stringify(p.state)}`);
+      if (JSON.stringify(planned.children) !== JSON.stringify(sent)) {
+        problems.push(`${who(pid)}: the plan lists ${planned.children.length ? quoted(planned.children) : "no child rows"}, the rows sent to ${table} have ${sent.length ? quoted(sent) : "none"}`);
+      }
+    }
+    if (keyed.length) {
+      const seededKeys = new Set(keyed.map(([, p]) => p.key));
+      for (const key of c.plan.keys()) if (!seededKeys.has(key)) problems.push(`${JSON.stringify(key)} is in the check's plan but was not seeded into ${c.parent}`);
+    }
+    // the rules against the rows, for every parent the rows name and every parent this pass seeded
+    for (const [pid, states] of byParent) {
+      const p = parents.get(pid);
+      if (!p) problems.push(`a row names ${c.parent} id ${pid}, which is not stored`);
+      else problems.push(...agreementProblems(who(pid), p.state, states, c.rules));
+    }
+    for (const [pid, p] of seeded) if (!byParent.has(pid)) problems.push(...agreementProblems(who(pid), p.state, [], c.rules));
+  }
+  if (problems.length) {
+    throw new Error(
+      `SEED LIFECYCLE FAILURE, ${checks.map((c) => c.name).join(", ")}: ${problems.length} problem(s) in the rows about to be sent to ${table}:\n  - ` +
+      `${problems.slice(0, 15).join("\n  - ")}${problems.length > 15 ? `\n  - … +${problems.length - 15} more` : ""}\n` +
+      `Build the check's child states from the same plan the child rows come from (seed-data.md → "Rows that read as records"), ` +
+      `then fix the rows or the plan; never widen a rule until it passes.`,
+    );
+  }
+}
+
+/**
+ * At the end of a pass: a state check whose child table got no insert was never compared with the rows, and every pair
+ * the seed filled of a parent and a child table that both carry workflow_state (one relationship field between them) has
+ * its state check, as the verification asks a "✓ … agree with their children" line for each such pair.
+ */
+function stateChecksCompared(): void {
+  const problems = stateChecks.filter((c) => !c.compared).map((c) =>
+    `assertStatesAgree ${c.name}: no rows were sent to /${c.child} in this pass, so its plan was never compared with the rows; ` +
+    `seed /${c.child} in this script with seedEnsureMany or postMany, or remove the check`);
+  for (const child of seededStates.keys()) {
+    const byParent = new Map<string, number>();
+    for (const f of metaCache.get(`/${child}`)?.fields.values() ?? []) {
+      if (["reference", "parent"].includes(f.format) && f.reference_table !== child && seededStates.has(f.reference_table)) {
+        byParent.set(f.reference_table, (byParent.get(f.reference_table) ?? 0) + 1);
+      }
+    }
+    for (const [parent, n] of byParent) {
+      if (n !== 1 || stateChecks.some((c) => c.parent === parent && c.child === child)) continue;
+      problems.push(
+        `the seed fills ${parent} and ${child}, which both carry workflow_state, with no assertStatesAgree("${parent}.${child}", …): ` +
+        `decide which ${child} states agree with each ${parent} state, and add the check at the top of the script, before the first write ` +
+        `(seed-data.md → "Rows that read as records")`,
+      );
+    }
+  }
+  if (problems.length) throw new Error(problems.join("\n"));
 }
 
 /** In a check pass: the named columns exist (from the table's description; an unmanaged table is read with `limit=0`). */
@@ -1351,6 +1700,12 @@ export async function assertComputedVary(
   path: string, keyField: string, rows: ReadonlyArray<Row>, columns: ReadonlyArray<string>,
 ): Promise<void> {
   site();
+  checkArgs("assertComputedVary(path, keyField, rows, columns)", 'assertComputedVary("/vendors", "vendor_name", vendorRows, ["contract_count"])', [
+    [isPath(path), `path is ${show(path)}; it is the table as "/<table_name>"`],
+    [typeof keyField === "string" && keyField !== "", `keyField is ${show(keyField)}; it is the key the rows were seeded with`],
+    [isRows(rows), "rows is the list of planned rows (or what seedEnsureMany returned, for a _ref key)"],
+    [isStrings(columns), `columns is ${show(columns)}; it is the list of computed and rollup column names`],
+  ]);
   const table = tableOf(path);
   keysOf("assertComputedVary", table, keyField, rows);
   if (!columns.length) throw new Error(`assertComputedVary ${table}: no columns named`);
@@ -1397,6 +1752,14 @@ export async function assertStamped(
   path: string, keyField: string, rows: ReadonlyArray<Row>, columns: ReadonlyArray<string>, states: ReadonlyArray<string>,
 ): Promise<void> {
   site();
+  checkArgs("assertStamped(path, keyField, rows, columns, states)",
+    'assertStamped("/offers", "_ref", offerRows, ["approved_by_user_id", "approved_at"], ["approved", "sent", "accepted"])', [
+    [isPath(path), `path is ${show(path)}; it is the table as "/<table_name>"`],
+    [typeof keyField === "string" && keyField !== "", `keyField is ${show(keyField)}; it is the key the rows were seeded with`],
+    [isRows(rows), "rows is the list of planned rows"],
+    [isStrings(columns), `columns is ${show(columns)}; it is the list of stamp columns`],
+    [isStrings(states), `states is ${show(states)}; it is the list of states at or past the step`],
+  ]);
   const table = tableOf(path);
   keysOf("assertStamped", table, keyField, rows);
   if (!columns.length || !states.length) throw new Error(`assertStamped ${table}: name the stamp columns and the states past the step`);
@@ -1445,6 +1808,11 @@ async function stampOf(table: string, column: string, value: string): Promise<st
  */
 export function assertSeedCounts(counts: Record<string, number>, expected: Record<string, number>): void {
   site();
+  const isCounts = (o: unknown) => !!o && typeof o === "object" && !Array.isArray(o) && Object.values(o).every(isCount);
+  checkArgs("assertSeedCounts(counts, expected)", "assertSeedCounts(counts, { vendors: 3, contracts: 4 })", [
+    [isCounts(counts), `counts is ${show(counts)}; it maps each table to the rows its insert returned`],
+    [isCounts(expected), `expected is ${show(expected)}; it maps each table to the count the sample-data question named`],
+  ]);
   const fails: string[] = [];
   for (const [table, want] of Object.entries(expected)) {
     const n = counts[table] ?? 0;
@@ -1468,6 +1836,14 @@ export function assertSeedDistinct(
   table: string, rows: ReadonlyArray<Row>, fields: ReadonlyArray<string>, minDistinct = Math.min(rows.length, 8),
 ): void {
   site();
+  const absent = isRows(rows) && isStrings(fields) && rows.length ? fields.filter((f) => !rows.some((r) => f in r)) : [];
+  checkArgs("assertSeedDistinct(table, rows, fields, minDistinct?)", 'assertSeedDistinct("vendors", vendorRows, ["vendor_name"])', [
+    [typeof table === "string" && table !== "", `table is ${show(table)}; it names what is checked, such as "vendors"`],
+    [isRows(rows), "rows is a list of row objects"],
+    [isStrings(fields), `fields is ${show(fields)}; it is a list of column names`],
+    [!absent.length, `${absent.join(", ")} is on no row (a typo?)`],
+    [isCount(minDistinct), `minDistinct is ${show(minDistinct)}; leave it out, or give a number`],
+  ]);
   const fails: string[] = [];
   for (const f of fields) {
     const values = rows.map((r) => r[f]).filter((v) => v !== "" && v !== null && v !== undefined);
@@ -1478,7 +1854,12 @@ export function assertSeedDistinct(
   if (fails.length) throw new Error(`SEED DISTINCTNESS FAILURE, ${fails.length} problem(s):\n  - ${fails.join("\n  - ")}\nDeal the field from a larger pool (r.deal / r.tuples).`);
 }
 
-const FIX_HINT = 'Change only the lines named, with edit-file.ts (cli-usage.md → "Ad-hoc JSON and file work in Bun"), never by retyping the script, then run it again.';
+/** What to do after a halt the script can fix: `shown` when the halt printed the call as the file holds it now. */
+const fixHint = (shown: boolean): string =>
+  `Change only ${shown ? "these lines" : "the lines named"} with your file-edit tool, or edit-file.ts when there is none ` +
+  `(cli-usage.md → "Ad-hoc JSON and file work in Bun"), copying the old text from ${shown ? "the lines above" : "the file"}, never from ` +
+  `memory. Never Python, and never retype the script. Fix the plan's rows or the shape of a call; never widen a rule until ` +
+  `it passes: that leaves the contradiction in the data. Then run the script again.`;
 
 /**
  * Halting harness: runs the seed script's body as a check pass, then, only when that passed, as the real pass.
@@ -1494,6 +1875,7 @@ export async function runSeed(body: () => Promise<void>): Promise<void> {
     passPlan.clear(); passSeen.clear();
     mode = "check"; quiet = !checkOnly; resetPass();
     await body();
+    stateChecksCompared();
     quiet = false;
     const clearOnlyCheck = clearStarted && !rowsInserted;
     if (checkOnly) {
@@ -1505,6 +1887,7 @@ export async function runSeed(body: () => Promise<void>): Promise<void> {
     console.log(`Check pass: ${writeCount} ${clearOnlyCheck ? "delete" : "write"} call(s) checked, nothing sent. Real pass:`);
     pass = "real"; mode = "real"; resetPass(); passSeen.clear();
     await body();
+    stateChecksCompared();
     const clearOnly = clearStarted && !rowsInserted;
     console.log(clearOnly
       ? `\nClear finished: ${writeCount} delete call(s) applied with no errors. Nothing was seeded: run the seed script next.`
@@ -1512,12 +1895,15 @@ export async function runSeed(body: () => Promise<void>): Promise<void> {
   } catch (err) {
     quiet = false;
     const message = err instanceof Error ? err.message : String(err);
-    const line = (err instanceof Error && scriptFrame(err.stack ?? "")) || lastSite;   // a throw in the script names its own line
-    const where = line ? `\n  at ${line}` : "";
+    // a throw in the script names its own line; a helper's halt names the line that called it
+    const frame = (err instanceof Error && scriptFrameOf(err.stack ?? "")) || lastFrame;
+    const line = (err instanceof Error && scriptFrame(err.stack ?? "")) || lastSite;
+    const source = frame ? callSource(frame) : "";
+    const where = (line ? `\n  at ${line}` : "") + (source ? `\nThat call, as the file holds it now:\n${source}` : "");
     const clearOnly = clearStarted && !rowsInserted;
     if (pass === "check") {
       console.error(`\nSEED HALTED in the check pass, nothing was sent: ${message}${where}`);
-      console.error(clearOnly ? "Nothing was deleted. Stop and tell the user." : FIX_HINT);
+      console.error(clearOnly ? "Nothing was deleted. Stop and tell the user." : fixHint(!!source));
     } else {
       console.error(`\nSEED HALTED after ${writeCount} write call(s): ${message}${where}`);
       console.error(
@@ -1527,7 +1913,7 @@ export async function runSeed(body: () => Promise<void>): Promise<void> {
             ? writeCount
               ? "The clear is INCOMPLETE: the tables listed before the failing one are already empty. Stop and tell the user."
               : "Nothing was deleted. Stop and tell the user."
-            : `The seed is INCOMPLETE: the tables written before this call have landed, and a re-run converges on them. ${FIX_HINT}`,
+            : `The seed is INCOMPLETE: the tables written before this call have landed, and a re-run converges on them. ${fixHint(!!source)}`,
       );
     }
     process.exit(1);

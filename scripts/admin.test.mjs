@@ -1040,6 +1040,12 @@ await (async () => {
   check('web_tools accepts arbitrary object entries', webToolsOk);
   const webToolsBad = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], web_tools: ['openrouter:web_search'] }); return false; } catch (err) { return /JSON object/.test(String(err)); } })();
   check('web_tools rejects a non-object entry', webToolsBad);
+
+  // disable_task_list: a boolean or absent.
+  const taskFlagOk = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], disable_task_list: true }); return true; } catch { return false; } })();
+  check('disable_task_list accepts true', taskFlagOk);
+  const taskFlagBad = (() => { try { validateAgentConfig({ instructions: 'x', models: ['hy4'], disable_task_list: 'yes' }); return false; } catch (err) { return /must be a boolean/.test(String(err)); } })();
+  check('disable_task_list rejects a non-boolean', taskFlagBad);
 })();
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}  (${total} checks)`);

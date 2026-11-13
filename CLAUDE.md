@@ -18,6 +18,9 @@
   message. When an action is possible (saving a key, deploying), do it — don't print
   instructions for the user to run. When an input only the user can provide is missing
   (API key, credential), ask for it immediately.
+- **A question gets an answer, not a change**: when the user asks something, answer it and
+  stop. Edit files, deploy, or start any other work only when asked to. Asked for by Martin
+  Amm, 2026-11-13.
 - **Explain changes**: every commit message, changelog entry and note says why the change
   was made and who asked for it. Mark anything added without an explicit request as such.
 - **Report problems directly**: a defect goes into the turn's final message, in plain words.

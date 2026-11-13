@@ -46,6 +46,8 @@ export type AgentSeed = {
   skillCatalog?: Array<{ name: string; description: string }>;
   /** The agent's `web_tools` (OpenRouter server tools) so turn 1 already sends them. */
   webTools?: Array<Record<string, unknown>>;
+  /** The agent's `disable_task_list`, so turn 1 already runs without the task tools. */
+  disableTaskList?: boolean;
 };
 
 /** What `GET /agents/:name/meta` answers: the seed fields plus the welcome card

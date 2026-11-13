@@ -50,7 +50,7 @@ Inheritance is not a way to reuse fields:
 
 Kinds that differ by only a few fields stay one entity with a type enum even when the kind is fixed at creation.
 
-- **`is_a`, a subtype.** `activities` > `emails` > `classified_emails`, and `tasks` is_a `activities`; `persons` and `organizations` is_a `business_partners`. Every record is exactly one type, fixed when it is created: an email has an `eml_…` id, and `activities` lists it with every other activity. The base must be a managed `typeid` or `is_a` entity (`90240`). The subtype needs its own `id_prefix`. Chains may go several levels deep.
+- **`is_a`, a subtype.** `activities` > `emails` > `classified_emails`, and `tasks` is_a `activities`; `persons` and `organizations` is_a `business_partners`. Every record is exactly one type, fixed when it is created: an email has an `eml_…` id, and `activities` lists it with every other activity. The base must be a managed `typeid` or `is_a` entity (`90240`). The subtype needs its own `id_prefix`, an abbreviation of its singular like any other (`data-modeling.md` → "Choosing the key type"). Chains may go several levels deep.
 - **`has_a`, an optional extension.** `customers` and `suppliers` has_a `business_partners`: a partner has at most one customer record and at most one supplier record, and both use the partner's `bp_…` key. The base must be a managed `typeid` entity (`90240`). One level only: nothing can be based on a `has_a` entity.
 - **A platform built-in is never a base.** Reference `users` with a `reference` field instead.
 

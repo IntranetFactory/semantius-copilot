@@ -12,26 +12,49 @@
  * accept and then get wrong: an empty variable name, a permission name that is a role name, a rule code outside
  * class 99, a repeated rule code or name. `composedLabel` builds the label of a record its related records name.
  *
- * A build writes its model with `writeModel(".tmp_deploy", { entities, fields })`: it checks the entities and the
- * fields together (`modelProblems`), names every problem, and writes `entities.json` and `fields.json` only when
- * there is none.
+ * A build writes its model with `writeModel(".tmp_deploy", { entities, fields, access })`: it checks the entities,
+ * the fields and the access record together (`modelProblems`), names every problem, and writes `entities.json`,
+ * `fields.json` and `access.json` only when there is none. The access record says who moves a record into each
+ * state of each `workflow_state` (`access-rules.ts`); `module-rbac-setup.ts --access` writes the gates and roles
+ * from it once the entities exist. For a module that already has its entities, `writeAccess(dir, access)` writes
+ * `access.json` alone.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fieldProblems, iconProblems, madeFieldProblems, type EntityInfo } from "./call-file";
+import { coverageProblems, labelColumnProblems, lifecycleNameProblems, lifecyclesOf, planAccess, shapeProblems, type AccessRecord } from "./access-rules";
+import { FIELD_FORMATS as FORMATS, fieldProblems, iconProblems, keyProblems, madeFieldProblems, type EntityInfo } from "./call-file";
 
 export type Logic = unknown;
+
+const shown = (x: unknown): string => (JSON.stringify(x) ?? String(x)).slice(0, 80);
+
+/**
+ * bun does not type-check a builder script, so a helper that takes a field name checks it, and a wrong argument
+ * throws with the helper's own signature and a right call. A `v(...)` passed where a name belongs is named as such.
+ */
+function needName(signature: string, param: string, value: unknown, example: string): void {
+  if (typeof value === "string" && value !== "") return;
+  const isVar = !!value && typeof value === "object" && "var" in (value as object);
+  throw new Error(
+    `${signature}: ${param} is ${shown(value)}, not a field name` +
+    (isVar ? "; the helper builds the v() itself, so pass the name" : "") + `. A right call: ${example}`,
+  );
+}
+
 
 /** The value of a field of the record, or of `$old.<field>`, `$user_id`, `$mode`, `$now`, `$today`. */
 export function v(name: string, fallback?: unknown): Logic {
   if (typeof name !== "string" || name === "" || name.startsWith(".") || name.endsWith(".")) {
-    throw new Error(`v(${JSON.stringify(name)}): a variable needs a field name, or $old.<field>, $user_id, $mode, $now or $today`);
+    throw new Error(`v(${shown(name)}): a variable needs a field name, or $old.<field>, $user_id, $mode, $now or $today. A right call: v("workflow_state")`);
   }
   return fallback === undefined ? { var: name } : { var: [name, fallback] };
 }
 /** The stored value before this write: `$old.<field>` (null on an insert). */
-export const old = (field: string): Logic => v(`$old.${field}`);
+export const old = (field: string): Logic => {
+  needName("old(field)", "field", field, 'old("workflow_state")');
+  return v(`$old.${field}`);
+};
 export const userId: Logic = { var: "$user_id" };
 export const now: Logic = { var: "$now" };
 export const today: Logic = { var: "$today" };
@@ -45,7 +68,10 @@ export const le = (a: Logic, b: Logic): Logic => ({ "<=": [a, b] });
 export const gt = (a: Logic, b: Logic): Logic => ({ ">": [a, b] });
 export const ge = (a: Logic, b: Logic): Logic => ({ ">=": [a, b] });
 /** `value` is one of `list` (a literal array). */
-export const isIn = (value: Logic, list: ReadonlyArray<unknown>): Logic => ({ in: [value, [...list]] });
+export const isIn = (value: Logic, list: ReadonlyArray<unknown>): Logic => {
+  if (!Array.isArray(list)) throw new Error(`isIn(value, list): list is ${shown(list)}, not a list. A right call: isIn(v("workflow_state"), ["approved", "closed"])`);
+  return { in: [value, [...list]] };
+};
 export const all = (...parts: Logic[]): Logic => ({ and: parts });
 export const any = (...parts: Logic[]): Logic => ({ or: parts });
 export const not = (part: Logic): Logic => ({ "!": [part] });
@@ -70,14 +96,31 @@ export const hasPerm = (name: string): Logic => ({ has_permission: permission(na
 export const requirePerm = (name: string): Logic => ({ require_permission: permission(name, "requirePerm") });
 
 /** True when the write changes `field` (always on an insert). */
-export const changed = (field: string): Logic => ({ value_changed: field });
+export const changed = (field: string): Logic => {
+  needName("changed(field)", "field", field, 'changed("workflow_state")');
+  return { value_changed: field };
+};
 /** The move of `field` into `value`: `changedTo("workflow_state", "approved")`. */
-export const changedTo = (field: string, value: unknown): Logic => all(changed(field), eq(v(field), value));
+export const changedTo = (field: string, value: unknown): Logic => {
+  needName("changedTo(field, value)", "field", field, 'changedTo("workflow_state", "approved")');
+  return all(changed(field), eq(v(field), value));
+};
 /** Reads one row of `table` by `id` into `name` for `body`; the row is null when it is missing or the caller may not read it. */
-export const setRecord = (name: string, table: string, id: Logic, body: Logic): Logic => ({ set_record: [name, table, id, body] });
+export const setRecord = (name: string, table: string, id: Logic, body: Logic): Logic => {
+  const example = 'setRecord("order", "orders", v("order_id"), eq(v("order.workflow_state"), "shipped"))';
+  needName("setRecord(name, table, id, body)", "name", name, example);
+  needName("setRecord(name, table, id, body)", "table", table, example);
+  return { set_record: [name, table, id, body] };
+};
 
 /** The value that counts as set for a field of `format` (`data-modeling.md` → "Fields that apply only to some enum or boolean values"). */
 export function isSet(field: string, format: string): Logic {
+  const example = 'isSet("rejection_reason", "text"), isSet("sold_date", "date"), isSet("sale_price", "number")';
+  needName("isSet(field, format)", "field", field, example);
+  if (typeof format !== "string" || !FORMATS.has(format)) {
+    throw new Error(`isSet(field, format): format is ${shown(format)}, not a field format; give the field's own format, because what counts as empty depends on it. A right call: ${example}`);
+  }
+  if (format === "boolean") throw new Error(`isSet("${field}", "boolean"): a boolean cannot be told from empty, so it stays out of the validation rule (data-modeling.md → "Fields that apply only to some enum or boolean values")`);
   if (["date", "date-time", "reference"].includes(format)) return ne(v(field), null);
   if (["number", "float", "double", "integer", "int32", "int64", "rating"].includes(format)) return ne(v(field), 0);
   return ne(v(field), "");
@@ -85,6 +128,14 @@ export function isSet(field: string, format: string): Logic {
 
 /** The `input_type_rule` of a field that applies only in some states: `mode` there, hidden otherwise. */
 export function appliesIn(states: ReadonlyArray<string>, mode: "required" | "default" | "readonly", field = "workflow_state"): Logic {
+  const example = 'appliesIn(["rejected"], "required"), or appliesIn([true], "required", "is_recurring") for a boolean';
+  if (!Array.isArray(states) || states.some((x) => !(typeof x === "string" && x !== "") && typeof x !== "boolean")) {
+    throw new Error(`appliesIn(states, mode, field?): states is ${shown(states)}; it is a list of the values where the field applies. A right call: ${example}`);
+  }
+  if (!["required", "default", "readonly"].includes(mode)) {
+    throw new Error(`appliesIn(states, mode, field?): mode is ${shown(mode)}; it is "required", "default" or "readonly". A right call: ${example}`);
+  }
+  needName("appliesIn(states, mode, field?)", "field", field, example);
   if (!states.length) throw new Error("appliesIn: name the states where the field applies");
   return iff(states.length === 1 ? eq(v(field), states[0]) : isIn(v(field), states), mode, "hidden");
 }
@@ -94,6 +145,9 @@ export type ComputedField = { name: string; jsonlogic: Logic; description?: stri
 
 /** A validation rule: a class-99 code, a snake_case name, the message the caller sees, and the logic that must hold. */
 export function rule(code: string, name: string, message: string, jsonlogic: Logic, description?: string): ValidationRule {
+  if (typeof code !== "string" || typeof name !== "string" || typeof message !== "string" || jsonlogic === undefined) {
+    throw new Error(`rule(code, name, message, jsonlogic, description?): code, name and message are strings and jsonlogic is the logic that must hold. A right call: rule("99001", "rejection_reason_when_rejected", "A rejected application needs a rejection reason.", iff(eq(v("workflow_state"), "rejected"), isSet("rejection_reason", "text"), true))`);
+  }
   if (!/^99\d{3}$/.test(code)) throw new Error(`rule ${name}: the code "${code}" is not a class-99 code (99001 to 99999)`);
   if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`rule "${name}": the name is snake_case`);
   if (!message.trim()) throw new Error(`rule ${name}: the message is empty`);
@@ -102,6 +156,8 @@ export function rule(code: string, name: string, message: string, jsonlogic: Log
 
 /** A computed field: the field it fills and the logic that gives its value. */
 export function computed(name: string, jsonlogic: Logic, description?: string): ComputedField {
+  needName("computed(name, jsonlogic, description?)", "name", name, 'computed("notice_deadline", <logic>)');
+  if (jsonlogic === undefined) throw new Error(`computed("${name}", jsonlogic): jsonlogic is missing; it is the logic that gives the value`);
   if (!/^[a-z][a-z0-9_.]*$/.test(name)) throw new Error(`computed "${name}": name the field it fills`);
   return description ? { name, jsonlogic, description } : { name, jsonlogic };
 }
@@ -122,6 +178,12 @@ export type LabelPart =
  * stored label.
  */
 export function composedLabel(field: string, parts: ReadonlyArray<LabelPart>, separator = " – "): ComputedField {
+  const example = 'composedLabel("enrollment_name", [{ via: "student_id", table: "students", column: "student_name" }, { field: "start_date" }])';
+  needName("composedLabel(field, parts, separator?)", "field", field, example);
+  const badPart = Array.isArray(parts) ? parts.find((p: any) => !p || typeof p !== "object" || !("via" in p || (typeof p.field === "string" && p.field !== ""))) : parts;
+  if (!Array.isArray(parts) || badPart !== undefined) {
+    throw new Error(`composedLabel(field, parts, separator?): ${Array.isArray(parts) ? `the part ${shown(badPart)} is` : `parts is ${shown(parts)}, `} not { via, table, column } or { field, labels? }. A right call: ${example}`);
+  }
   const related = parts.filter((p): p is { via: string; table: string; column: string } => "via" in p);
   if (!related.length) throw new Error(`composedLabel ${field}: name at least one related record; a label from the record's own fields alone is a typed label`);
   const bindings = new Set<string>();
@@ -199,12 +261,16 @@ const NO_EMPTY_VALUE = new Set(["boolean", "integer", "int32", "int64", "number"
  * - a field its `input_type_rule` makes required in some states, with no validation rule of its entity that reads it
  *   (`data-modeling.md` → "Fields that apply only to some enum or boolean values");
  * - a field its `input_type_rule` shows `readonly` while no `computed_fields` rule of its entity fills it;
- * - a `computed_fields` entry that fills neither a field of the model nor the label column.
+ * - a `computed_fields` entry that fills neither a field of the model nor the label column;
+ * - a `workflow_state` whose states the access record does not cover, and every problem of the record itself.
  * A field whose entity is not in `entities` is checked by `call-file.ts` alone.
  */
-export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArray<any>): string[] {
+export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArray<any>, access?: AccessRecord): string[] {
   const byTable = new Map<string, any>(entities.filter((e) => typeof e?.table_name === "string").map((e) => [e.table_name, e]));
-  const out = [...iconProblems(entities, fields), ...madeFieldProblems(fields, byTable as Map<string, EntityInfo>), ...fieldProblems(fields, byTable as Map<string, EntityInfo>)];
+  const out = [
+    ...keyProblems("create_entity", entities), ...keyProblems("create_field", fields),
+    ...iconProblems(entities, fields), ...madeFieldProblems(fields, byTable as Map<string, EntityInfo>), ...fieldProblems(fields, byTable as Map<string, EntityInfo>),
+  ];
   const fieldsOf = new Map<string, Set<string>>();
   for (const f of fields) {
     if (!fieldsOf.has(f.table_name)) fieldsOf.set(f.table_name, new Set());
@@ -232,16 +298,42 @@ export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArra
       if (!own.has(name)) out.push(`${e.table_name}: computed_fields fills ${c?.name}, which is neither a field of this model nor the label column; add the field or fix the name.`);
     }
   }
+  out.push(...accessProblems(entities, fields, access));
   return out;
+}
+
+/** The access record checked against a new model: every lifecycle covered, and the record's own problems. */
+function accessProblems(entities: ReadonlyArray<any>, fields: ReadonlyArray<any>, access: AccessRecord | undefined): string[] {
+  const lifecycles = lifecyclesOf(fields).filter((l) => entities.some((e) => e?.table_name === l.table));
+  if (access === undefined) {
+    return [
+      ...lifecycleNameProblems(fields.filter((f) => entities.some((e) => e?.table_name === f?.table_name))),
+      ...labelColumnProblems(entities),
+      ...coverageProblems(null, lifecycles).map((p) => `${p}; pass it as access in writeModel (rbac.md, "The access record")`),
+    ];
+  }
+  const slug = String(entities.find((e) => typeof e?.view_permission === "string")?.view_permission ?? "module:read").split(":")[0];
+  return planAccess({ slug, moduleName: "", record: access, entities, fields }).problems.map((p) => `access: ${p}`);
+}
+
+/** Writes a module's access record as `access.json` in `dir`, for a module that already has its entities. */
+export function writeAccess(dir: string, access: AccessRecord): void {
+  const problems = shapeProblems(access);
+  if (problems.length) throw new Error(`writeAccess ${dir}: nothing written, ${problems.length} problem(s):\n  - ${problems.join("\n  - ")}`);
+  const path = join(dir, "access.json");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path, `${JSON.stringify(access, null, 2)}\n`);
+  console.log(`wrote ${path}; run module-rbac-setup.ts --slug <module-slug> --access ${path}`);
 }
 
 /**
  * Writes a new model's payloads into `dir` once `modelProblems` finds nothing: `entities.json` (or `entities-1.json`,
- * `entities-2.json`, … for an `is_a` / `has_a` family, one file per level, bases first) and `fields.json`, with the
- * rollups after every other field. Throws, naming every problem, and writes nothing otherwise.
+ * `entities-2.json`, … for an `is_a` / `has_a` family, one file per level, bases first), `fields.json`, with the
+ * rollups after every other field, and `access.json` when the model has an access record. Throws, naming every
+ * problem, and writes nothing otherwise.
  */
-export function writeModel(dir: string, model: { entities: ReadonlyArray<any>; fields: ReadonlyArray<any> }): void {
-  const problems = modelProblems(model.entities, model.fields);
+export function writeModel(dir: string, model: { entities: ReadonlyArray<any>; fields: ReadonlyArray<any>; access?: AccessRecord }): void {
+  const problems = modelProblems(model.entities, model.fields, model.access);
   if (problems.length) throw new Error(`writeModel ${dir}: nothing written, ${problems.length} problem(s):\n  - ${problems.join("\n  - ")}`);
   const tables = new Set(model.entities.map((e) => e.table_name));
   const level = new Map<string, number>();
@@ -265,5 +357,11 @@ export function writeModel(dir: string, model: { entities: ReadonlyArray<any>; f
   const fieldsPath = join(dir, "fields.json");
   writePayload(fieldsPath, { data: [...model.fields.filter((f) => !isRollup(f)), ...model.fields.filter(isRollup)] });
   written.push(`${fieldsPath} with create_field`);
-  console.log(`send in this order with call-file.ts: ${written.join(", then ")}`);
+  if (model.access !== undefined) {
+    const accessPath = join(dir, "access.json");
+    writeFileSync(accessPath, `${JSON.stringify(model.access, null, 2)}\n`);
+    console.log(`wrote ${accessPath}`);
+  }
+  console.log(`send in this order with call-file.ts: ${written.join(", then ")}` +
+    (model.access !== undefined ? `; then run module-rbac-setup.ts --slug <module-slug> --access ${join(dir, "access.json")}` : ""));
 }

@@ -93,6 +93,10 @@ are added to schema + `validateAgentConfig` together):
   `openrouter:web_fetch`, …), any content, ≤16 entries / ≤16 KiB. Appended verbatim to the
   request-body `tools` of every turn on an openrouter model — only when the org's copilot
   firewall is off (`copilotFirewallEnabled: false`) (README "web_tools").
+- `disable_task_list` — optional boolean. `true`: the agent's sessions get no task tools and no
+  task-tracking paragraph (§17); absent or `false` keeps both. Asked for by Martin Amm,
+  2026-11-13, as a PoC-sized switch instead of a per-tool list (which would also have to gate the
+  file-download paragraph and the skills' reliance on `read`, `AskUserQuestion` and the task tools).
 - `welcome` — optional welcome card for the chat UI (README "Welcome card"). It can live
   instead in a sibling `welcome.jsonc` whose root IS the card (schema
   `core/welcome.schema.json`), so UI copy edits never touch models/egress; defining it in
@@ -587,7 +591,8 @@ always-present Flue built-in `task` tool (subagent delegation) is unrelated; the
 so. Descriptions are condensed from Claude Code's prompts and ride every request of every agent —
 kept tight on purpose. A static instructions paragraph (`TASK_TRACKING_INSTRUCTIONS`, appended on
 every channel, literal text so the cached prefix stays byte-identical) is the usage nudge Claude
-Code delivers through periodic reminders.
+Code delivers through periodic reminders. An agent with `disable_task_list: true` (§3) gets
+neither the four tools nor the paragraph.
 
 **Storage: one index document, `/workspace/.tasks/tasks.json`** (`{version, highwatermark,
 tasks[]}`, pretty-printed). Not Claude Code's one-file-per-task layout, for a reason specific to

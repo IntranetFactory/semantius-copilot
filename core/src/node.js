@@ -4,7 +4,7 @@
  * (or jsonc-parser — agent.jsonc is only ever parsed here at build time).
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 
 import { parse as parseJsonc, printParseErrorCode } from 'jsonc-parser';
@@ -105,6 +105,9 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
   hash.update(config.models.join(',')).update('\0');
   hash.update((config.proxy_whitelist ?? []).join(',')).update('\0');
   hash.update(config.web_tools ? JSON.stringify(config.web_tools) : '').update('\0');
+  // Only when set, so an agent without the flag keeps the version it had
+  // before the key existed (no meta re-landing in its open sessions).
+  if (config.disable_task_list) hash.update('disable_task_list').update('\0');
   hash.update(config.welcome ? JSON.stringify(config.welcome) : '').update('\0');
   hash.update(options.baseImage ?? 'node').update('\0');
   for (const skillName of Object.keys(skills).sort()) {
@@ -122,6 +125,7 @@ export function createAgentBundleFromDir(agentDir, options = {}) {
     models: config.models,
     ...(config.proxy_whitelist ? { proxyWhitelist: config.proxy_whitelist } : {}),
     ...(config.web_tools ? { webTools: config.web_tools } : {}),
+    ...(config.disable_task_list ? { disableTaskList: true } : {}),
     ...(config.welcome ? { welcome: config.welcome } : {}),
     skills,
   };
@@ -182,10 +186,7 @@ function walk(dir, base = dir) {
     const full = join(dir, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`symlink not allowed in skill folder: ${full}`);
     if (entry.isDirectory()) out.push(...walk(full, base));
-    else if (entry.isFile()) {
-      if (statSync(full).size === 0) throw new Error(`empty file in skill folder: ${full}`);
-      out.push(relative(base, full));
-    }
+    else if (entry.isFile()) out.push(relative(base, full));
   }
   return out;
 }

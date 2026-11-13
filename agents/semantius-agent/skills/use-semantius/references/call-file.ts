@@ -16,12 +16,23 @@
  *     or a field must be a permission on the host (one read): the platform saves a misspelled
  *     name, and the step it guards is then closed to everyone;
  *   - a `create_field` row for a field `create_entity` already made (`id`, `created_at`,
- *     `updated_at`, the entity's label column read from the host) is refused (the platform's 23505);
+ *     `updated_at`, the entity's label column read from the host), or for any field that already
+ *     exists on the host (a payload sent a second time), is refused (the platform's 23505);
+ *   - a key the tool does not take (`required`, `data_type`, …) is refused with the key to write
+ *     instead (PostgREST's PGRST204), and so is a value outside a key's list (`width`, `format`, …);
+ *   - `label_parent` on `create_entity` (90226), an `id_prefix` that does not fit the `id_type`
+ *     (23514), an `id_prefix` that is not 2 to 6 lowercase letters taken in order from the
+ *     entity's singular, starting with its first letter, one prefix on two entities of the
+ *     payload, and an `id_prefix` another entity on the host already has (23505) are refused;
  *   - a required `reference` with `reference_delete_mode: clear` is refused (the platform's 90257);
  *   - a rollup over rows that readers of its entity may not see, without `include_hidden_rows`,
  *     is refused (90269): the child's `select_rule` and both `view_permission`s are read from the host;
  *   - an `icon_name` or an enum entry's `icon` that is not a Lucide icon is refused, checked
- *     against `lucide-icon-tags.json` next to this file.
+ *     against `lucide-icon-tags.json` next to this file;
+ *   - a `workflow_state` field (a create, or an update of its values) is refused unless `access.json`
+ *     in the payload's folder, the module's access record, says who moves a record into each of its
+ *     states (`access-rules.ts`), and so is a lifecycle under another name (an enum named `status`,
+ *     `state`, `stage`, or `<the entity's singular>_status` / `_state` / `_stage`).
  *
  * Usage:   bun call-file.ts [--check] <tool> <file.json>
  *          --check validates the file (the permission read included) and sends nothing.
@@ -31,7 +42,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { coverageProblems, labelColumnProblems, lifecycleNameProblems, planAccess, type AccessRecord } from "./access-rules";
 import { checkedPermissions, closest } from "./permission-names";
 
 export type Send = (tool: string, payload: string) => Promise<number>;
@@ -41,6 +53,10 @@ export type ReadPermissions = (names: ReadonlyArray<string>, prefixes: ReadonlyA
 export type EntityInfo = { table_name: string; view_permission?: string; select_rule?: unknown; label_column?: string };
 /** The entities on the host named in `tables`; null when the read failed. */
 export type ReadEntities = (tables: ReadonlyArray<string>) => Promise<EntityInfo[] | null>;
+/** The ids (`<table_name>.<field_name>`) among `ids` of the fields that exist on the host; null when the read failed. */
+export type ReadFields = (ids: ReadonlyArray<string>) => Promise<string[] | null>;
+/** The entities on the host whose `id_prefix` is one of `prefixes`; null when the read failed. */
+export type ReadPrefixes = (prefixes: ReadonlyArray<string>) => Promise<Array<{ table_name: string; id_prefix: string }> | null>;
 
 const USAGE = "Usage: bun call-file.ts [--check] <tool> <file.json>";
 const PERMISSION_TOOLS = new Set(["create_entity", "update_entity", "create_field", "update_field"]);
@@ -66,6 +82,160 @@ export function entityItems(tool: string, payload: any): any[] {
 }
 
 const hasRule = (rule: unknown) => !!rule && typeof rule === "object" && Object.keys(rule as object).length > 0;
+
+/**
+ * The keys a field and an entity take, as the `crud` server's create_field and create_entity schemas name them
+ * (`scripts/crud-tools-drift.test.ts` compares them with the live schemas). The server passes any other key on, and
+ * PostgREST then refuses the whole call with PGRST204 (`column "required" of relation "fields" does not exist`).
+ */
+export const FIELD_KEYS = new Set([
+  "id", "table_name", "field_name", "title", "description", "format", "is_pk", "default_value", "field_order", "input_type",
+  "width", "ctype", "searchable", "enum_values", "reference_table", "reference_delete_mode", "relationship_label",
+  "singular_label_parent", "plural_label_parent", "precision", "unique_value", "cube_type", "input_type_rule",
+  "catalog_field_code", "rollup",
+]);
+export const ENTITY_KEYS = new Set([
+  "table_name", "singular", "plural", "singular_label", "plural_label", "icon_name", "name_sort", "description", "module_id",
+  "view_permission", "edit_permission", "id_column", "id_type", "id_prefix", "id_refentity", "label_column",
+  "label_column_label", "label_parent", "order_column", "managed", "searchable", "is_child", "edit_mode", "cube_mode",
+  "audit_log", "computed_fields", "validation_rules", "select_rule", "entity_type", "catalog_entity_code",
+  "catalog_owner_module", "catalog_entity_aliases",
+]);
+/** The formats a field takes (data-modeling.md → "Field Format Quick Reference"; the server's formats.json). */
+export const FIELD_FORMATS = new Set([
+  "string", "text", "multiline", "html", "code", "integer", "int32", "int64", "number", "float", "double", "date", "time",
+  "date-time", "duration", "boolean", "enum", "color", "icon", "rating", "json", "object", "array", "jsonlogic", "uuid",
+  "email", "uri", "url", "binary", "jsonata", "password", "uri-reference", "iri", "iri-reference", "uri-template",
+  "idn-email", "hostname", "idn-hostname", "ipv4", "ipv6", "regex", "json-pointer", "json-pointer-uri-fragment",
+  "relative-json-pointer", "byte", "reference", "parent",
+]);
+const FIELD_VALUES: Record<string, ReadonlySet<string>> = {
+  format: FIELD_FORMATS,
+  width: new Set(["default", "s", "m", "w"]),
+  input_type: new Set(["default", "required", "readonly", "disabled", "hidden"]),
+  reference_delete_mode: new Set(["", "restrict", "clear", "cascade"]),
+  cube_type: new Set(["disabled", "auto", "dimension", "measure"]),
+};
+const ENTITY_VALUES: Record<string, ReadonlySet<string>> = {
+  id_type: new Set(["auto_increment", "bigint", "text", "uuid", "typeid", "is_a", "has_a"]),
+  entity_type: new Set(["operational_workflow", "operational_record", "catalog", "junction", "computed", "unclassified"]),
+  edit_mode: new Set(["auto", "sidebar", "modal", "page"]),
+  cube_mode: new Set(["disabled", "auto"]),
+};
+/** Keys written for another one, with what to write instead. */
+const FIELD_KEY_HINTS: Record<string, string> = {
+  required: 'write input_type: "required" (there is no required key)', is_required: 'write input_type: "required"',
+  nullable: "leave it out: only reference, date and date-time take NULL, by their format", is_nullable: "leave it out: nullability follows the format",
+  type: "write format", data_type: "write format", field_type: "write format", name: "write field_name", label: "write title",
+  options: "write enum_values", values: "write enum_values", choices: "write enum_values", enum: "write enum_values",
+  default: "write default_value", unique: "write unique_value", order: "write field_order",
+  references: "write reference_table", ref_table: "write reference_table", reference: "write reference_table", target_table: "write reference_table",
+  on_delete: "write reference_delete_mode", delete_mode: "write reference_delete_mode",
+};
+const ENTITY_KEY_HINTS: Record<string, string> = {
+  name: "write table_name, and singular_label and plural_label for the words people read", label: "write singular_label and plural_label",
+  fields: "fields go in one create_field call after create_entity", workflow_state: "it is a field: create it with create_field",
+  permissions: "write view_permission and edit_permission",
+};
+
+/** The key prefix rule (data-modeling.md → "Choosing the key type"), as the messages name it. */
+export const PREFIX_RULE = "2 to 6 lowercase letters taken in order from the entity's singular, starting with its first letter";
+
+/** The lowercase letters of a name: "Job Opening" and "job_openings" give "jobopening" and "jobopenings". */
+const lettersOf = (name: unknown): string => (typeof name === "string" ? name.toLowerCase().replace(/[^a-z]/g, "") : "");
+
+/** True when the letters of `prefix` appear in `word` in order, the first one being the first letter of `word`. */
+function takenFrom(prefix: string, word: string): boolean {
+  if (!word || prefix[0] !== word[0]) return false;
+  let i = 0;
+  for (const c of word) if (c === prefix[i] && ++i === prefix.length) return true;
+  return false;
+}
+
+/**
+ * What is wrong with `prefix` under the key prefix rule, or "" when it fits. `names` are the entity's names the prefix
+ * may be taken from (`singular`, `singular_label`, `table_name`); it fits when one of them gives it.
+ */
+export function prefixRuleProblem(prefix: unknown, names: ReadonlyArray<unknown>): string {
+  if (typeof prefix !== "string" || !/^[a-z]{2,6}$/.test(prefix)) return "is not 2 to 6 lowercase letters";
+  const given = names.filter((n): n is string => typeof n === "string" && lettersOf(n) !== "");
+  if (!given.length || given.some((n) => takenFrom(prefix, lettersOf(n)))) return "";
+  return `is not taken in order from "${given[0]}", starting with its first letter`;
+}
+
+/** A prefix that fits the rule, for a message: the initials of a name of several words, a word of up to 6 letters whole, or its first four letters. */
+export function samplePrefix(name: string): string {
+  const words = name.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  if (words.length > 1) return words.map((w) => w[0]).join("").slice(0, 6);
+  const word = words[0] ?? "";
+  return word.length <= 6 ? word : word.slice(0, 4);
+}
+
+/** The singular of an entity item, for a sample prefix: its `singular`, its `singular_label`, or its `table_name` without a final "s". */
+const singularOf = (it: any): string =>
+  [it.singular, it.singular_label].find((n) => typeof n === "string" && n.trim() !== "") ?? String(it.table_name ?? "").replace(/s$/, "");
+
+/**
+ * Keys `tool` does not take on its items, values outside a key's list, and the creation rules the platform refuses or
+ * the key prefix rule asks: `label_parent` on `create_entity` (90226), an `id_prefix` that does not fit the `id_type`
+ * (23514), an `id_prefix` that breaks the key prefix rule, and one prefix on two entities of the payload (23505).
+ * `items` are the payload's field or entity items (`fieldItems`, `entityItems`).
+ */
+export function keyProblems(tool: string, items: ReadonlyArray<any>): string[] {
+  const isField = tool === "create_field" || tool === "update_field";
+  const isEntity = tool === "create_entity" || tool === "update_entity";
+  if (!isField && !isEntity) return [];
+  const [keys, values, hints] = isField ? [FIELD_KEYS, FIELD_VALUES, FIELD_KEY_HINTS] : [ENTITY_KEYS, ENTITY_VALUES, ENTITY_KEY_HINTS];
+  const out: string[] = [];
+  for (const it of items) {
+    const where = isField ? `${it.table_name}.${it.field_name}` : String(it.table_name);
+    const unknown = Object.keys(it).filter((k) => !keys.has(k));
+    if (unknown.length) {
+      out.push(`${where}: ${tool} does not take ${unknown.map((k) => `"${k}"${hints[k] ? ` (${hints[k]})` : ""}`).join(", ")}; the platform would refuse the whole call with PGRST204`);
+    }
+    for (const [k, allowed] of Object.entries(values)) {
+      if (it[k] !== undefined && !allowed.has(String(it[k]))) {
+        out.push(`${where}: ${k} "${it[k]}" is not one of its values (${[...allowed].filter(Boolean).join(", ")})`);
+      }
+    }
+    if (isField && it.ctype !== undefined) out.push(`${where}: ctype is derived and never sent; leave it out (data-modeling.md, "Auto-Generated Fields")`);
+    if (tool === "create_entity" && it.label_parent) {
+      out.push(`${where}: label_parent cannot go in create_entity, because the field it names does not exist yet (90226); set it with update_entity once the fields exist (data-modeling.md, "Mandatory Creation Order", step 8)`);
+    }
+    const typed = ["typeid", "is_a"].includes(String(it.id_type));
+    if (tool === "create_entity") {
+      if (it.id_prefix && !typed) out.push(`${where}: id_prefix is set but id_type is "${it.id_type ?? "auto_increment"}"; a prefix goes only with typeid or is_a (23514). Every new entity takes id_type "typeid" except a junction and a has_a entity (data-modeling.md, "Choosing the key type")`);
+      if (typed && !it.id_prefix) out.push(`${where}: id_type "${it.id_type}" needs an id_prefix: ${PREFIX_RULE}, such as "${samplePrefix(singularOf(it))}" (data-modeling.md, "Choosing the key type")`);
+    }
+    if (isEntity && it.id_prefix && (typed || tool === "update_entity")) {
+      const wrong = prefixRuleProblem(it.id_prefix, [it.singular, it.singular_label, it.table_name]);
+      if (wrong) out.push(`${where}: id_prefix "${it.id_prefix}" ${wrong}; a key prefix is ${PREFIX_RULE}, such as "${samplePrefix(singularOf(it))}" (data-modeling.md, "Choosing the key type")`);
+    }
+  }
+  if (isEntity) {
+    const tablesOf = new Map<string, string[]>();
+    for (const it of items) if (typeof it.id_prefix === "string" && it.id_prefix !== "") tablesOf.set(it.id_prefix, [...(tablesOf.get(it.id_prefix) ?? []), String(it.table_name)]);
+    for (const [prefix, tables] of tablesOf) {
+      if (tables.length > 1) out.push(`${tables.join(", ")}: each has the id_prefix "${prefix}", but a key prefix is unique among entities (23505); give each its own abbreviation of its singular (data-modeling.md, "Choosing the key type")`);
+    }
+  }
+  return out;
+}
+
+/**
+ * The `create_field` items for fields that already exist on the host (`existing` holds their ids), other than those
+ * `create_entity` made: such a payload was most likely sent before, and one of its rows fails the whole call with 23505.
+ */
+export function existingFieldProblems(fields: ReadonlyArray<any>, existing: ReadonlySet<string>, entities: ReadonlyMap<string, EntityInfo>): string[] {
+  const again = fields.filter((f) => existing.has(`${f.table_name}.${f.field_name}`) && !MADE_BY_CREATE_ENTITY.has(f.field_name) && entities.get(f.table_name)?.label_column !== f.field_name)
+    .map((f) => `${f.table_name}.${f.field_name}`);
+  if (!again.length) return [];
+  return [
+    `${again.length} field(s) already exist on the host: ${again.slice(0, 6).join(", ")}${again.length > 6 ? `, … +${again.length - 6} more` : ""}. ` +
+    `A row for an existing field fails the whole call with 23505, so nothing in it lands. An earlier create_field call has most likely landed already: ` +
+    `read the fields with read_field (filters "id=in.(…)") before sending anything again, leave the existing ones out, and change one with update_field.`,
+  ];
+}
 
 /**
  * The field problems the platform refuses one at a time: a required reference with `clear` (90257), and a rollup over
@@ -281,11 +451,73 @@ const spawnReadEntities: ReadEntities = async (tables) => {
   try { return JSON.parse(out) as EntityInfo[]; } catch { return null; }
 };
 
+const spawnReadFields: ReadFields = async (ids) => {
+  const args = JSON.stringify({ filters: `id=in.(${ids.map(pgValue).join(",")})`, select: "id", limit: 1000 });
+  const proc = Bun.spawn(["semantius", "call", "crud", "read_field"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  proc.stdin.write(args);
+  proc.stdin.end();
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (code !== 0) return null;
+  try { return (JSON.parse(out) as Array<{ id: string }>).map((r) => r.id); } catch { return null; }
+};
+
+const spawnReadPrefixes: ReadPrefixes = async (prefixes) => {
+  const args = JSON.stringify({ filters: `id_prefix=in.(${prefixes.map(pgValue).join(",")})`, select: "table_name,id_prefix", limit: 1000 });
+  const proc = Bun.spawn(["semantius", "call", "crud", "read_entity"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  proc.stdin.write(args);
+  proc.stdin.end();
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (code !== 0) return null;
+  try { return JSON.parse(out) as Array<{ table_name: string; id_prefix: string }>; } catch { return null; }
+};
+
+/** The entity items whose `id_prefix` another entity on the host already has (`taken`): the platform refuses the call with 23505. */
+export function prefixProblems(items: ReadonlyArray<any>, taken: ReadonlyArray<{ table_name: string; id_prefix: string }>): string[] {
+  return items.flatMap((it) => {
+    const other = taken.find((t) => t.id_prefix === it.id_prefix && t.table_name !== it.table_name);
+    return other
+      ? [`${it.table_name}: id_prefix "${it.id_prefix}" is already the key prefix of ${other.table_name} on this host, so the platform would refuse the call with 23505 (unique_current_id_prefix). Choose another abbreviation of its singular that is free: ${PREFIX_RULE} (data-modeling.md, "Choosing the key type").`]
+      : [];
+  });
+}
+
+/**
+ * A `workflow_state` field (a create, or an update that sets its values) whose states the module's access record
+ * does not cover: the record is `access.json` in the payload's folder (`writeModel` or `writeAccess` writes it).
+ */
+export function lifecycleProblems(file: string, fields: ReadonlyArray<any>, tool = "create_field"): string[] {
+  const named = lifecycleNameProblems(fields);
+  if (named.length) return named;
+  const lifecycles = fields
+    .filter((f) => f?.field_name === "workflow_state" && Array.isArray(f.enum_values))
+    .map((f) => ({ table: String(f.table_name), values: f.enum_values.map((x: any) => (typeof x === "string" ? x : x?.value)).filter((x: unknown) => typeof x === "string") }));
+  const people = fields.filter((f) => f?.reference_table === "users");
+  if (!lifecycles.length && !people.length) return [];
+  const path = join(dirname(file), "access.json");
+  let record: AccessRecord | null = null;
+  try {
+    record = JSON.parse(readFileSync(path, "utf8").replace(/^﻿/, ""));
+  } catch {
+    if (!lifecycles.length) return [];
+    return [`${lifecycles.map((l) => `${l.table}.workflow_state`).join(", ")}: no access record at ${path}. Before a lifecycle is created, record who does the everyday work, who else uses the module and who moves a record into each state: the access part of writeModel in a build, writeAccess for a module that has its entities (rbac.md, "The access record")`];
+  }
+  if (tool !== "create_field") return coverageProblems(record, lifecycles).map((p) => `${p} (${path})`);
+  // The same check as writeModel, so a payload written by hand cannot pass a record writeModel refuses.
+  const r: any = record ?? {};
+  const tables = new Set<string>([
+    ...fields.map((f) => String(f.table_name)), ...Object.keys(r.entities ?? {}),
+    ...Object.values(r.roles ?? {}).flatMap((x: any) => [...(x?.writes ?? []), ...Object.keys(x?.limitedTo ?? {}), ...(x?.hidden ?? []), ...Object.keys(x?.leaves ?? {})]),
+    ...Object.keys(r.userFields ?? {}).map((k) => k.split(".")[0]),
+  ].filter((t) => typeof t === "string" && t));
+  const plan = planAccess({ slug: "module", moduleName: "", record, entities: [...tables].map((table_name) => ({ table_name })), fields: fields as any });
+  return plan.problems.map((p) => `access record: ${p} (${path})`);
+}
+
 /** Runs the script and returns its exit code. */
 export async function main(
   argv: string[], send: Send = spawnSend, printError: (line: string) => void = console.error,
   readPermissions: ReadPermissions = spawnRead, print: (line: string) => void = console.log,
-  readEntities: ReadEntities = spawnReadEntities,
+  readEntities: ReadEntities = spawnReadEntities, readFields: ReadFields = spawnReadFields, readPrefixes: ReadPrefixes = spawnReadPrefixes,
 ): Promise<number> {
   const check = argv[0] === "--check";
   const [tool, file, ...rest] = check ? argv.slice(1) : argv;
@@ -323,7 +555,14 @@ export async function main(
     );
   }
   const fields = fieldItems(tool, payload);
+  problems.push(...keyProblems(tool, [...fields, ...entityItems(tool, payload)]));
   problems.push(...iconProblems(entityItems(tool, payload), fields));
+  const prefixed = entityItems(tool, payload).filter((e) => typeof e.id_prefix === "string" && e.id_prefix !== "");
+  if (prefixed.length) {
+    const taken = await readPrefixes([...new Set(prefixed.map((e) => e.id_prefix as string))]);
+    if (!taken) problems.push("the key prefixes in use could not be read from the host, so the entities were not checked for a taken prefix; check the connection and run it again.");
+    else problems.push(...prefixProblems(prefixed, taken));
+  }
   // One read covers the tables of a create_field payload (their label columns) and both sides of each rollup.
   const created = tool === "create_field" ? fields.filter((f) => typeof f.table_name === "string" && typeof f.field_name === "string") : [];
   const rollups = fields.filter((f) => typeof f.rollup?.link_field === "string" && f.rollup.include_hidden_rows !== true);
@@ -335,7 +574,14 @@ export async function main(
     else entities = new Map(read.map((e) => [e.table_name, e]));
   }
   problems.push(...madeFieldProblems(created, entities));
+  if (created.length) {
+    const existing = await readFields(created.map((f) => `${f.table_name}.${f.field_name}`));
+    if (!existing) problems.push("the fields could not be read from the host, so the payload was not checked for fields that already exist; check the connection and run it again.");
+    else problems.push(...existingFieldProblems(created, new Set(existing), entities));
+  }
   problems.push(...fieldProblems(fields, entities));
+  problems.push(...lifecycleProblems(file, fields, tool));
+  if (tool === "create_entity") problems.push(...labelColumnProblems(entityItems(tool, payload)));
   let checked = 0;
   if (PERMISSION_TOOLS.has(tool)) {
     const names = [...checkedPermissions(payload)];
