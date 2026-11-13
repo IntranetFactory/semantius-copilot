@@ -302,8 +302,33 @@ export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArra
       if (!own.has(name)) out.push(`${e.table_name}: computed_fields fills ${c?.name}, which is neither a field of this model nor the label column; add the field or fix the name.`);
     }
   }
+  out.push(...entityPermissionProblems(entities));
   out.push(...accessProblems(entities, fields, access));
   out.push(...relationshipProblems(fields, relationships, access, "relationships (writeModel)"));
+  return out;
+}
+
+/**
+ * A new entity is created with its module's tier permissions, which `module-rbac-setup.ts` made with the module:
+ * read with `<slug>:read`, written with `<slug>:manage` or `<slug>:admin`. Any other, such as `<slug>:write_<entity>`,
+ * does not exist yet; `module-rbac-setup.ts --access` creates it and switches the entity (rbac.md, "Choosing an entity's permissions").
+ */
+function entityPermissionProblems(entities: ReadonlyArray<any>): string[] {
+  const prefixOf = (p: unknown) => (typeof p === "string" && p.includes(":") ? p.split(":")[0] : "");
+  const tally = new Map<string, number>();
+  for (const e of entities) for (const p of [e?.edit_permission, e?.view_permission]) if (prefixOf(p)) tally.set(prefixOf(p), (tally.get(prefixOf(p)) ?? 0) + 1);
+  const slug = [...tally.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
+  if (!slug) return [];
+  const later = `module-rbac-setup.ts --access creates ${slug}:write_<entity> for an entity a role that does part of the work writes, and switches its edit_permission; never create it by hand (rbac.md, "Choosing an entity's permissions")`;
+  const out: string[] = [];
+  for (const e of entities) {
+    if (typeof e?.view_permission === "string" && e.view_permission !== `${slug}:read`) {
+      out.push(`${e.table_name}: view_permission is ${e.view_permission}, but a new entity of the module is created with ${slug}:read; ${later}.`);
+    }
+    if (typeof e?.edit_permission === "string" && ![`${slug}:manage`, `${slug}:admin`].includes(e.edit_permission)) {
+      out.push(`${e.table_name}: edit_permission is ${e.edit_permission}, which does not exist when create_entity runs. Create the entity with ${slug}:manage (${slug}:admin for a catalog entity); ${later}.`);
+    }
+  }
   return out;
 }
 

@@ -1,7 +1,6 @@
 /**
  * permission-names.ts — the permission names a rule checks, and the nearest name to a misspelled one.
- * Shared by `module-rbac-setup.ts` and `call-file.ts`; not a CLI. (`seed-lib.ts` keeps its own copy of
- * `closest`, because it is copied next to a seed script and runs alone.)
+ * Shared by `module-rbac-setup.ts` and `call-file.ts`; not a CLI.
  */
 
 /** Every permission a rule checks with `has_permission` or `require_permission`. */

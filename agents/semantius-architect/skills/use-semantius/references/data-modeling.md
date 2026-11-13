@@ -411,7 +411,7 @@ The prefixes in use are read with one `read_entity` (`id_prefix=in.(…)`) when 
    - On an update where a relationship field is set but its record reads as `null` (the writer may not see it), the rule keeps the stored label.
    - The label is stored when the record is written: a renamed student shows in an enrollment's label after the enrollment's next write.
    - The rule already names the related records, so the entity takes no `label_parent` to any of them.
-The platform titles the label field when it creates it, so a composed `<singular>_name` reads "Name" ("Customizing the label field's title"). A seed keys an entity with a composed label on `_ref` (`seed-data.md`). The label is modeled, never asked.
+The platform titles the label field when it creates it, so a composed `<singular>_name` reads "Name" ("Customizing the label field's title"). The label is modeled, never asked.
 
 ### Customizing the label field's title
 

@@ -2,6 +2,62 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## A sample-data file that is not valid JSON is refused with the place of the mistake
+
+2026-11-13. Asked for by Martin Amm, after a recruiting seed stopped at its first step with `seed_recruiting.json cannot be read as JSON: JSON Parse error: Unable to parse JSON string`. The runtime's parser says that when something follows the end of the document, such as one closing bracket too many, and names no line in any version.
+
+- `seed-lib.ts`: when the file does not parse, `jq empty` says where, and the message carries its line and column, that line and the one before it, and the usual causes. A document that is closed and goes on, which `jq` may accept as several values, is placed by the script itself. Without `jq` the parser's message stands, with where to get `jq`. Preflight check 2 already installs `jq` on every host.
+- `seed-data.md` → "Run", step 1, and the `seed-lib.ts` row of `SKILL.md` say so.
+- `scripts/seed-lib.test.ts` covers the three cases and `jq` itself.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## A response without a tool call ends the turn
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build stopped half done. The agent had created the entities and fields, sent "Schema done — now setting up hiring permissions and access." as a response of its own, and the host recorded the turn as completed: the access, the verification and the sample data waited until the user asked whether it was still working. The skill used this on purpose for the entity list ("one message with no tool call, which ends the turn") and had no rule for the rest of a build.
+
+- `SKILL.md` → Golden Rule 12: a response without a tool call ends the turn, in every sequence of steps. It is sent only where the turn is meant to end (a question only the user can answer, a list the user must confirm, a problem only the user can resolve, the final response). Text beside a tool call does not end the turn, but the default is tool calls with no text; a milestone, an intention or an explanation is never a reason for text without a tool call.
+- `build-module.md` → "Order of a build": from the first write of step 5 to the final response, every response carries the next tool call.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## Sample data is a records file that the CLI's import checks and writes
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build seeded nothing. Its seed script halted three times in the check pass and the third halt stopped it for good: an `assertStatesAgree` call stood after two writes, three such calls were missing, `assertSeedCounts` expected 8 interviews where the script's own loops made 6, and two interviews keyed on `_ref` sent the same values. None of these was a record the platform would refuse or a child on the wrong parent. The agent wrote a program in a protocol of about 15 functions and `seed-lib.ts` policed that program: of its 65 halts, 36 existed only because there was a script, and it had grown from 570 to 2,249 lines in six days, one check per failed build.
+
+- `seed-data.md`, rewritten: the agent writes one records file, `.tmp_deploy/seed_<module_slug>.json`, in the format `utils/export_entities` writes. A record names itself `<prefix>_sr<n>`, and a relationship column holds the id of the record it means. One command checks the email addresses, checks the records (`utils/import_entities` with `check`), imports them and reports. A step that stops is fixed in the file and the command is run again; a problem that comes back after a fix ends the seed. The rules on records that read as records stay as writing rules and halt nothing.
+- `seed-lib.ts`, reduced from 2,249 to about 500 lines and run from the skill folder: `--describe` (the file's skeleton, what a record of each table carries, the tables whose states must agree, the users a record may name), `--emails` (every address at a subdomain of example.com, before anything is written), `--report` (after the import: counts, each computed and rollup column, each parent state with its children's states; it reports and never blocks) and `--clear` (deletes the file's records, children first). The script functions, the check pass, `_ref` keys and the halted-run counter are gone.
+- `build-module.md` → step 7, "Sample-data size", "Verify, then stop" and "Final response"; `SKILL.md` → the reference table, the made-up-records entry and Golden Rule 9; `cli-usage.md` → "Moving Entities and Modules Between Hosts" (the `check` parameter, sample ids, records of an `is_a` or `has_a` entity); one line each in `data-modeling.md` and `permission-names.ts`.
+- `scripts/seed-lib.test.ts` covers the four commands and the example in `seed-data.md`; `tests/crud-tools-eval.ts` counts seed command runs, check listings, stopped imports and reports.
+- The seed needs a CLI whose `import_entities` has `check`. That CLI also pads sample ids to TypeIDs, compares a date-time as an instant, writes records of an `is_a` or `has_a` entity with an insert and a PATCH, and imports a table that references itself whatever its key.
+
+`flows.md` row 8.9 says what the close-out says about sample data that is incomplete. The file format of blueprints and specs is unchanged; `version` stays `3.1`.
+
+## The entity list shows the entities; the final response shows the access as built
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build showed the access summary twice: written by hand in the entity list, then printed by `module-rbac-setup.ts` in the final response. The two differed. The list said Hiring Managers see everything, that an offer is approved from `draft`, and that Interview Scorecards have a lifecycle. The build limited Hiring Managers to the job openings that name them, as its own access record said. `writeModel` refused the draft approval, so the agent added a `submitted` state, and it refused states on scorecards, which had no `workflow_state`. The list also said scorecards open only from each Interview, while the agent's first relationship record already made them a `reference`. The list's details were unchecked prose, and the checks that decide them run only after the user confirms.
+
+- `build-module.md` → "Confirm the entity list": the list shows each entity with its purpose and key relationships, and nothing about access or a relationship's format. "Show who takes each step" becomes "Work out who takes each step, without showing it": the test stays, and the answers still go in the access record (step 5.4). The lines about a gated entity's step, its named person and controls, a role that does part of the work, an entity reached only through a parent, and the access summary at the end of the list are gone.
+- `build-module.md` → "Final response": the access summary stays, as the verification run prints it. The line naming a relationship format that differs from the list is gone; the `parent` / `reference` decision and its checks (step 5.6, `writeModel`, `call-file.ts`) are unchanged.
+- `rbac.md` → "The access summary": a review's access section uses the same form; the entity list no longer does.
+- `select-rule.md` → "Risk": a build's `select_rule` on a new entity needs no warning because the entity has no records yet and the final response shows who sees what.
+
+## Every state after a gate is decided; a seed names every problem in one run and stops after three halted runs
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build looped on its seed. The offers' approval gate was written `"after": ["accepted", "declined", "expired"]`, without `sent`, which comes only after `approved`. So the stamp rules kept nothing on a sent offer, a recruiter could not send an approved one, and the module verification passed against the same record. The seed's check pass said to send the stamps as null, the agent did, the real pass landed every table and `assertStamped` halted, and the tables were cleared. Two halts on `assertStatesAgree` came before; nothing counted the runs, and each run named only its first problem. Earlier still, `create_entity` failed (`23503`) on `edit_permission = recruiting:write_interviews`, which the access run creates later, and the agent created the permission by hand.
+
+- `access-rules.ts`: a gate's states that come after it in the `workflow_state` order are each in `after` or in the new `notAfter` (also reached without the gate), except an approval gate's own `rejected`. `planAccess` refuses a record that leaves one out and names it with the object to write, so `writeModel`, `call-file.ts` and `module-rbac-setup.ts --access` refuse it before anything is written. `notAfter` writes no rule.
+- `rbac.md` → "The access record" (the `notAfter` key and the refusal) and "Restricted steps (gates)", step 5 (every later state is decided; the offer and purchase-order examples; the hire example gains `"notAfter": ["rejected"]`).
+- `seed-lib.ts`:
+  - The check pass records each problem in the plan's rows and goes on, then halts once with every problem, each with its script line and call. A call of the wrong shape, a failed read and stored rows that differ from the plan still halt at once. After a call with a problem, its rows stay in the pass and are never read from the host.
+  - Halted runs of a seed script are counted in `.tmp_deploy/seed-halts.json`. The third, or a run that repeats a problem of the last, prints `SEED STOPPED` with every halted run's problems and the rows that stay, and exits 5, as does every later run until the log is deleted at the user's request. Rows already inserted stay. A finished seed forgets its halted runs; a script that only clears is not counted.
+  - A stamp sent on a row the stamp rule does not keep gets two readings: a row before the step sends null, and a state reached only after the step means the gate's `after` leaves it out, fixed in `access.json` and `module-rbac-setup.ts --access`. `assertStamped` compares its `states` with the states the rule keeps in the check pass.
+- `jsonlogic-kit.ts` (`writeModel`) and `call-file.ts`: a new entity is created with `<slug>:read` and `<slug>:manage` or `<slug>:admin`; `call-file.ts` reads every `view_permission` and `edit_permission` of a `create_entity` or `update_entity` with the rule names, and a missing one is refused with the same instruction. `rbac.md` → "Choosing an entity's permissions" and `build-module.md` step 5.7 say `module-rbac-setup.ts --access` creates `<slug>:write_<entity>` and switches the entity.
+- `seed-data.md` → "Run", "The functions", "Approval stamps on rows past the step" and "Report", and `build-module.md` → "The sample-data question", "Sample-data size", "Verify, then stop" and "Final response": one run names every problem, the stop, and what the final response says about a stopped seed. The sample-data question names the exact total, without "about".
+- `scripts/access-rules.test.ts`, `scripts/seed-lib.test.ts`, `scripts/jsonlogic-kit.test.ts` and `scripts/call-file.test.ts` cover them.
+
+`flows.md` row 8.9 says what the close-out says about a stopped seed. The file format is unchanged; `version` stays `3.1`.
+
 ## Rollups over hidden rows are set without asking; the module is verified before the seed
 
 2026-11-13. Asked for by Martin Amm, after a recruiting build ran `module-rbac-setup.ts --access` twice more than needed. One run stopped on `applications.interview_count`, a rollup over the interviews an interviewer is limited to: its warning asked whether to set `include_hidden_rows`, and the interviews `select_rule` waited. A last run after the seed repeated the report of the run before it.

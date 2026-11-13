@@ -89,7 +89,7 @@ An entity's `view_permission` and `edit_permission` follow from its class (`data
 - **Modules deployed from a spec** keep the per-entity permissions above, derived from the same tier; the bundle table above lists what each bundle includes.
 - **A `junction`** follows the entities it relates: `:manage`, or `:admin` only when every one of them is a `catalog` entity.
 - **Entities with a restricted step** (`operational_workflow`) stay at `:manage`; the restriction is a gate, see "Restricted steps (gates)" below.
-- **An entity a role that does part of the work writes** (a requester's tickets) takes `edit_permission = <slug>:write_<entity>` in place of `<slug>:manage`. `<slug>:manage` includes it, so the write tier is unchanged ("Roles that do part of the work" below).
+- **An entity a role that does part of the work writes** (a requester's tickets) takes `edit_permission = <slug>:write_<entity>` in place of `<slug>:manage`. `<slug>:manage` includes it, so the write tier is unchanged ("Roles that do part of the work" below). It is created with `<slug>:manage` like any other entity, because `<slug>:write_<entity>` does not exist yet: `module-rbac-setup.ts --access` creates that permission and switches the entity to it. `writeModel` and `call-file.ts` refuse a `create_entity` payload that names it.
 - **Direct creation acts as the master** of every entity it creates: it writes the entity's own read and write permissions and nothing for entities another module masters, except view access to an entity it reuses ("Viewing an entity of another module" below).
 - **After a reclassification** (`update_entity` on `entity_type`), update the entity's `edit_permission` to the new tier in the same call (see "Update entity-level permission gates" below).
 
@@ -174,13 +174,14 @@ The record of a purchase request that an employee prepares, an Approver approves
 }
 ```
 
-A state is the person's key, or `{ "by": "<person>", … }` when the gate needs more:
+A state is the person's key, or `{ "by": "<person>", … }` when the gate needs more. A gate that other states follow in the `workflow_state` order always needs more: `after` or `notAfter` places each of them.
 
 | Key | Meaning |
 |---|---|
 | `by` | The person, or a list of people, who move a record into the state; `"admin"` when only an admin does |
 | `verb` | Names the gate `<slug>:<verb>_<noun>` (step 1 below); derived from the state when it says the step (`approved` → `approve`, `hired` → `hire`), asked for otherwise |
-| `after` | The states a record reaches only after this one (step 5 below); none when left out |
+| `after` | The states a record reaches only after this one (step 5 below) |
+| `notAfter` | The states after this one in the `workflow_state` order that a record can also reach without it (step 5 below); no rule is written from them |
 | `waiting` | An approval gate's waiting state ("Controls on a gate"); the state before the gated one when left out |
 | `namedPerson` | The step's named person (control 6): `true` puts `<role_key>_user_id`, of the first person in `by`, on the record; `{ "via": "<relationship field>" }`, or a list of them, reads it from a parent; either form takes `"field"` to use an existing user field |
 | `filledLater` | Fields a later step fills, which the locks leave out (control 3) |
@@ -190,6 +191,7 @@ A state is the person's key, or `{ "by": "<person>", … }` when the gate needs 
 The script refuses a record that leaves a decision open:
 
 - **A state where the role usually changes** (`approved`, `signed`, `issued`, `released`, `posted`, `committed`, `hired`, `void` and `terminated`, `paid`, `reimbursed`, `disbursed`, `verified`) given to the everyday person needs `{ "by": "<everyday>", "because": "<who takes this step in the leading products, and why it is the everyday work here>" }`. These states are examples, not the test; the `because` is where the test is run.
+- **Every state after a gate** in the `workflow_state` order is in that gate's `after` or `notAfter`, except an approval gate's own `rejected`, which its controls already decide. The order alone cannot tell the two apart, so each is a decision (step 5 below), and the refusal names each state left out.
 - **Every user field that names a person** (a `reference` to `users`) is accounted for: a gate's `namedPerson`, a role's `limitedTo` field, a stamp the gates write, or an entry of `"userFields"`, `{ "<table>.<field>": "<person>" }`, saying whom the field names, not who fills it in. A field named for a kind of person (`interviewer_user_id`, `hiring_manager_user_id`) names that person, so it goes to that person's role; a role that does part of the work is limited by it (`limitedTo`). A field that says what someone did or holds (`created_by_user_id`, `assigned_user_id`, `owner_user_id`) may name the everyday person, with `{ "by": "<everyday>", "because": "…" }`.
 - **Who else uses the module** is always answered: `"roles"` names each other kind of person, or is empty with `"onlyEveryday": "<why nobody else uses it in the leading products>"`. When no role does part of the work, `"nobodyDoesPart": "<why>"` says why nobody uses the module only to write their own records (a requester, a technician, an employee, an interviewer).
 - **A field named for a kind of person** goes to the role of that name: `interviewer_user_id` to `"interviewer"`, never to another role.
@@ -232,7 +234,7 @@ For each gate of the record it writes:
      true]}
    ```
 
-   The `has_permission` branch is the gate's check, here for a gate without controls; an approval gate puts its whole check there ("Controls on a gate"), so a requester cannot skip past their own approval. A state the record can also reach without the gate (`rejected` beside `approved`, `canceled` before signing) is not in `after`, even when it can be reached after the gate too. For an offer whose gate is `approved`, with `draft`, `submitted`, `approved`, `rejected`, `sent`, `accepted` and `declined`: an offer is sent only once approved, and accepted or declined only once sent, so `after` is `sent`, `accepted`, `declined`; `rejected` is reached instead of `approved`, so it is not. A state after the gate stays in `after` when it has a gate of its own (`terminated` after `signed`, `ordered` after `approved`): its own gate rule still decides who takes it.
+   The `has_permission` branch is the gate's check, here for a gate without controls; an approval gate puts its whole check there ("Controls on a gate"), so a requester cannot skip past their own approval. A state the record can also reach without the gate (`rejected` beside `approved`, `canceled` before signing) is not in `after`, even when it can be reached after the gate too; when it comes after the gate in the `workflow_state` order, it goes in `notAfter`. Every state after the gate in that order is in one of the two lists, and the script refuses a record that leaves one out, because a state missing from `after` loses the gate's sequence rule and, on an approval gate, its locks and stamps, and the move into it then counts as moving an approved record back. For an offer whose gate is `approved`, with `draft`, `submitted`, `approved`, `rejected`, `sent`, `accepted` and `declined`: an offer is sent only once approved, and accepted or declined only once sent, so `after` is `sent`, `accepted`, `declined`; `rejected` is reached instead of `approved`, so it is not, and as the approval's own rejection it needs no `notAfter` either. For a purchase order whose gate is `issued`, with `draft`, `issued`, `received`, `closed` and `canceled`: `after` is `received` and `closed`, and `notAfter` is `canceled`, which a draft can reach too. A state after the gate stays in `after` when it has a gate of its own (`terminated` after `signed`, `ordered` after `approved`): its own gate rule still decides who takes it.
 6. **The entity's class:** `operational_workflow`. An entity with a lifecycle and no gate is `operational_record`, and a module with no gate is `advanced`.
 
 **Another role for a step, or none.** The access summary names each gated step and the roles that take it. When the user names another role for a step, change the record (give the state to that role's person, adding the role to `roles` when it is new) and run the command again. Naming the module's Manager role means every editor may take the step, so it is not a gate: give the state to the everyday person in the record, with the user's choice as its `because`, then drop the gate in this order: its gate rule, its sequence rule and its controls (below) first, then its permission and its hierarchy rows. When a role takes no other gate, move its users to the Manager role after the user agrees, then delete its grant, the role, its bundle and the bundle's hierarchy rows, and take it out of the record. Running the command then sets the entity's class and the module's access level.
@@ -367,7 +369,7 @@ On a delete `value_changed` is `false` for every field, so the rule passes, and 
 
 #### The access summary
 
-`module-rbac-setup.ts --access` prints the module's access as markdown, between the lines `access summary:` and `end of access summary`, from the live module and the record; the final response uses the lines between them, unchanged. A build's entity list and a review's access section write a module's access in the same form, in plain words:
+`module-rbac-setup.ts --access` prints the module's access as markdown, between the lines `access summary:` and `end of access summary`, from the live module and the record; the final response uses the lines between them, unchanged. A review's access section writes a module's access in the same form, in plain words:
 
 1. **The access level**, in bold ("**Access: gated.** Some steps are restricted to a role." or "**Access: advanced.** No step is restricted to a role."), and that the module's role names start with the module's name, so the table names roles by their title alone.
 2. **A table, Role | Does | Sees,** one row per role: viewer, manager and admin, then each role that takes gates, with each step it takes ("marks applications Hired") or the records it alone creates, and each role that does part of the work, with what it writes. Sees names the records the role is limited to and those below them, what is hidden from it, and "all other records" when the rest stay visible to it, as the records above the ones that name it do ("Roles that do part of the work").
@@ -597,7 +599,7 @@ The `validation_rules` of `purchase_request_lines`:
 ]
 ```
 
-**A step whose named person sits on the parent** (not an approval, so no requester part). In a Recruiting module (`recruiting`) whose recruiters do the everyday work (`"everyday": "recruiter"`) and whose rules reach code `99008`, the record gives `applications` the state `"hired": { "by": "hiring_manager", "namedPerson": { "via": "job_opening_id" } }`, and the Hiring Manager role `"seesOnlyNamed": true`, which writes the two `select_rule`s of control 7 above:
+**A step whose named person sits on the parent** (not an approval, so no requester part). In a Recruiting module (`recruiting`) whose recruiters do the everyday work (`"everyday": "recruiter"`) and whose rules reach code `99008`, the record gives `applications` the state `"hired": { "by": "hiring_manager", "namedPerson": { "via": "job_opening_id" }, "notAfter": ["rejected"] }` (an application can be rejected without being hired), and the Hiring Manager role `"seesOnlyNamed": true`, which writes the two `select_rule`s of control 7 above:
 
 ```json
 {"code": "99009", "name": "hire_application",

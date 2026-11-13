@@ -17,6 +17,8 @@ export type NamedPerson = true | { via: string | string[]; field?: string; on?: 
 export type GateSpec = {
   takenBy: string[]; verb: string; after: string[]; waiting?: string; namedPerson?: NamedPerson;
   filledLater?: string[]; covers?: string[];
+  /** States later in the order that a record can also reach without the gate; with `after`, every later state is decided. */
+  notAfter?: string[];
 };
 /** A state as the record writes it: the person who moves a record into it, or that person with the gate's details. */
 export type StateSpec = string | (Partial<GateSpec> & { by?: string | string[]; because?: string });
@@ -114,7 +116,7 @@ export function gateKind(state: string): "approval" | "payout" | "transition" {
 
 const ROLE_KEY = /^[a-z][a-z0-9_]*$/;
 const RESERVED = new Set(["viewer", "manager", "admin", "read", "manage"]);
-const GATE_KEYS = new Set(["by", "takenBy", "because", "verb", "after", "waiting", "namedPerson", "filledLater", "covers"]);
+const GATE_KEYS = new Set(["by", "takenBy", "because", "verb", "after", "notAfter", "waiting", "namedPerson", "filledLater", "covers"]);
 const ROLE_KEYS = new Set(["title", "seesOnlyNamed", "writes", "limitedTo", "hidden", "leaves", "sees", "fills"]);
 const RECORD_KEYS = new Set(["products", "people", "everyday", "roles", "entities", "userFields", "onlyEveryday", "nobodyDoesPart"]);
 /** User-field names that say what a person did or holds, not which kind of person they are. */
@@ -202,6 +204,7 @@ export function shapeProblems(record: unknown): string[] {
       if (!(typeof by === "string" && by) && !(Array.isArray(by) && by.length)) out.push(`${where}: "by" names the person who moves a record into it`);
       if (value.verb !== undefined && (typeof value.verb !== "string" || !ROLE_KEY.test(value.verb))) out.push(`${where}: "verb" names the step in snake_case ("approve", "hire"); the gate is <slug>:<verb>_<singular>`);
       if (value.after !== undefined && !Array.isArray(value.after)) out.push(`${where}: "after" lists the states a record reaches only after this one`);
+      if (value.notAfter !== undefined && !Array.isArray(value.notAfter)) out.push(`${where}: "notAfter" lists the states after this one that a record can also reach without it`);
     }
   }
   return out;
@@ -249,7 +252,7 @@ function normalizeRecord(record: AccessRecord, fieldsOf: Map<string, FieldRow[]>
       const waiting = spec.waiting ?? (kind === "approval" && at >= 2 ? order[at - 1] : undefined);
       const gate: GateSpec = { takenBy: who, verb: verb ?? state, after: spec.after ?? [] };
       if (waiting) gate.waiting = waiting;
-      for (const k of ["namedPerson", "filledLater", "covers"] as const) if (spec[k] !== undefined) (gate as any)[k] = spec[k];
+      for (const k of ["namedPerson", "filledLater", "covers", "notAfter"] as const) if (spec[k] !== undefined) (gate as any)[k] = spec[k];
       states[state] = gate;
     }
     out.entities[table] = { ...entity, states };
@@ -404,6 +407,24 @@ function resolveGates(c: Ctx): Gate[] {
       const where = `${table}.${state}`;
       const kind = gateKind(state);
       for (const s of spec.after ?? []) if (!values.includes(s) || s === state) c.problems.push(`${where}: "after" names ${s}, which is not another state of ${table}`);
+      // Every state after the gate in the order is decided: reached only through it ("after"), or also without it ("notAfter").
+      // An approval's own rejection is reached from the waiting state, and its controls already decide it.
+      const later = values.slice(values.indexOf(state) + 1);
+      const after = spec.after ?? [], notAfter = spec.notAfter ?? [];
+      for (const s of notAfter) {
+        if (!values.includes(s) || s === state) c.problems.push(`${where}: "notAfter" names ${s}, which is not another state of ${table}`);
+        else if (!later.includes(s)) c.problems.push(`${where}: "notAfter" names ${s}, which comes before ${state} in the workflow_state order; only a later state is decided there`);
+        if (after.includes(s)) c.problems.push(`${where}: ${s} is in both "after" and "notAfter"; it belongs in one of them`);
+      }
+      const undecided = later.filter((s) => !after.includes(s) && !notAfter.includes(s) && !(kind === "approval" && s === "rejected"));
+      if (undecided.length) {
+        const by = spec.takenBy.length === 1 ? JSON.stringify(spec.takenBy[0]) : JSON.stringify(spec.takenBy);
+        c.problems.push(
+          `${where}: ${listOf(undecided.map((s) => `"${s}"`), "and")} ${undecided.length === 1 ? "comes" : "come"} after "${state}" in the workflow_state order, and the record does not say whether ${a(singularOf(c, table))} reaches ${undecided.length === 1 ? "it" : "them"} only once it was ${state}. ` +
+          `Put each state reached only after "${state}" in "after", and each a record can also reach without it in "notAfter", keeping the state's other keys: ` +
+          `{ "by": ${by}, "after": ${JSON.stringify(after)}, "notAfter": ${JSON.stringify(notAfter)} } with ${listOf(undecided.map((s) => `"${s}"`), "and")} added to one of them (rbac.md, "Restricted steps (gates)", step 5)`,
+        );
+      }
       if (kind === "approval") {
         approvals++;
         if (!spec.waiting || !values.includes(spec.waiting) || spec.waiting === state) c.problems.push(`${where}: an approval gate names "waiting", the state a record waits in for the approval (it defaults to the state before this one, when a state comes before that)`);

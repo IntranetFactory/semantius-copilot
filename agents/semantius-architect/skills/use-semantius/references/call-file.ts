@@ -14,7 +14,8 @@
  *     of "$user_id" or "$old.workflow_state" when it expanded them in an unquoted heredoc;
  *   - every `has_permission` / `require_permission` name in a create or update of an entity
  *     or a field must be a permission on the host (one read): the platform saves a misspelled
- *     name, and the step it guards is then closed to everyone;
+ *     name, and the step it guards is then closed to everyone; so must an entity's
+ *     `view_permission` and `edit_permission`, which the platform refuses when missing;
  *   - a `create_field` row for a field `create_entity` already made (`id`, `created_at`,
  *     `updated_at`, the entity's label column read from the host), or for any field that already
  *     exists on the host (a payload sent a second time), is refused (the platform's 23505);
@@ -611,19 +612,33 @@ export async function main(
   if (tool === "create_entity") problems.push(...labelColumnProblems(entityItems(tool, payload)));
   let checked = 0;
   if (PERMISSION_TOOLS.has(tool)) {
-    const names = [...checkedPermissions(payload)];
+    const ruleNames = [...checkedPermissions(payload)];
+    // An entity's view and edit permission must exist when the entity is created or changed (rbac.md, "Choosing an entity's permissions").
+    const onEntities = entityItems(tool, payload).flatMap((e) => (["view_permission", "edit_permission"] as const)
+      .filter((k) => typeof e?.[k] === "string" && e[k] !== "").map((k) => ({ where: `${e.table_name}.${k}`, name: String(e[k]) })));
+    const names = [...new Set([...ruleNames, ...onEntities.map((x) => x.name)])];
     if (names.length) {
       const prefixes = [...new Set(names.filter((n) => n.includes(":")).map((n) => n.split(":")[0]))];
       const existing = await readPermissions(names, prefixes);
       const missing = existing ? names.filter((n) => !existing.includes(n)) : [];
+      const near = (n: string) => { const c = existing ? closest(n, existing) : undefined; return c ? `${n} (did you mean ${c}?)` : n; };
       if (!existing) {
         problems.push("the permission names could not be read from the host, so the rules were not sent; check the connection and run it again.");
       } else if (missing.length) {
-        problems.push(
-          `${missing.length} permission name(s) in the rules are not permissions on the host: ` +
-          missing.map((n) => { const near = closest(n, existing); return near ? `${n} (did you mean ${near}?)` : n; }).join(", ") +
-          `. The platform would save them, and each step they guard would be closed to everyone. The tier permissions are <slug>:read, <slug>:manage and <slug>:admin; viewer, manager and admin are role names.`,
-        );
+        const inRules = missing.filter((n) => ruleNames.includes(n));
+        if (inRules.length) {
+          problems.push(
+            `${inRules.length} permission name(s) in the rules are not permissions on the host: ${inRules.map(near).join(", ")}` +
+            `. The platform would save them, and each step they guard would be closed to everyone. The tier permissions are <slug>:read, <slug>:manage and <slug>:admin; viewer, manager and admin are role names.`,
+          );
+        }
+        for (const { where, name } of onEntities.filter((x) => missing.includes(x.name) && !ruleNames.includes(x.name))) {
+          const slug = name.split(":")[0];
+          problems.push(
+            `${where} is ${near(name)}, which is not a permission on the host, so the platform refuses the entity. A new entity is created with ${slug}:read and ${slug}:manage (${slug}:admin for a catalog entity); ` +
+            `module-rbac-setup.ts --access creates ${slug}:write_<entity> for an entity a role that does part of the work writes, and switches its edit_permission. Never create that permission by hand (rbac.md, "Choosing an entity's permissions").`,
+          );
+        }
       } else checked = names.length;
     }
   }
