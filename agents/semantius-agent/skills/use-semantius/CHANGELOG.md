@@ -2,6 +2,102 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## Typeid only for a family or on request, and the key prefix is the singular
+
+2026-11-14. Asked for by Martin Amm, who wanted `typeid` kept to `is_a` / `has_a` families and to what a human asks for, and the entity's singular as the prefix again. This replaces "every new entity takes `typeid`, except a junction and a based entity" and the 2 to 6 letter prefix of the entries of 2026-11-12. The label rule ("Choosing the label") is unchanged.
+
+- `data-modeling.md` → "Choosing the key type": an entity's key is `auto_increment`. It takes `typeid` only in an `is_a` / `has_a` family (the base is `typeid`, a subtype `is_a`, an extension `has_a`) or when the user asked for it, in their own words. The key type is never asked. The section says that `id_type` is locked at creation, so an `auto_increment` entity that is asked to take `typeid` is rebuilt with its records, and that the user is told so before anything changes. The prefix is the entity's singular, leaving out any digit (`vendor_contract`); a prefix that is taken is a name clash, settled with the user.
+- `call-file.ts` and `writeModel` refuse a prefix that is not the entity's singular (read from `singular`, else `singular_label`, else `table_name`) and one prefix on two entities of a payload; `call-file.ts` also refuses a prefix another entity on the host has. The messages for the last two say to settle it with the user. A `create_entity` without `id_type` passes.
+- `module-rbac-setup.ts --slug` warns about a `typeid` or `is_a` prefix that is not the singular.
+- `build-module.md` step 1 takes prefixes only for entities that take `typeid` or `is_a`, and step 2 settles a taken one again. `build-module.md` and `seed-data.md` say that the records of an `auto_increment` entity take the numbers 1, 2, 3, not only a junction's.
+- `entity-families.md` examples use the singular prefixes (`business_partner`, `activity`, `email`). `review-module.md` row 90 leaves a `typeid` key outside a family as it is, and reports an entity the user asked to have `typeid` that holds `auto_increment` as needing a rebuild.
+- `flows.md` rows 8.2 and 8.6 carry the change. Rows 8.1 to 8.10 and 9.1 to 9.6 were read again against the changed files, and a search of the whole file for key and prefix wording found only row 8.6. The file format is unchanged; `version` stays `3.1`.
+
+## The limits are ten seed runs and five identical failures
+
+2026-11-14. Asked for by Martin Amm: the import's check is cheap, so a few honest retries cost little, and the limits only have to block an endless loop. The two limits of the entries below were three runs and two failures.
+
+- `seed-lib.ts`: `SEED_RUN_LIMIT` is 10. Ten runs of the seed command go on; the eleventh, with no finished report between, prints `SEED STOPPED` and exits 5. `seed-data.md` → "Run" and `SKILL.md` say so.
+- `SKILL.md` → Golden Rule 13: the same problem on five runs in a row, with the input changed between them, ends the sequence; the sixth run is not made. `seed-data.md` and `build-module.md` no longer have a rule of their own for a problem that comes back after a fix: they point at Golden Rule 13.
+- `flows.md` rows 8.9 and 8.10 carry the new numbers; rows 8.1 to 8.10 and 9.1 to 9.6 were read again against the changed files. The file format is unchanged; `version` stays `3.1`.
+- `scripts/seed-lib.test.ts` takes the limit from `SEED_RUN_LIMIT`, so the next change of it is one line.
+
+## A failure that comes back after a change ends the sequence
+
+2026-11-14. Asked for by Martin Amm, who asked whether the retry limits added the day before were still in place. The only one in code, the halted-run counter of the seed script, went with that script (the entry below); nothing else counted retries, and the builder script (`writeModel`) had failed three times in the last recruiting build before it passed.
+
+- `SKILL.md` → Golden Rule 13: when a step fails (a command, a builder script, `call-file.ts`, `module-rbac-setup.ts`) and, after the input was changed, fails again with the same problem, it runs no third time. The next response is a message to the user (a problem only the user can resolve, Golden Rule 12): the step, the problem it named and what was written before it. A different problem is not a repeat, and a call the host did not answer (exit `3`) is retried as `cli-usage.md` says and is not counted.
+- `flows.md` row 8.10 says what the user sees. Rows 8.1 to 8.10 and 9.1 to 9.6 were read again against the changed files, and the sections of `SKILL.md` that `flows.md` names are all still there. The file format is unchanged; `version` stays `3.1`.
+
+## The seed command stops itself after three runs without a finished report
+
+2026-11-14. Asked for by Martin Amm, after the halted-run counter went with the seed script on 2026-11-13: since then `seed-data.md` carried one sentence ("a problem that comes back ends the seed"), which nothing enforced, and seed loops had happened several times (`seed-halts.json` was added after a build that looped on its seed, and a seed took seven runs instead of one).
+
+- `seed-lib.ts`: `--emails`, the first step of every run of the seed command, counts the runs of a records file in `seed-runs.json`, beside the file. Three runs go on. The fourth, with no finished report between, prints `SEED STOPPED` and exits 5, which ends the command chain, and so does every later run until the user deletes `seed-runs.json`. A run whose file is not valid JSON counts too. `--report` ends the count when every record of the file is on the host; a report with records missing keeps it. A count that cannot be written never blocks a seed.
+- `seed-data.md` → "Run" says so, and that every `--emails` run counts, also one sent alone. `build-module.md` → "Final response" and `flows.md` row 8.9 name a seed that stopped itself among the ways a seed ends before its report. The `seed-lib.ts` row of `SKILL.md` says so.
+- `scripts/seed-lib.test.ts` covers the three runs and the refusal, a count per file, the command line (exit 5, nothing else checked), a file that is not valid JSON, the reset by a finished report, and a count that cannot be written. The old counter is in git (`844cefa`); it counted the halts of a script the agent wrote, which no longer exists.
+
+`flows.md` row 8.9 is changed as above; no question or step changed. The file format is unchanged; `version` stays `3.1`.
+
+## Reads that do not depend on each other share a round trip
+
+2026-11-14. Asked for by Martin Amm, after a recruiting build spent about 10 of its 25 minutes in tool calls, nearly all of it in `module-rbac-setup.ts` (66 s to create the module, 193 s to write its access, 69 s to verify it) and `seed-lib.ts --describe` (24 s). Every `semantius` call costs about 5 s, whatever it reads, so what counts is the longest chain of calls that wait for one another. A write was already one array call per kind (Golden Rule 7); the reads were not all sent together.
+
+- `module-rbac-setup.ts`: the module is read with the reads that need only its slug (permissions, roles, hierarchy, and with `--access` the other rollups of the instance); the entities and roles filtered by the module's id follow; the grants are read with the module's fields; the permissions and the roles the record names are read together; after the writes, the roles are read with the entities, hierarchy and module. Longest chain on the test module: 11 to 10 calls for a new module, 19 to 16 for the access write, 8 to 6 for the verification run.
+- `seed-lib.ts --describe`: the tables are read together, a module read in progress is shared by two of its tables, and the tables they relate to and the users (the user who seeds and the user list) are read together. Longest chain: 5 to 4.
+- The writes are unchanged: one call per kind, in order, none beside another. A hierarchy row or a grant changes what every user holds, and a saved rollup holds its tables, so writes beside one another were not tried against the platform.
+- `scripts/module-rbac-setup.test.ts` and `scripts/seed-lib.test.ts` count the longest chain and check that no write starts while another call is in flight.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## rbac.md shows a second access record
+
+2026-11-14. Asked for by Martin Amm, after a recruiting build wrote its access record in three tries. The record was refused for a gate with no verb, for states after a gate that were neither in `after` nor in `notAfter`, for an approval with no state before it, and for an entry on an entity with no lifecycle. Each refusal named its fix, and the agent read `access-rules.ts` to learn the shape of a record before it had them.
+
+- `rbac.md` → "The access record": a second complete record, a purchase order that an employee prepares and a Buyer issues, after the first. The gate is not an approval, `after` and `notAfter` place every state after it, an entity with no `workflow_state` has no entry, and a state that does not name its step takes a `verb`.
+- `scripts/access-rules.test.ts` reads the record from the file: it is valid, writes `spend:issue_purchase_order` and its sequence rule, is refused when `notAfter` is left out, and a state with no verb is refused until it has one.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## The Golden Rules come first in SKILL.md
+
+2026-11-14. Asked for by Martin Amm, after a recruiting build read the first 200 of the 508 lines of `SKILL.md` and never reached the Golden Rules. It created five label-column fields that Golden Rule 3 forbids (`writeModel` refused them twice), sent a `filters` object that Golden Rule 1 shows as a string, and ended on a line of text that Golden Rule 12 forbids.
+
+- `SKILL.md`: the Golden Rules stand before the reference table, within the first 90 lines, and a line after the introduction says to read the file to its last line before the first command. No rule changed; Golden Rule 6 says "below" where it said "above".
+- `flows.md` names Golden Rule 5 and sections of `SKILL.md` by name: all still there, so it is unchanged. No question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## A call-file.ts call that succeeds prints one line
+
+2026-11-14. Asked for by Martin Amm, after a recruiting build sent a `create_field` for 40 fields and the CLI printed all 40 rows, about 5 KB each. The agent cut the output with `head -c 2000` and read the first four fields, so the end of the response, where a failure would be, was never read.
+
+- `call-file.ts`: a call that exits 0 prints `create_field: 40 row(s) created (jobs.department, jobs.location, … +34 more)`, the rows' text keys (a table or a field id; never a number, which is read back from the host) and not the rows. A call that fails prints the CLI's output untouched, a response that is not a JSON array is printed as it is, and `--raw` prints the CLI's own output as before.
+- `SKILL.md` (the `call-file.ts` row) says so. `semantius-importer` sends `create_entity` through `call-file.ts` and reads no row of the response.
+- `scripts/call-file.test.ts` covers the line, the verbs, a number never listed, a response that is not an array, and `--raw` with `--check` in either order.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## A rollup's link_field is checked before anything is sent
+
+2026-11-14. Asked for by Martin Amm, after a recruiting build's `call-file.ts --check` printed "valid for create_field" for a rollup the platform then refused with `90262`: `jobs.interviews_count` counted through `interviews.application_id`, which points at the applications, not at the jobs. The failed `create_field` cost 15 s, then a patch, a rebuild and a second check (12 s) and a second `create_field` (19 s).
+
+- `call-file.ts` → `rollupRelationshipProblems`: a rollup's `link_field` must be a `reference` or `parent` field of the child that points at the rollup's own entity (a child that is the entity itself, a tree, passes). A field that points elsewhere is refused with where it points, the child's field that does point at the entity when there is one, and the two ways out (the rollup on the entity the field points at, or a field of the child that points at this one); a field of another format (`90262`) and a field that does not exist (`90264`) are named too. The message names the facts and the ways out and picks none: which one fits is the user's model.
+- `call-file.ts --check` and a send take the relationship field from the payload, and from the host (`read_field`, `table_name,field_name,format,reference_table`) when the payload lacks it, as when a rollup is added to a module that exists. A host that cannot be read sends nothing. `writeModel` (`modelProblems`) checks the model's own entities and names no table of the host, which it cannot see.
+- `data-modeling.md` ("Mandatory Creation Order": what `call-file.ts` and `writeModel` refuse), `rollup-fields.md` ("Creating one") and the `call-file.ts` row of `SKILL.md` say so.
+- `scripts/call-file.test.ts` and `scripts/jsonlogic-kit.test.ts` cover the recruiting case, the case with a direct field, a tree, a field of another format, a field that does not exist, the host read and a host that cannot be read.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
+## The seed's report says that the final response comes next
+
+2026-11-13. Asked for by Martin Amm, after a recruiting build stopped a second time. The seed had finished (`Report finished: 52 record(s) in 5 table(s)`), and the agent sent "All 52 demo records are live — final verification and handover." as a response of its own, with Golden Rule 12 in the skill it had read. Before the final response there is no tool call left to carry a line of text, so an announcement there always ends the turn, and a rule read at the start of the run did not stop it.
+
+- `seed-lib.ts --report`: the last line of its output says what comes next. After a complete seed: this was the last step, and the next response is the final response itself. When records of the file are not on the host: run the seed command again.
+- `SKILL.md` → Golden Rule 12: once the last tool call of a sequence has returned, the next response is the final response itself.
+- `seed-data.md` → "Report" and `build-module.md` → "Verify, then stop" say that the report prints `Report finished` and then what comes next.
+- `scripts/seed-lib.test.ts` covers both last lines.
+
+`flows.md` is unchanged: no question, step or order changed. The file format is unchanged; `version` stays `3.1`.
+
 ## A sample-data file that is not valid JSON is refused with the place of the mistake
 
 2026-11-13. Asked for by Martin Amm, after a recruiting seed stopped at its first step with `seed_recruiting.json cannot be read as JSON: JSON Parse error: Unable to parse JSON string`. The runtime's parser says that when something follows the end of the document, such as one closing bracket too many, and names no line in any version.

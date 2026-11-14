@@ -24,7 +24,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { coverageProblems, labelColumnProblems, lifecycleNameProblems, lifecyclesOf, planAccess, shapeProblems, type AccessRecord } from "./access-rules";
-import { FIELD_FORMATS as FORMATS, fieldProblems, iconProblems, keyProblems, madeFieldProblems, type EntityInfo } from "./call-file";
+import { FIELD_FORMATS as FORMATS, fieldProblems, iconProblems, keyProblems, madeFieldProblems, rollupRelationshipProblems, type EntityInfo } from "./call-file";
 import { relationshipProblems, type RelationshipRecord } from "./relationship-rules";
 
 export type Logic = unknown;
@@ -259,7 +259,8 @@ const NO_EMPTY_VALUE = new Set(["boolean", "integer", "int32", "int64", "number"
 /**
  * Every problem of a new model's entities and fields, checked together before anything is written:
  * - the field checks of `call-file.ts` (a field `create_entity` already made, a required reference with `clear`, a
- *   rollup over hidden rows) and its icons;
+ *   rollup over hidden rows, a rollup whose `link_field` is not a relationship field of the child that points at the
+ *   rollup's own entity) and its icons;
  * - a field its `input_type_rule` makes required in some states, with no validation rule of its entity that reads it
  *   (`data-modeling.md` → "Fields that apply only to some enum or boolean values");
  * - a field its `input_type_rule` shows `readonly` while no `computed_fields` rule of its entity fills it;
@@ -274,6 +275,7 @@ export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArra
   const out = [
     ...keyProblems("create_entity", entities), ...keyProblems("create_field", fields),
     ...iconProblems(entities, fields), ...madeFieldProblems(fields, byTable as Map<string, EntityInfo>), ...fieldProblems(fields, byTable as Map<string, EntityInfo>),
+    ...rollupRelationshipProblems(fields, [], new Set(byTable.keys())),
   ];
   const fieldsOf = new Map<string, Set<string>>();
   for (const f of fields) {

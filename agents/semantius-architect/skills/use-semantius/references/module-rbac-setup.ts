@@ -45,7 +45,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { checkedPermissions, closest } from "./permission-names";
-import { PREFIX_RULE, prefixRuleProblem } from "./call-file";
+import { PREFIX_RULE, prefixRuleProblem, singularsOf } from "./call-file";
 import { planAccess, sameJson } from "./access-rules";
 
 type Row = Record<string, any>;
@@ -165,7 +165,22 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
   };
 
   const { slug } = o;
-  const modules = await read("read_module", { select: MODULE_COLUMNS });
+  const permissionOf = (level: string) => `${slug}:${level}`;
+  const roleSlugOf = (tier: string) => `${slug.replace(/-/g, "_")}_${tier}`;
+  const permissionNames = TIERS.map((t) => permissionOf(t.level));
+  const roleSlugs = TIERS.map((t) => roleSlugOf(t.tier));
+  const hierarchy = [[permissionOf("manage"), permissionOf("read")], [permissionOf("admin"), permissionOf("manage")]];
+
+  // Each round trip to the host costs seconds, so the reads that do not depend on each other go out together: first
+  // the module, with what needs only the slug; then what is filtered by the module's id; the grants need the role ids.
+  const roleColumns = { filters: `slug=in.(${roleSlugs.join(",")})`, select: "id,slug,module_id" };
+  const [modules, livePermissions, firstRoles, firstHierarchy, rollupRows] = await Promise.all([
+    read("read_module", { select: MODULE_COLUMNS }),
+    read("read_permission", { filters: `permission_name=in.(${permissionNames.join(",")})`, select: "permission_name,module_id" }),
+    read("read_role", roleColumns),
+    read("read_permission_hierarchy", { filters: `including_permission_name=ilike.${slug}:*`, select: "including_permission_name,included_permission_name" }),
+    o.access ? read("read_field", { filters: "ctype=eq.rollup", select: "id,table_name,rollup" }) : Promise.resolve([] as Row[]),
+  ]);
   const live = modules.find((m) => m.module_slug === slug);
   if (!live) {
     const missing = [["--name", o.name], ["--description", o.description], ["--icon", o.icon]].filter(([, v]) => !v).map(([flag]) => flag);
@@ -173,21 +188,14 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
   }
 
   const name: string = o.name ?? live!.module_name;
-  const permissionOf = (level: string) => `${slug}:${level}`;
-  const roleSlugOf = (tier: string) => `${slug.replace(/-/g, "_")}_${tier}`;
-  const permissionNames = TIERS.map((t) => permissionOf(t.level));
-  const roleSlugs = TIERS.map((t) => roleSlugOf(t.tier));
-  const hierarchy = [[permissionOf("manage"), permissionOf("read")], [permissionOf("admin"), permissionOf("manage")]];
-
-  // The reads that do not depend on each other go out together; the grants need the role ids.
-  const roleColumns = { filters: `slug=in.(${roleSlugs.join(",")})`, select: "id,slug,module_id" };
-  let [firstEntities, livePermissions, firstRoles, moduleHierarchy, moduleRoles] = await Promise.all([
-    live ? read("read_entity", { filters: `module_id=eq.${live.id}`, select: ENTITY_COLUMNS }) : Promise.resolve([] as Row[]),
-    read("read_permission", { filters: `permission_name=in.(${permissionNames.join(",")})`, select: "permission_name,module_id" }),
-    read("read_role", roleColumns),
-    read("read_permission_hierarchy", { filters: `including_permission_name=ilike.${slug}:*`, select: "including_permission_name,included_permission_name" }),
-    live ? read("read_role", { filters: `module_id=eq.${live.id}`, select: "id,slug,module_id" }) : Promise.resolve([] as Row[]),
-  ]);
+  const [firstEntities, firstModuleRoles] = live
+    ? await Promise.all([
+      read("read_entity", { filters: `module_id=eq.${live.id}`, select: ENTITY_COLUMNS }),
+      read("read_role", { filters: `module_id=eq.${live.id}`, select: "id,slug,module_id" }),
+    ])
+    : [[] as Row[], [] as Row[]];
+  let moduleHierarchy = firstHierarchy;
+  let moduleRoles = firstModuleRoles;
   let entities = firstEntities;
   let liveRoles = firstRoles;
   const roleBySlug = (s: string) => liveRoles.find((r) => r.slug === s);
@@ -242,7 +250,13 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
   const missingHierarchy = hierarchy.filter(([a, b]) => !heldHierarchy.has(`${a}>${b}`));
   const missingRoles = TIERS.filter((t) => !roleBySlug(roleSlugOf(t.tier)));
   const grantRoleIds = [...new Set([...liveRoles, ...moduleRoles].map((r) => r.id))];
-  let liveGrants = grantRoleIds.length ? await read("read_role_permission", { filters: `role_id=in.(${grantRoleIds.join(",")})`, select: "role_id,permission_name" }) : [];
+  const accessTables = entities.map((e) => e.table_name);
+  // With --access the module's fields are read in the same round trip as the grants: neither needs the other.
+  const [firstGrants, accessFields] = await Promise.all([
+    grantRoleIds.length ? read("read_role_permission", { filters: `role_id=in.(${grantRoleIds.join(",")})`, select: "role_id,permission_name" }) : Promise.resolve([] as Row[]),
+    o.access && live && accessTables.length ? read("read_field", { filters: `table_name=in.(${accessTables.join(",")})`, select: FIELD_COLUMNS }) : Promise.resolve([] as Row[]),
+  ]);
+  let liveGrants = firstGrants;
   const heldGrants = new Set(liveGrants.map((g) => `${g.role_id}>${g.permission_name}`));
   const grantHeld = (t: (typeof TIERS)[number]) => {
     const role = roleBySlug(roleSlugOf(t.tier));
@@ -307,21 +321,19 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
     } catch (e) {
       throw new Exit(2, `${o.access} is not a readable JSON access record: ${e instanceof Error ? e.message : e}`);
     }
-    const tables = entities.map((e) => e.table_name);
-    const [fields, rollups] = await Promise.all([
-      tables.length ? read("read_field", { filters: `table_name=in.(${tables.join(",")})`, select: FIELD_COLUMNS }) : Promise.resolve([] as Row[]),
-      read("read_field", { filters: "ctype=eq.rollup", select: "id,table_name,rollup" }),
-    ]);
-    const plan = planAccess({ slug, moduleName: name, record, entities: entities as any, fields: fields as any, otherRollups: rollups as any });
+    const plan = planAccess({ slug, moduleName: name, record, entities: entities as any, fields: accessFields as any, otherRollups: rollupRows as any });
     if (plan.problems.length) throw new Exit(2, `${o.access}: nothing was written; fix the access record and run this again:\n${plan.problems.map((p) => `  - ${p}`).join("\n")}`);
 
     const wantedPermissions = plan.permissions.map((p) => p.permission_name);
-    const heldAccess = wantedPermissions.length ? await read("read_permission", { filters: `permission_name=in.(${wantedPermissions.map(pgValue).join(",")})`, select: "permission_name,module_id" }) : [];
+    const accessRoleColumns = { filters: `slug=in.(${plan.roles.map((r) => r.slug).join(",") || "none"})`, select: "id,slug,module_id" };
+    const [heldAccess, firstAccessRoles] = await Promise.all([
+      wantedPermissions.length ? read("read_permission", { filters: `permission_name=in.(${wantedPermissions.map(pgValue).join(",")})`, select: "permission_name,module_id" }) : Promise.resolve([] as Row[]),
+      plan.roles.length ? read("read_role", accessRoleColumns) : Promise.resolve([] as Row[]),
+    ]);
     for (const p of heldAccess) if (p.module_id !== live.id) print(`warning: permission ${p.permission_name} is held by another module (id ${p.module_id}); the record names it as this module's`);
     const newPermissions = plan.permissions.filter((p) => !heldAccess.some((h) => h.permission_name === p.permission_name));
     const newHierarchy = plan.hierarchy.filter(([x, y]) => !heldHierarchy.has(`${x}>${y}`));
-    const accessRoleColumns = { filters: `slug=in.(${plan.roles.map((r) => r.slug).join(",") || "none"})`, select: "id,slug,module_id" };
-    let accessRoles = plan.roles.length ? await read("read_role", accessRoleColumns) : [];
+    let accessRoles = firstAccessRoles;
     for (const r of accessRoles) if (r.module_id !== live.id) print(`warning: role ${r.slug} belongs to another module (id ${r.module_id})`);
     const newRoles = plan.roles.filter((r) => !accessRoles.some((x) => x.slug === r.slug));
     const accessGrants = accessRoles.length ? await read("read_role_permission", { filters: `role_id=in.(${accessRoles.map((r) => r.id).join(",")})`, select: "role_id,permission_name" }) : [];
@@ -376,17 +388,18 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
     if (accessChanged) changed = true;
     if (accessChanged && !o.dryRun) {
       // The report and the checks below read the module as these writes left it.
-      const [again, moduleNow, hierarchyNow, rolesNow] = await Promise.all([
+      const [again, moduleNow, hierarchyNow, rolesNow, rolesBySlug] = await Promise.all([
         read("read_entity", { filters: `module_id=eq.${live.id}`, select: ENTITY_COLUMNS }),
         read("read_module", { filters: `module_slug=eq.${slug}`, select: "access_scope" }),
         read("read_permission_hierarchy", { filters: `including_permission_name=ilike.${slug}:*`, select: "including_permission_name,included_permission_name" }),
         read("read_role", { filters: `module_id=eq.${live.id}`, select: "id,slug,module_id" }),
+        read("read_role", roleColumns),
       ]);
       entities = again;
       scope = moduleNow[0]?.access_scope ?? scope;
       moduleHierarchy = hierarchyNow;
       moduleRoles = rolesNow;
-      liveRoles = await read("read_role", roleColumns);
+      liveRoles = rolesBySlug;
       const ids = [...new Set([...liveRoles, ...moduleRoles].map((r) => r.id))];
       liveGrants = ids.length ? await read("read_role_permission", { filters: `role_id=in.(${ids.join(",")})`, select: "role_id,permission_name" }) : [];
       reread = true;
@@ -415,12 +428,13 @@ async function setup(o: Options, transport: Transport, out: (line: string) => vo
   }
   // A key prefix call-file.ts would have refused: an entity created past it, or before the rule.
   for (const e of entities.filter((x) => ["typeid", "is_a"].includes(x.id_type))) {
-    const wrong = prefixRuleProblem(e.id_prefix, [e.singular, e.singular_label, e.table_name]);
+    const singulars = singularsOf(e);
+    const wrong = prefixRuleProblem(e.id_prefix, singulars);
     if (!wrong) continue;
     const what = e.id_type === "is_a"
       ? "An is_a prefix never changes (90245): leave it."
       : "Change it with update_entity only on an entity this build created that has no records yet; leave any other entity's prefix as it is, because its records keep the old one.";
-    print(`warning: ${e.table_name}: id_prefix "${e.id_prefix}" ${wrong}; a key prefix is ${PREFIX_RULE} (data-modeling.md, "Choosing the key type"). ${what}`);
+    print(`warning: ${e.table_name}: id_prefix "${e.id_prefix}" ${wrong}; a key prefix is ${PREFIX_RULE}, here "${singulars[0]}" (data-modeling.md, "Choosing the key type"). ${what}`);
   }
   // The verify report of a module that has entities: what a build checks, read in the same run.
   if (live && entities.length) {

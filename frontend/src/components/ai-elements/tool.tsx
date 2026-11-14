@@ -149,6 +149,25 @@ const toolName = (part: ToolPart) =>
     ? part.toolName
     : part.type.split("-").slice(1).join("-");
 
+const flatten = (text: string) => text.replace(/\s+/g, " ").trim();
+
+const textOf = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? flatten(value) : undefined;
+
+/** Argument names that carry a raw shell command (the sandbox `bash` tool's
+ * `command`). Skipped by the first-string fallback in summarizeInput, so a
+ * command never stands in for a summary. */
+const RAW_COMMAND_KEYS: ReadonlySet<string> = new Set(["command"]);
+
+/** The model's own plain-language label for a call (its `description`
+ * argument), or undefined when it sent none — or has not streamed it yet.
+ * Unlike summarizeInput there is no fallback to another argument: the group
+ * line uses this to tell "the call labelled itself" from "nothing to show". */
+const callDescription = (input: ToolPart["input"]): string | undefined =>
+  input && typeof input === "object"
+    ? textOf((input as Record<string, unknown>).description)
+    : undefined;
+
 /** The most informative one-liner in a call's input, so a collapsed row reads
  * as "edit entities/technician.json" rather than just "edit". Precedence:
  *
@@ -161,29 +180,31 @@ const toolName = (part: ToolPart) =>
  *    an optional argument on every sandbox tool (main.ts
  *    `withCallDescription`), so it is what the collapsed row should say. The
  *    command itself stays in the row's Parameters panel.
- * 4. The first non-empty string value (a file path, a pattern, a command when
- *    the model sent no description).
+ * 4. The first non-empty string value (a file path, a pattern) — NEVER a raw
+ *    command (RAW_COMMAND_KEYS): a call that sent no description shows no
+ *    summary rather than its shell one-liner, which stays in the Parameters
+ *    panel. Asked for by Martin Amm, 2026-11-14.
  *
  * The keys are looked up by name, not by position, so the summary does not
  * depend on the order the model happened to emit the arguments in — which
  * also matters mid-stream, when `input` is a partial object. */
-const summarizeInput = (input: ToolPart["input"]): string | undefined => {
-  const flatten = (text: string) => text.replace(/\s+/g, " ").trim();
+const summarizeInput =(input: ToolPart["input"]): string | undefined => {
   if (typeof input === "string") return flatten(input) || undefined;
   if (!input || typeof input !== "object") return undefined;
   const record = input as Record<string, unknown>;
-  const text = (value: unknown) =>
-    typeof value === "string" && value.trim() ? flatten(value) : undefined;
   const { taskId, status } = record;
-  const subject = text(record.subject);
+  const subject = textOf(record.subject);
   if (typeof taskId === "string" || typeof taskId === "number") {
     const detail = typeof status === "string" ? ` → ${status}` : subject ? ` ${subject}` : "";
     return `#${taskId}${detail}`;
   }
   return (
     subject ??
-    text(record.description) ??
-    Object.values(record).map(text).find((value) => value !== undefined)
+    textOf(record.description) ??
+    Object.entries(record)
+      .filter(([key]) => !RAW_COMMAND_KEYS.has(key))
+      .map(([, value]) => textOf(value))
+      .find((value) => value !== undefined)
   );
 };
 
@@ -197,8 +218,13 @@ export type ToolCallGroupProps = {
   latest?: boolean;
   /** The model's own words for the run: the newest status note folded into
    * it (agent-chat.tsx toSegments). Shown in the summary slot in place of the
-   * input-derived summary — it says what the agent is doing in plain
-   * language, which is exactly what that slot is for. */
+   * input-derived summary once the run has settled — it says what the agent
+   * did in plain language, which is exactly what that slot is for. While a
+   * call is in flight, that call's own `description` takes the slot instead
+   * (the note is only the newest one the model wrote, so it can lag the call
+   * in flight — the model writes none for some calls; the description is the
+   * live progress); the note covers the moments before the description has
+   * streamed in and calls that send none. */
   caption?: string;
   className?: string;
 };
@@ -209,7 +235,9 @@ export type ToolCallGroupProps = {
  * the viewport with ~65px of repeated chrome each. While the run is live the
  * line names the call in flight; the transcript's latest group keeps naming
  * its last call once settled ("Ran bash  Downloading the blueprint  and 3
- * more" — the live line with its tense flipped), older groups keep the count.
+ * more" — the live line with its tense flipped, except that a folded status
+ * note, when there is one, leads once settled; see `caption`), older groups
+ * keep the count.
  * Expanding shows a slim row per call, and each row opens into the same
  * ToolInput/ToolOutput panels the per-call card used. Styled after
  * ReasoningTrigger so tool activity and "Thought for…" read as one family of
@@ -243,20 +271,26 @@ export const ToolCallGroup = ({ parts, latest, caption, className }: ToolCallGro
   // traded for a summary.
   const latestSettled =
     latest && !active && errorCount === 0 ? parts.at(-1) : undefined;
-  // The line names what is happening, not just which tool: while a call is
-  // in flight it carries that call's summary ("Running bash  Checking the
-  // workspace…" — read from the partial input as it streams), and a lone
-  // settled call keeps its summary so the common one-call case stays
-  // informative without a click.
-  const summary = caption
-    ? caption
-    : active
-    ? summarizeInput(active.input)
-    : latestSettled
-      ? summarizeInput(latestSettled.input)
-      : errorCount === 0 && single
-        ? summarizeInput(single.input)
-        : undefined;
+  // The line names what is happening, not just which tool. While a call is
+  // in flight: its own `description` ("Running bash  Checking the workspace"
+  // — read from the partial input as it streams), else the run's caption
+  // (the note covers the instant before the description has streamed in, and
+  // calls that send none), else the call's summarizeInput (never a raw
+  // command). Once settled the caption leads, so the line reads as the run's
+  // overall message ("Ran bash  Building all 6…  and 4 more"); a lone settled
+  // call keeps its summary so the common one-call case stays informative
+  // without a click. Asked for by Martin Amm, 2026-11-14: the live line
+  // showed the run's newest note, which lagged the call being run ("creating
+  // your 6 tables now" while the access gates were being written).
+  const summary = active
+    ? callDescription(active.input) ?? caption ?? summarizeInput(active.input)
+    : caption
+      ? caption
+      : latestSettled
+        ? summarizeInput(latestSettled.input)
+        : errorCount === 0 && single
+          ? summarizeInput(single.input)
+          : undefined;
   const label = active
     ? active.state === "approval-requested"
       ? `Awaiting approval · ${toolName(active)}`

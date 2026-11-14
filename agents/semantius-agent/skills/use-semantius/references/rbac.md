@@ -176,6 +176,33 @@ The record of a purchase request that an employee prepares, an Approver approves
 
 A state is the person's key, or `{ "by": "<person>", … }` when the gate needs more. A gate that other states follow in the `workflow_state` order always needs more: `after` or `notAfter` places each of them.
 
+The record of a purchase order that an employee prepares and a Buyer issues. The gate is not an approval, so it has no waiting state, and every state after `issued` is placed: `received` and `closed` are reached only once the order was issued, `canceled` also from a draft. `suppliers`, which has no `workflow_state`, has no entry in `entities`:
+
+```json
+{
+  "products": ["Coupa", "SAP Ariba"],
+  "people": { "employee": "employee", "buyer": "buyer", "supplier": "outside" },
+  "everyday": "employee",
+  "roles": {
+    "buyer": { "title": "Buyer" }
+  },
+  "nobodyDoesPart": "every employee who uses it prepares orders, which is its everyday work",
+  "entities": {
+    "purchase_orders": {
+      "states": {
+        "draft": "employee",
+        "issued": { "by": "buyer", "after": ["received", "closed"], "notAfter": ["canceled"] },
+        "received": "employee",
+        "closed": "employee",
+        "canceled": "employee"
+      }
+    }
+  }
+}
+```
+
+`issued` names its step, so the gate is `spend:issue_purchase_order` and the record writes no `verb`. A state that does not name its step (`on_hold`, `in_review`) takes one: `{ "by": "<person>", "verb": "hold" }`.
+
 | Key | Meaning |
 |---|---|
 | `by` | The person, or a list of people, who move a record into the state; `"admin"` when only an admin does |

@@ -31,7 +31,7 @@ The rollup field's `format` must fit the result (`90268`):
 
 ## Creating one
 
-The child entity must already exist, and `link_field`, `value_field` and every field the `filter` reads must exist or come earlier in the same `create_field` array, so a rollup goes last, in the model's one `create_field` call or a later one. A rollup ahead of its `link_field` or `value_field` fails with `90264`, one ahead of a field its filter reads fails with `90265`, and nothing in the call lands. Several rollups can go in one `create_field` array.
+The child entity must already exist, and `link_field`, `value_field` and every field the `filter` reads must exist or come earlier in the same `create_field` array, so a rollup goes last, in the model's one `create_field` call or a later one. A rollup ahead of its `link_field` or `value_field` fails with `90264`, one ahead of a field its filter reads fails with `90265`, and nothing in the call lands. Several rollups can go in one `create_field` array. `writeModel` and `call-file.ts` refuse a `link_field` that is not a `reference` or `parent` field of the child pointing at the rollup's own entity (`90262`), or that names no field (`90264`), before anything is sent: a count of interviews on the job openings needs a field of the interviews that points at the job openings, and a field that points at the applications puts the count on the applications.
 
 `.tmp_deploy/orders-rollups.json`:
 

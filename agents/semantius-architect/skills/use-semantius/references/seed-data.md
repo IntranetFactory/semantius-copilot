@@ -31,19 +31,19 @@ Write it as `.tmp_deploy/seed_<module_slug>.json`, with your file-write tool:
 ```json
 { "version": 1, "entities": [
   { "entity": { "table_name": "vendors" }, "records": [
-    { "id": "ven_sr1", "vendor_name": "Adobe", "website": "https://www.adobe.com", "support_email": "support@adobe.example.com" },
-    { "id": "ven_sr2", "vendor_name": "Figma", "website": "https://www.figma.com", "support_email": "support@figma.example.com" }
+    { "id": "vendor_sr1", "vendor_name": "Adobe", "website": "https://www.adobe.com", "support_email": "support@adobe.example.com" },
+    { "id": "vendor_sr2", "vendor_name": "Figma", "website": "https://www.figma.com", "support_email": "support@figma.example.com" }
   ] },
   { "entity": { "table_name": "contracts" }, "records": [
-    { "id": "con_sr1", "contract_name": "Adobe Creative Cloud for Teams", "vendor_id": "ven_sr1", "workflow_state": "active", "end_date": "2027-03-31", "notes": "Renews automatically." },
-    { "id": "con_sr2", "contract_name": "Adobe Acrobat Pro", "vendor_id": "ven_sr1", "workflow_state": "expired", "end_date": "2026-08-31", "notes": "Not renewed." },
-    { "id": "con_sr3", "contract_name": "Figma Organization", "vendor_id": "ven_sr2", "workflow_state": "active", "end_date": "2027-06-30", "notes": "Renews automatically." }
+    { "id": "contract_sr1", "contract_name": "Adobe Creative Cloud for Teams", "vendor_id": "vendor_sr1", "workflow_state": "active", "end_date": "2027-03-31", "notes": "Renews automatically." },
+    { "id": "contract_sr2", "contract_name": "Adobe Acrobat Pro", "vendor_id": "vendor_sr1", "workflow_state": "expired", "end_date": "2026-08-31", "notes": "Not renewed." },
+    { "id": "contract_sr3", "contract_name": "Figma Organization", "vendor_id": "vendor_sr2", "workflow_state": "active", "end_date": "2027-06-30", "notes": "Renews automatically." }
   ] }
 ] }
 ```
 
-- **Ids.** A record names itself `<prefix>_sr<n>`: its entity's prefix, `_sr`, and a number from 1 (`ven_sr1`, `ven_sr2`). `--describe` gives each table's first id. The import stores a full id built from that name. A junction's records take the numbers 1, 2, 3.
-- **Relationships.** A relationship column holds the id of the record it means, as that record writes it: `"vendor_id": "ven_sr1"`. Never a label and never an id you made up. A record that is already on the host is named by its stored id.
+- **Ids.** A record of an entity with a TypeID key names itself `<prefix>_sr<n>`: its entity's prefix, `_sr`, and a number from 1 (`vendor_sr1`, `vendor_sr2`). `--describe` gives each table's first id. The import stores a full id built from that name. The records of an entity with an `auto_increment` key take the numbers 1, 2, 3.
+- **Relationships.** A relationship column holds the id of the record it means, as that record writes it: `"vendor_id": "vendor_sr1"`. Never a label and never an id you made up. A record that is already on the host is named by its stored id.
 - **Users.** A column that references `users` takes `{"external_id": "…"}` of a user `--describe` lists, or `null`. Never invent a user.
 - **Columns.** Every record of a table carries the same columns, the `id` among them.
   - An empty value is `""` for text and `0` for a number.
@@ -70,7 +70,7 @@ bun "<skill-folder>/references/seed-lib.ts" --emails "$F" \
 
 If `semantius` is not found, put its folder on PATH in the same command (`cli-usage.md` → "Installing from an agent").
 
-1. **The file and its email addresses.** The step reads the file first. A file that is not valid JSON is refused with the line and column of the mistake and the lines around it: fix that place, never write the file again. Then every email address in it is at a subdomain of example.com, so sample data never reaches a real inbox; the step lists every other address. It writes nothing.
+1. **The file and its email addresses.** The step counts the run first (below), then reads the file. A file that is not valid JSON is refused with the line and column of the mistake and the lines around it: fix that place, never write the file again. Then every email address in it is at a subdomain of example.com, so sample data never reaches a real inbox; the step lists every other address. It writes nothing.
 2. **The check** writes nothing. It reads the file and the catalog and lists every problem in one answer: an unknown column, a required value that is missing, a value an enum does not have, an id used twice, a relationship that names no record.
 3. **The import** writes the records. The check does not evaluate the module's rules, so the import can still stop at one record that a validation rule, an approval gate or an `input_type_rule` refuses. The records written before it stay.
 4. **The report** reads the records back: each table's count, each column the platform filled with its number of distinct values, and each parent state with the states of its child records.
@@ -80,7 +80,8 @@ If `semantius` is not found, put its folder on PATH in the same command (`cli-us
 - Fix every listed problem in one edit, with your file-edit tool, or `edit-file.ts` when there is none (`cli-usage.md` → "Ad-hoc JSON and file work in Bun"). Never write the whole file again, and never use Python.
 - After the import stopped at a record, the next run skips the records that are already there and goes on from it.
 - Fix the record, never the rule. The one exception is an approval stamp on a state the gate leaves out ("Approval stamps").
-- **A problem that comes back ends the seed.** When a run names a problem that the run before it named and you had changed the file for it, do not run a third time. Finish the build, and say in the final response which tables hold records and what stopped the rest (`build-module.md` → "Final response").
+- **The command stops itself.** The first step counts each run of the command for the file in `.tmp_deploy/seed-runs.json`, and a finished report ends the count. Ten runs go on; the eleventh, with no finished report between, prints `SEED STOPPED` and exits 5, and so does every later one. Then run nothing more, write nothing to the tables by hand, and do what the next point says. Run the command as one chain: every `--emails` run counts, also one sent alone. Only the user can allow more runs, by deleting `seed-runs.json`.
+- **The same problem on five runs in a row ends the seed.** When five runs in a row name the same problem, although you changed the file for it between them, do not run a sixth time (Golden Rule 13). Finish the build, and say in the final response which tables hold records and what stopped the rest (`build-module.md` → "Final response").
 
 No other write path: no hand-run `postgrestRequest` inserts, no probe or test records.
 
@@ -128,7 +129,7 @@ A record written straight into a state at or past an approval (`approved`, `orde
 
 ## Report
 
-Report sample data only from a command that ran through to the report, which ends `Report finished: <n> record(s) in <k> table(s) on the host.`
+Report sample data only from a command that ran through to the report, which prints `Report finished: <n> record(s) in <k> table(s) on the host.` Its last line says what comes next: after a complete seed, the final response itself, with no other message before it.
 
 - State how many records each table holds, from its `✓ <table>: <n> records` lines.
 - Name every line under `Look at`: a column that holds one value on every record, or records of the file that are not on the host.

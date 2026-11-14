@@ -187,7 +187,15 @@ doesn't flip the line above it back). A group with a failed call keeps "N tool c
 failed" + red icon and auto-opens, latest or not.
 The text on a row/line is `summarizeInput`: `#id → status` for task ops, else the call's
 `subject` (TaskCreate), else its `description`, else its first string argument (a path, a
-pattern). `description` is what makes a row read as plain language rather than a
+pattern) — never a raw `command` (`RAW_COMMAND_KEYS`): a `bash` call with no description shows
+no summary, and the command stays in the Parameters panel. On a group line that has a folded
+status note (`caption`, see "Dropping text next to tool calls"), the live line shows the
+in-flight call's own `description` first (else the note, else `summarizeInput`), and the
+settled line shows the note — the note is only the newest one the model wrote, so it can lag
+the call in flight (the model writes none before some calls); the description is the live
+progress. Both rules asked for by Martin Amm, 2026-11-14, after live lines showed a note
+that did not match the running call ("Running bash  Model checks pass — creating your 6
+tables now." while the in-flight call was "Write access gates and roles"). `description` is what makes a row read as plain language rather than a
 600-character shell one-liner or a long path. Flue's own tool schemas declare none, so
 `sandboxToolsWithBashFloor` (`backend-b/src/agents/main.ts`) adds an optional
 `description` ("a short plain-language label for this call…") to all six sandbox tools
@@ -199,7 +207,9 @@ workspace contents", "Checking available skills"). The label does not replace Mu
 text (still written 5/5, see "Dropping text next to tool calls"): it is one neutral label
 per call, the status text one sentence per response. The row prefers the label, keeping the
 command itself one click away in the Parameters panel (a call without one falls back to its
-first string argument).
+first string argument, except a raw `command`).
+Untested: nothing runs `tool.tsx`'s summary rules (no test covers them, and the UI was not
+exercised after the 2026-11-14 change); it was type-checked only, `tool.tsx` clean.
 
 ## Layout
 
@@ -1755,7 +1765,9 @@ gap (design: `add_backup_restore_plan.md`):
   happens (which by construction captures every coalesced mutation), and starts are
   spaced ≥1.5 s so the session-record write stays under KV's 1 write/s/key. Each run: the
   sandbox SDK builds a squashfs archive of `/workspace` (excludes `.agents`, `.tmp_admin`,
-  `.tmp_deploy`, `.restored`) into the `BACKUP_BUCKET` R2 bucket, the `session_backup`
+  `.restored`; `.tmp_deploy` is included since 2026-11-13, asked for by Martin Amm, because
+  deploy scripts live across container resets and a failed run's script is kept there for
+  inspection — see `core/src/backup.js`) into the `BACKUP_BUCKET` R2 bucket, the `session_backup`
   node lands on THE session record, and the previous archive is deleted — exactly ONE
   backup per session, `meta.name` = the full session id (the join every consumer uses).
   A persist **refuses** a container without the `.restored` marker (`status:

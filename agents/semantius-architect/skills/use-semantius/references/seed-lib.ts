@@ -10,17 +10,20 @@
  *   bun seed-lib.ts --describe <table>[,<table>…]   the file's skeleton and what a record of each table carries
  *   bun seed-lib.ts --emails <file>                 before the import: the file is valid JSON (a mistake is named
  *                                                   with its line, through jq), and every email address is at a
- *                                                   subdomain of example.com, so sample data never reaches a real inbox
+ *                                                   subdomain of example.com, so sample data never reaches a real inbox.
+ *                                                   It starts every run of the seed command, so it also counts the runs:
+ *                                                   an eleventh run without a finished report prints SEED STOPPED, exit 5
  *   bun seed-lib.ts --report <file>               after the import: the records on the host, the columns the platform
  *                                                   filled, and how parent and child states stand to each other
  *   bun seed-lib.ts --clear <file>                  deletes the file's records again, children first
  *
- * A record of an entity with a TypeID key names itself `<prefix>_sr<n>` (`cand_sr1`), in its id and in every
+ * A record of an entity with a TypeID key names itself `<prefix>_sr<n>` (`candidate_sr1`), in its id and in every
  * relationship to it. The import stores `<prefix>_0sr<n>` padded with `x` to 26 characters, and `--report` and
  * `--clear` pad the same way, because the platform refuses a read by the short form.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 type Row = Record<string, any>;
 
@@ -42,6 +45,7 @@ let transport: Transport = spawnTransport;
 export const setTransport = (t: Transport | null): void => {
   transport = t ?? spawnTransport;
   metaCache.clear();
+  moduleLoads.clear();
 };
 
 /** One `postgrestRequest` call. Throws on a non-zero exit, with what the platform said. */
@@ -152,7 +156,7 @@ function readJsonFile(path: string): any {
 const TYPEID_KEYS = new Set(["typeid", "is_a", "has_a"]);
 const SAMPLE_ID = /^([a-z](?:[a-z_]{0,61}[a-z])?)_sr([0-9]{1,23})$/;
 
-/** A sample id (`cand_sr1`) as the import stores it (`cand_0sr1xxxxxxxxxxxxxxxxxxxxxx`); anything else unchanged. */
+/** A sample id (`candidate_sr1`) as the import stores it (`candidate_0sr1xxxxxxxxxxxxxxxxxxxxxx`); anything else unchanged. */
 export function padSampleId(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const m = SAMPLE_ID.exec(value);
@@ -172,6 +176,8 @@ type TableMeta = { table: string; entity: Row; fields: Map<string, FieldMeta>; b
 const ENTITY_COLS = "table_name,module_id,id_type,id_prefix,id_refentity,label_column,computed_fields,select_rule";
 const FIELD_COLS = "table_name,field_name,format,input_type,input_type_rule,enum_values,default_value,ctype,reference_table,rollup";
 const metaCache = new Map<string, TableMeta>();
+/** The module reads in progress, by module id, so two tables of one module asked for together read it once. */
+const moduleLoads = new Map<string, Promise<void>>();
 
 /** The entity and fields of `table`, read once with every other entity of its module. */
 async function metaOf(table: string): Promise<TableMeta> {
@@ -187,6 +193,14 @@ async function metaOf(table: string): Promise<TableMeta> {
 async function loadModuleOf(table: string): Promise<void> {
   const [entity] =(await pgRequest("GET", `/entities?select=${ENTITY_COLS}&table_name=eq.${encodeURIComponent(table)}`)) ?? [];
   if (!entity) throw new Error(`${table} is not an entity on this host; check the table name (read_entity lists them)`);
+  if (entity.module_id === null || entity.module_id === undefined) return loadEntities(table, entity);
+  const key = String(entity.module_id);
+  if (!moduleLoads.has(key)) moduleLoads.set(key, loadEntities(table, entity));
+  await moduleLoads.get(key);
+  if (!metaCache.has(table)) await loadEntities(table, entity);
+}
+
+async function loadEntities(table: string, entity: Row): Promise<void> {
   const entities: Row[] = entity.module_id === null || entity.module_id === undefined
     ? [entity]
     : (await pgRequest("GET", `/entities?select=${ENTITY_COLS}&module_id=eq.${encodeURIComponent(String(entity.module_id))}`)) ?? [];
@@ -299,8 +313,15 @@ function statePairs(metas: ReadonlyArray<TableMeta>): Array<{ parent: TableMeta;
 /** The file's skeleton and, for each table, what a record carries. */
 export async function describeTables(names: ReadonlyArray<string>): Promise<string> {
   const tables = names.map((n) => n.trim().replace(/^\//, "")).filter(Boolean);
-  const metas: TableMeta[] = [];
-  for (const t of tables) metas.push(await metaOf(t));
+  // Each round trip to the host costs seconds: the tables are read together, then the tables they relate to and the users.
+  const metas = await Promise.all(tables.map((t) => metaOf(t)));
+  const described = metas.flatMap((m) => [...writtenFields(m).values()].filter((f) => f.field_name !== "id" && !(platformFills(m, f.field_name) || ["id", "audit", "core"].includes(f.ctype))));
+  const targets = [...new Set(described.filter((f) => isRelationship(f) && f.reference_table !== "users").map((f) => f.reference_table))];
+  const usersNamed = described.some((f) => isRelationship(f) && f.reference_table === "users");
+  const [, usersRead] = await Promise.all([
+    Promise.all(targets.map((t) => metaOf(t))),
+    usersNamed ? Promise.all([currentUserId(), pgRequest("GET", "/users?select=id,display_name,external_id&order=id&limit=20")]) : Promise.resolve(undefined),
+  ]);
   const out: string[] = [
     "The file, .tmp_deploy/seed_<module_slug>.json (tables in any order; the import writes parents first):",
     '{ "version": 1, "entities": [',
@@ -309,7 +330,6 @@ export async function describeTables(names: ReadonlyArray<string>): Promise<stri
     "Every record of a table carries the same columns, the id among them. A column the platform fills is never written.",
     "",
   ];
-  let usersNamed = false;
   for (const m of metas) {
     const never: string[] = [];
     const columns: string[] = [];
@@ -319,7 +339,7 @@ export async function describeTables(names: ReadonlyArray<string>): Promise<stri
       if (platformFills(m, f.field_name) || ["id", "audit", "core"].includes(f.ctype)) { never.push(f.field_name); continue; }
       const notes: string[] = [f.format];
       if (isRelationship(f)) {
-        if (f.reference_table === "users") { notes.push('a user: {"external_id": "…"} from the list below'); usersNamed = true; }
+        if (f.reference_table === "users") notes.push('a user: {"external_id": "…"} from the list below');
         else {
           const target = await metaOf(f.reference_table);
           notes.push(`the id of a record of ${f.reference_table}, such as ${idExample(target)}`);
@@ -360,9 +380,9 @@ export async function describeTables(names: ReadonlyArray<string>): Promise<stri
     for (const p of pairs) out.push(`  ${p.parent.table} and ${p.child.table} (through ${p.child.table}.${p.field})`);
     out.push("");
   }
-  if (usersNamed) {
-    const me = await currentUserId();
-    const users: Row[] = (await pgRequest("GET", "/users?select=id,display_name,external_id&order=id&limit=20")) ?? [];
+  if (usersRead) {
+    const [me, rows] = usersRead;
+    const users: Row[] = rows ?? [];
     out.push("Users a record may name:");
     for (const u of users) {
       if (!u.external_id) continue;
@@ -479,6 +499,7 @@ export async function reportSeed(path: string): Promise<string> {
   const look: string[] = [];
   const rows = new Map<string, Map<string, Row>>();
   let total = 0;
+  let notOnHost = 0;
 
   for (const t of tables) {
     const filled = [...fieldsOf(t.meta).values()].filter((f) => f.field_name !== "id" && !["audit", "core"].includes(f.ctype) && platformFills(t.meta, f.field_name));
@@ -488,6 +509,7 @@ export async function reportSeed(path: string): Promise<string> {
     rows.set(t.table, stored);
     total += stored.size;
     const missing = t.ids.filter((id) => !stored.has(String(id)));
+    notOnHost += missing.length;
     if (missing.length) {
       out.push(`✗ ${t.table}: ${stored.size} of ${t.ids.length} records are on the host`);
       look.push(`${t.table}: ${missing.length} record(s) of the file are not on the host (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}); run the import again`);
@@ -534,6 +556,15 @@ export async function reportSeed(path: string): Promise<string> {
 
   out.push("", `Report finished: ${total} record(s) in ${tables.length} table(s) on the host.`);
   if (look.length) out.push("Look at:", ...look.map((l) => `  - ${l}`));
+  if (!notOnHost) forgetSeedRuns(path);
+  // What comes next is said here, in the output the agent has just read: the one step with no tool call after it.
+  out.push(
+    "",
+    notOnHost
+      ? `Not finished: ${notOnHost} record(s) of the file are not on the host. Run the seed command again; send it as your next tool call.`
+      : "This was the last step. Your next response is the final response itself: write it now. " +
+        "Any other message sent first (that the records are in, that the handover comes next) ends the turn before the user has the result.",
+  );
   return out.join("\n");
 }
 
@@ -576,6 +607,53 @@ export async function clearSeed(path: string): Promise<string> {
   return out.join("\n");
 }
 
+// ─────────────────────────────── runs ───────────────────────────────
+
+/** The seed command runs this many times for one file without a finished report; the next run is refused. */
+export const SEED_RUN_LIMIT = 10;
+/** Beside the records file, so a run of another file or another build never counts against this one. */
+const runsFileOf = (path: string): string => join(dirname(path), "seed-runs.json");
+
+function readRuns(path: string): Record<string, number> {
+  try {
+    const doc = JSON.parse(readFileSync(runsFileOf(path), "utf8"));
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Counts one run of the seed command for `path` (its first step, `--emails`, starts every run). Returns the text that
+ * refuses the run once `SEED_RUN_LIMIT` runs have gone by without a finished report, and null otherwise. A seed that loops
+ * (fix the file, run again, the same platform refusal) ends here, in code, whatever the agent makes of the last answer.
+ */
+export function countSeedRun(path: string): string | null {
+  const runs = readRuns(path);
+  const key = basename(path);
+  const done = Number(runs[key]) || 0;
+  if (done >= SEED_RUN_LIMIT) {
+    return `SEED STOPPED: the seed command has run ${done} times for ${key} without a finished report, so it runs no more. ` +
+      `Do not run it again, and write nothing to the tables by hand. Finish the build, and say in the final response which tables hold records and what stopped the rest ` +
+      `(build-module.md → "Final response"). Only the user can allow more runs: they delete ${runsFileOf(path)}.`;
+  }
+  runs[key] = done + 1;
+  try { writeFileSync(runsFileOf(path), JSON.stringify(runs, null, 2)); } catch { /* a count that cannot be kept never blocks a seed */ }
+  return null;
+}
+
+/** A finished report ends the count of `path`: the seed is complete. */
+export function forgetSeedRuns(path: string): void {
+  const runs = readRuns(path);
+  const key = basename(path);
+  if (!(key in runs)) return;
+  delete runs[key];
+  try {
+    if (Object.keys(runs).length) writeFileSync(runsFileOf(path), JSON.stringify(runs, null, 2));
+    else rmSync(runsFileOf(path), { force: true });
+  } catch { /* nothing to keep */ }
+}
+
 // ─────────────────────────────── CLI ───────────────────────────────
 
 if (import.meta.main) {
@@ -589,7 +667,14 @@ if (import.meta.main) {
   const clear = arg("--clear");
   try {
     if (describe) console.log(await describeTables(describe.split(",")));
-    else if (emails) console.log(checkEmails(emails));
+    else if (emails) {
+      const stopped = countSeedRun(emails);
+      if (stopped) {
+        console.log(stopped);
+        process.exit(5);
+      }
+      console.log(checkEmails(emails));
+    }
     else if (report) console.log(await reportSeed(report));
     else if (clear) console.log(await clearSeed(clear));
     else {

@@ -32,13 +32,23 @@ export const BACKUP_PREFIX = 'backups/';
  *  - `.agents`     skills are bundle-sourced (KV) and re-provisioned on boot;
  *                  backing them up would break provisionAgentSkills' absent→
  *                  write sentinel semantics.
- *  - `.tmp_admin`, `.tmp_deploy`   the semantius agents' documented scratch
- *                  dirs — ephemeral by design.
+ *  - `.tmp_admin`   the semantius admin skill's run scratch dir. Originally
+ *                  excluded together with `.tmp_deploy` with no reason
+ *                  recorded beyond "ephemeral by design"; not revisited yet.
  *  - `.restored`   the restore marker (see backend-b/src/backups.ts); it must
  *                  never travel inside an archive or a restored workspace
  *                  would look already-reconciled on the NEXT cold boot.
+ *
+ * `.tmp_deploy` is deliberately NOT excluded (since 2026-11-13, asked for by
+ * Martin Amm): the modeler's deploy/seed scripts and their copied helpers
+ * live there for a whole build, which can span container resets (a
+ * 19-minute deploy cut off by a sandbox runtime update, README), and a
+ * failed run's script is kept there for the user to inspect. Excluding it
+ * lost both on every reset. Cost: up to ~300 KB of copied helpers
+ * (deploy-lib.ts, scaffold-lib.ts, lucide-icon-tags.json) per archive while
+ * a deploy is in progress.
  */
-export const BACKUP_EXCLUDES = ['.agents', '.tmp_admin', '.tmp_deploy', '.restored'];
+export const BACKUP_EXCLUDES = ['.agents', '.tmp_admin', '.restored'];
 
 /**
  * SDK-side ttl (checked only at restore time — no auto-GC). Generous on

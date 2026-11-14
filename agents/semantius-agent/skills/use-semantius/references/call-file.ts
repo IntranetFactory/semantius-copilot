@@ -22,12 +22,15 @@
  *   - a key the tool does not take (`required`, `data_type`, …) is refused with the key to write
  *     instead (PostgREST's PGRST204), and so is a value outside a key's list (`width`, `format`, …);
  *   - `label_parent` on `create_entity` (90226), an `id_prefix` that does not fit the `id_type`
- *     (23514), an `id_prefix` that is not 2 to 6 lowercase letters taken in order from the
- *     entity's singular, starting with its first letter, one prefix on two entities of the
- *     payload, and an `id_prefix` another entity on the host already has (23505) are refused;
+ *     (23514), an `id_prefix` that is not the entity's singular without digits, one prefix on
+ *     two entities of the payload, and an `id_prefix` another entity on the host already has
+ *     (23505) are refused;
  *   - a required `reference` with `reference_delete_mode: clear` is refused (the platform's 90257);
  *   - a rollup over rows that readers of its entity may not see, without `include_hidden_rows`,
  *     is refused (90269): the child's `select_rule` and both `view_permission`s are read from the host;
+ *   - a rollup whose `link_field` is not a `reference` or `parent` field of the child that points at the
+ *     rollup's own entity is refused (90262), and so is one whose field does not exist (90264): the field is
+ *     taken from the payload, and from the host when the payload does not carry it;
  *   - an `icon_name` or an enum entry's `icon` that is not a Lucide icon is refused, checked
  *     against `lucide-icon-tags.json` next to this file;
  *   - a `workflow_state` field (a create, or an update of its values) is refused unless `access.json`
@@ -38,9 +41,12 @@
  *     folder, the relationship record, has its entry and that entry's facts make it a parent
  *     (`relationship-rules.ts`); a row whose entry there names another format is refused too.
  *
- * Usage:   bun call-file.ts [--check] <tool> <file.json>
+ * Usage:   bun call-file.ts [--check] [--raw] <tool> <file.json>
  *          --check validates the file (the permission read included) and sends nothing.
- * Output:  the CLI's own stdout and stderr
+ *          --raw prints the CLI's response as it is, instead of the summary below.
+ * Output:  a call that succeeded prints one line: how many rows the tool wrote, and which (`create_field: 40 row(s)
+ *          created (jobs.department, jobs.location, … +34 more)`), not the rows themselves, which are about 5 KB each.
+ *          A call that failed prints the CLI's own output, untouched, and the CLI's stderr always passes through.
  * Exit:    the CLI's own exit code; 1 (the CLI's code for bad arguments) when the arguments
  *          are wrong, or the file cannot be read, is not valid JSON or fails a check
  */
@@ -51,7 +57,8 @@ import { coverageProblems, labelColumnProblems, lifecycleNameProblems, planAcces
 import { checkedPermissions, closest } from "./permission-names";
 import { relationshipProblems } from "./relationship-rules";
 
-export type Send = (tool: string, payload: string) => Promise<number>;
+/** Sends the payload to the tool and returns the CLI's exit code; `raw` prints the CLI's own output, otherwise a one-line summary of it. */
+export type Send = (tool: string, payload: string, raw?: boolean) => Promise<number>;
 /** The permissions on the host whose names are in `names`, or that start with one of `prefixes`; null when the read failed. */
 export type ReadPermissions = (names: ReadonlyArray<string>, prefixes: ReadonlyArray<string>) => Promise<string[] | null>;
 /** What the field checks need of an entity. */
@@ -60,6 +67,8 @@ export type EntityInfo = { table_name: string; view_permission?: string; select_
 export type ReadEntities = (tables: ReadonlyArray<string>) => Promise<EntityInfo[] | null>;
 /** The ids (`<table_name>.<field_name>`) among `ids` of the fields that exist on the host; null when the read failed. */
 export type ReadFields = (ids: ReadonlyArray<string>) => Promise<string[] | null>;
+/** The fields among `ids` (`<table_name>.<field_name>`) that exist on the host, with the relationship each holds; null when the read failed. */
+export type ReadFieldRefs = (ids: ReadonlyArray<string>) => Promise<FieldRef[] | null>;
 /** The entities on the host whose `id_prefix` is one of `prefixes`; null when the read failed. */
 export type ReadPrefixes = (prefixes: ReadonlyArray<string>) => Promise<Array<{ table_name: string; id_prefix: string }> | null>;
 
@@ -145,46 +154,34 @@ const ENTITY_KEY_HINTS: Record<string, string> = {
 };
 
 /** The key prefix rule (data-modeling.md → "Choosing the key type"), as the messages name it. */
-export const PREFIX_RULE = "2 to 6 lowercase letters taken in order from the entity's singular, starting with its first letter";
+export const PREFIX_RULE = "the entity's singular, without digits";
 
-/** The lowercase letters of a name: "Job Opening" and "job_openings" give "jobopening" and "jobopenings". */
-const lettersOf = (name: unknown): string => (typeof name === "string" ? name.toLowerCase().replace(/[^a-z]/g, "") : "");
-
-/** True when the letters of `prefix` appear in `word` in order, the first one being the first letter of `word`. */
-function takenFrom(prefix: string, word: string): boolean {
-  if (!word || prefix[0] !== word[0]) return false;
-  let i = 0;
-  for (const c of word) if (c === prefix[i] && ++i === prefix.length) return true;
-  return false;
-}
+/** A name as a key prefix: lowercase words joined by "_", digits left out ("Job Opening" and "job_opening" give "job_opening"). */
+const asPrefix = (name: unknown): string =>
+  typeof name === "string" ? name.toLowerCase().replace(/[0-9]/g, "").replace(/[^a-z]+/g, "_").replace(/^_+|_+$/g, "") : "";
 
 /**
- * What is wrong with `prefix` under the key prefix rule, or "" when it fits. `names` are the entity's names the prefix
- * may be taken from (`singular`, `singular_label`, `table_name`); it fits when one of them gives it.
+ * The prefixes an entity item may take: its `singular` and its `singular_label`; with neither, its `table_name`
+ * without the plural ending, the likeliest first ("companies" gives "company", "addresses" gives "address").
  */
-export function prefixRuleProblem(prefix: unknown, names: ReadonlyArray<unknown>): string {
-  if (typeof prefix !== "string" || !/^[a-z]{2,6}$/.test(prefix)) return "is not 2 to 6 lowercase letters";
-  const given = names.filter((n): n is string => typeof n === "string" && lettersOf(n) !== "");
-  if (!given.length || given.some((n) => takenFrom(prefix, lettersOf(n)))) return "";
-  return `is not taken in order from "${given[0]}", starting with its first letter`;
+export function singularsOf(it: any): string[] {
+  const named = [...new Set([it.singular, it.singular_label].map(asPrefix).filter(Boolean))];
+  if (named.length) return named;
+  const table = asPrefix(it.table_name);
+  const forms = /ies$/.test(table) ? [table.replace(/ies$/, "y")] : /(s|x|z|ch|sh)es$/.test(table) ? [table.replace(/es$/, "")] : [];
+  return [...new Set([...forms, table.replace(/s$/, "")].filter(Boolean))];
 }
 
-/** A prefix that fits the rule, for a message: the initials of a name of several words, a word of up to 6 letters whole, or its first four letters. */
-export function samplePrefix(name: string): string {
-  const words = name.toLowerCase().split(/[^a-z]+/).filter(Boolean);
-  if (words.length > 1) return words.map((w) => w[0]).join("").slice(0, 6);
-  const word = words[0] ?? "";
-  return word.length <= 6 ? word : word.slice(0, 4);
+/** What is wrong with `prefix` under the key prefix rule, or "" when it is one of the entity's `singulars`. */
+export function prefixRuleProblem(prefix: unknown, singulars: ReadonlyArray<string>): string {
+  if (!singulars.length || singulars.includes(String(prefix))) return "";
+  return `is not the entity's singular`;
 }
-
-/** The singular of an entity item, for a sample prefix: its `singular`, its `singular_label`, or its `table_name` without a final "s". */
-const singularOf = (it: any): string =>
-  [it.singular, it.singular_label].find((n) => typeof n === "string" && n.trim() !== "") ?? String(it.table_name ?? "").replace(/s$/, "");
 
 /**
  * Keys `tool` does not take on its items, values outside a key's list, and the creation rules the platform refuses or
  * the key prefix rule asks: `label_parent` on `create_entity` (90226), an `id_prefix` that does not fit the `id_type`
- * (23514), an `id_prefix` that breaks the key prefix rule, and one prefix on two entities of the payload (23505).
+ * (23514), an `id_prefix` that is not the entity's singular, and one prefix on two entities of the payload (23505).
  * `items` are the payload's field or entity items (`fieldItems`, `entityItems`).
  */
 export function keyProblems(tool: string, items: ReadonlyArray<any>): string[] {
@@ -210,19 +207,20 @@ export function keyProblems(tool: string, items: ReadonlyArray<any>): string[] {
     }
     const typed = ["typeid", "is_a"].includes(String(it.id_type));
     if (tool === "create_entity") {
-      if (it.id_prefix && !typed) out.push(`${where}: id_prefix is set but id_type is "${it.id_type ?? "auto_increment"}"; a prefix goes only with typeid or is_a (23514). Every new entity takes id_type "typeid" except a junction and a has_a entity (data-modeling.md, "Choosing the key type")`);
-      if (typed && !it.id_prefix) out.push(`${where}: id_type "${it.id_type}" needs an id_prefix: ${PREFIX_RULE}, such as "${samplePrefix(singularOf(it))}" (data-modeling.md, "Choosing the key type")`);
+      if (it.id_prefix && !typed) out.push(`${where}: id_prefix is set but id_type is "${it.id_type ?? "auto_increment"}"; a prefix goes only with typeid or is_a (23514). An entity takes typeid only in an is_a / has_a family or when the user asked for it (data-modeling.md, "Choosing the key type")`);
+      if (typed && !it.id_prefix) out.push(`${where}: id_type "${it.id_type}" needs an id_prefix: ${PREFIX_RULE}, here "${singularsOf(it)[0] ?? ""}" (data-modeling.md, "Choosing the key type")`);
     }
     if (isEntity && it.id_prefix && (typed || tool === "update_entity")) {
-      const wrong = prefixRuleProblem(it.id_prefix, [it.singular, it.singular_label, it.table_name]);
-      if (wrong) out.push(`${where}: id_prefix "${it.id_prefix}" ${wrong}; a key prefix is ${PREFIX_RULE}, such as "${samplePrefix(singularOf(it))}" (data-modeling.md, "Choosing the key type")`);
+      const singulars = singularsOf(it);
+      const wrong = prefixRuleProblem(it.id_prefix, singulars);
+      if (wrong) out.push(`${where}: id_prefix "${it.id_prefix}" ${wrong}; a key prefix is ${PREFIX_RULE}, here "${singulars[0]}" (data-modeling.md, "Choosing the key type")`);
     }
   }
   if (isEntity) {
     const tablesOf = new Map<string, string[]>();
     for (const it of items) if (typeof it.id_prefix === "string" && it.id_prefix !== "") tablesOf.set(it.id_prefix, [...(tablesOf.get(it.id_prefix) ?? []), String(it.table_name)]);
     for (const [prefix, tables] of tablesOf) {
-      if (tables.length > 1) out.push(`${tables.join(", ")}: each has the id_prefix "${prefix}", but a key prefix is unique among entities (23505); give each its own abbreviation of its singular (data-modeling.md, "Choosing the key type")`);
+      if (tables.length > 1) out.push(`${tables.join(", ")}: each has the id_prefix "${prefix}", but a key prefix is unique among entities (23505); entities with one singular are a name clash, so settle it with the user before anything is written (data-modeling.md, "Choosing the key type")`);
     }
   }
   return out;
@@ -266,6 +264,59 @@ export function fieldProblems(fields: ReadonlyArray<any>, entities: ReadonlyMap<
     if (why) {
       out.push(`${where}: the rollup aggregates ${childTable} rows that readers of ${f.table_name} may not see (${why}), so the platform refuses it without "include_hidden_rows": true (90269). Set "include_hidden_rows": true in its rollup, without asking, and name it in the final response (rollup-fields.md, "Hidden child rows"). Never leave the rollup out to get past this.`);
     }
+  }
+  return out;
+}
+
+/** The relationship a field holds: what a rollup's `link_field` is checked against. */
+export type FieldRef = { table_name: string; field_name: string; format?: string; reference_table?: string };
+
+/** The `link_field` of a rollup as `[child table, field]`, or null when the field has none. */
+export function rollupRelationshipOf(f: any): [string, string] | null {
+  const pair = f?.rollup?.link_field;
+  if (typeof pair !== "string") return null;
+  const dot = pair.indexOf(".");
+  return dot > 0 && dot < pair.length - 1 ? [pair.slice(0, dot), pair.slice(dot + 1)] : null;
+}
+
+/**
+ * A rollup's `link_field` names a `reference` or `parent` field of the child that points straight at the rollup's own
+ * entity (the platform's 90262; 90264 when the field does not exist). `fields` are the items being written: a field
+ * among them that carries its `format` is the relationship field. `host` holds the relationship fields read from the host
+ * for the rest. `modelTables`, when given, are the entities of a new model: a field absent from the model is then named
+ * only when its table is one of them, because a table of the host cannot be looked into without the host.
+ */
+export function rollupRelationshipProblems(fields: ReadonlyArray<any>, host: ReadonlyArray<FieldRef> = [], modelTables?: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  const own = fields.filter((f) => typeof f?.format === "string");
+  const find = (table: string, name: string): FieldRef | undefined =>
+    own.find((f) => f.table_name === table && f.field_name === name) ?? host.find((f) => f.table_name === table && f.field_name === name);
+  for (const f of fields) {
+    const pair = rollupRelationshipOf(f);
+    if (!pair) continue;
+    const [child, name] = pair;
+    const where = `${f.table_name}.${f.field_name}`;
+    const target = find(child, name);
+    if (!target) {
+      if (modelTables && !modelTables.has(child)) continue;
+      out.push(`${where}: the rollup's link_field ${child}.${name} is no field of ${child}${modelTables ? " in this model" : " in this payload or on the host"}, so the platform refuses it (90264). Create the relationship field first: a rollup goes after the field it reads, last in the create_field array (rollup-fields.md, "Creating one").`);
+      continue;
+    }
+    if (target.format !== "reference" && target.format !== "parent") {
+      out.push(`${where}: the rollup's link_field ${child}.${name} is a ${target.format} field, not a reference or parent field, so the platform refuses it (90262). It names the relationship field of ${child} that points at ${f.table_name} (rollup-fields.md, "The definition").`);
+      continue;
+    }
+    if (target.reference_table === f.table_name) continue;
+    const direct = [...new Set([...own, ...host].filter((x) => x.table_name === child && (x.format === "reference" || x.format === "parent") && x.reference_table === f.table_name).map((x) => `${child}.${x.field_name}`))];
+    const there = target.reference_table ? `on ${target.reference_table}` : "on the entity that field points at";
+    out.push(
+      `${where}: the rollup's link_field ${child}.${name} points at ${target.reference_table || "no entity"}, not at ${f.table_name}, so the platform refuses it (90262). ` +
+      `A rollup aggregates the child records that point straight at its own entity, and ` +
+      (direct.length
+        ? `${direct.join(", ")} ${direct.length === 1 ? "does" : "do"}. Name ${direct.length === 1 ? "it" : "one of them"} in link_field, or put the rollup ${there}`
+        : `no field of ${child} points at ${f.table_name}. Put the rollup ${there}, or add a field of ${child} that points at ${f.table_name}`) +
+      ` (rollup-fields.md, "The definition").`,
+    );
   }
   return out;
 }
@@ -429,11 +480,33 @@ export function expandedVars(value: unknown, out: string[] = [], perElement = fa
 
 const pgValue = (s: string): string => (/^[A-Za-z0-9_$.\-:@]+$/.test(s) ? s : `"${s.replace(/[\\"]/g, "\\$&")}"`);
 
-const spawnSend: Send = async (tool, payload) => {
-  const proc = Bun.spawn(["semantius", "call", "crud", tool], { stdin: "pipe", stdout: "inherit", stderr: "inherit" });
+/**
+ * A write's response as one line: how many rows landed, and which, by their natural names (a table or a field id).
+ * A create or update answers with every row it wrote, in full (about 5 KB per field), which fills the agent's context
+ * and invites cutting the output with `head`, which hides the end of it. A response that is not a JSON array is
+ * printed as it is, and `--raw` prints the CLI's own output.
+ */
+export function summarizeResponse(tool: string, out: string): string {
+  let rows: unknown;
+  try { rows = JSON.parse(out); } catch { return out.trimEnd(); }
+  if (!Array.isArray(rows)) return out.trimEnd();
+  const verb = tool.startsWith("create_") ? "created" : tool.startsWith("update_") ? "updated" : tool.startsWith("delete_") ? "deleted" : "returned";
+  // Only a text key: a number is a row id, which is read back from the host, never off the response (SKILL.md, "Response handling").
+  const names = rows.map((r: any) => (r && typeof r === "object" ? (r.id ?? r.table_name ?? r.permission_name) : undefined)).filter((k): k is string => typeof k === "string" && k !== "");
+  const shown = names.slice(0, 6).join(", ");
+  return `${tool}: ${rows.length} row(s) ${verb}${names.length ? ` (${shown}${names.length > 6 ? `, … +${names.length - 6} more` : ""})` : ""}. Add --raw to print the response itself.`;
+}
+
+const spawnSend: Send = async (tool, payload, raw = false) => {
+  const proc = Bun.spawn(["semantius", "call", "crud", tool], { stdin: "pipe", stdout: raw ? "inherit" : "pipe", stderr: "inherit" });
   proc.stdin.write(payload);
   proc.stdin.end();
-  return proc.exited;
+  if (raw) return proc.exited;
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  // A failed call prints what the CLI printed, untouched.
+  if (code === 0) console.log(summarizeResponse(tool, out));
+  else if (out.trim()) console.log(out.trimEnd());
+  return code;
 };
 
 const spawnRead: ReadPermissions = async (names, prefixes) => {
@@ -467,6 +540,16 @@ const spawnReadFields: ReadFields = async (ids) => {
   try { return (JSON.parse(out) as Array<{ id: string }>).map((r) => r.id); } catch { return null; }
 };
 
+const spawnReadFieldRefs: ReadFieldRefs = async (ids) => {
+  const args = JSON.stringify({ filters: `id=in.(${ids.map(pgValue).join(",")})`, select: "table_name,field_name,format,reference_table", limit: 1000 });
+  const proc = Bun.spawn(["semantius", "call", "crud", "read_field"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  proc.stdin.write(args);
+  proc.stdin.end();
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (code !== 0) return null;
+  try { return JSON.parse(out) as FieldRef[]; } catch { return null; }
+};
+
 const spawnReadPrefixes: ReadPrefixes = async (prefixes) => {
   const args = JSON.stringify({ filters: `id_prefix=in.(${prefixes.map(pgValue).join(",")})`, select: "table_name,id_prefix", limit: 1000 });
   const proc = Bun.spawn(["semantius", "call", "crud", "read_entity"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -482,7 +565,7 @@ export function prefixProblems(items: ReadonlyArray<any>, taken: ReadonlyArray<{
   return items.flatMap((it) => {
     const other = taken.find((t) => t.id_prefix === it.id_prefix && t.table_name !== it.table_name);
     return other
-      ? [`${it.table_name}: id_prefix "${it.id_prefix}" is already the key prefix of ${other.table_name} on this host, so the platform would refuse the call with 23505 (unique_current_id_prefix). Choose another abbreviation of its singular that is free: ${PREFIX_RULE} (data-modeling.md, "Choosing the key type").`]
+      ? [`${it.table_name}: id_prefix "${it.id_prefix}" is already the key prefix of ${other.table_name} on this host, so the platform would refuse the call with 23505 (unique_current_id_prefix). A prefix is ${PREFIX_RULE}, so this is a name clash: settle it with the user before anything is written (data-modeling.md, "Choosing the key type").`]
       : [];
   });
 }
@@ -545,9 +628,13 @@ export async function main(
   argv: string[], send: Send = spawnSend, printError: (line: string) => void = console.error,
   readPermissions: ReadPermissions = spawnRead, print: (line: string) => void = console.log,
   readEntities: ReadEntities = spawnReadEntities, readFields: ReadFields = spawnReadFields, readPrefixes: ReadPrefixes = spawnReadPrefixes,
+  readFieldRefs: ReadFieldRefs = spawnReadFieldRefs,
 ): Promise<number> {
-  const check = argv[0] === "--check";
-  const [tool, file, ...rest] = check ? argv.slice(1) : argv;
+  // --check and --raw come first, in either order; the tool and the file follow.
+  const afterFlags = argv.findIndex((a) => a !== "--check" && a !== "--raw");
+  const given = new Set(afterFlags < 0 ? argv : argv.slice(0, afterFlags));
+  const check = given.has("--check"), raw = given.has("--raw");
+  const [tool, file, ...rest] = afterFlags < 0 ? [] : argv.slice(afterFlags);
   if (!tool || !file || rest.length) {
     printError(USAGE);
     return 1;
@@ -607,6 +694,12 @@ export async function main(
     else problems.push(...existingFieldProblems(created, new Set(existing), entities));
   }
   problems.push(...fieldProblems(fields, entities));
+  // A rollup reads a relationship field of its child: one among the items being written is read as they have it, the rest from the host.
+  const written = new Set(fields.filter((f) => typeof f.format === "string").map((f) => `${f.table_name}.${f.field_name}`));
+  const unread = [...new Set(fields.map(rollupRelationshipOf).filter((l): l is [string, string] => !!l).map(([child, name]) => `${child}.${name}`).filter((id) => !written.has(id)))];
+  const refs = unread.length ? await readFieldRefs(unread) : [];
+  if (!refs) problems.push("the relationship fields its rollups read could not be read from the host, so their link_field was not checked; check the connection and run it again.");
+  else problems.push(...rollupRelationshipProblems(fields, refs));
   problems.push(...lifecycleProblems(file, fields, tool));
   if (tool === "create_field") problems.push(...relationshipFileProblems(file, created));
   if (tool === "create_entity") problems.push(...labelColumnProblems(entityItems(tool, payload)));
@@ -651,7 +744,7 @@ export async function main(
     print(`${file}: valid for ${tool}${checked ? `; ${checked} permission name(s) found on the host` : ""}; nothing sent`);
     return 0;
   }
-  return send(tool, JSON.stringify(payload));
+  return send(tool, JSON.stringify(payload), raw);
 }
 
 if (import.meta.main) process.exit(await main(process.argv.slice(2)));
