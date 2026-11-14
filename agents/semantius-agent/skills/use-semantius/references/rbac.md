@@ -77,7 +77,7 @@ The names are the same in every install order: when `ats-candidate-crm` installs
 
 ## Choosing an entity's permissions
 
-An entity's `view_permission` and `edit_permission` follow from its class (`data-modeling.md` → "Classifying an entity"). The class gives the **write tier**, the permission level that gates INSERT, UPDATE and DELETE. Choose the class first, then take the permissions from this section, and send all three in the `create_entity` payload.
+An entity's `view_permission` and `edit_permission` follow from its class (`data-modeling.md` → "Classifying an entity"). The class gives the **write tier**, the permission level that gates INSERT, UPDATE and DELETE. Choose the class first, then take the permissions from this section, and send all three in the `create_entity` payload. `writeModel` and `call-file.ts` refuse a payload whose `edit_permission` is `<slug>:read`, `<slug>:manage` or `<slug>:admin` but not the tier of its `entity_type` (a `catalog` at `:admin`, an `operational_record` or `operational_workflow` at `:manage`); a `junction`, a `computed` entity and a `<slug>:write_<entity>` are not checked.
 
 | Write tier | Entities | Hand-built module (module-wide) | Spec-deployed module (per entity) |
 |---|---|---|---|

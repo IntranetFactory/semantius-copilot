@@ -24,7 +24,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { coverageProblems, labelColumnProblems, lifecycleNameProblems, lifecyclesOf, planAccess, shapeProblems, type AccessRecord } from "./access-rules";
-import { FIELD_FORMATS as FORMATS, fieldProblems, iconProblems, keyProblems, madeFieldProblems, rollupRelationshipProblems, type EntityInfo } from "./call-file";
+import { FIELD_FORMATS as FORMATS, fieldProblems, iconProblems, keyProblems, labelReadProblems, madeFieldProblems, rollupRelationshipProblems, writeTierProblems, type EntityInfo } from "./call-file";
 import { relationshipProblems, type RelationshipRecord } from "./relationship-rules";
 
 export type Logic = unknown;
@@ -265,6 +265,8 @@ const NO_EMPTY_VALUE = new Set(["boolean", "integer", "int32", "int64", "number"
  *   (`data-modeling.md` → "Fields that apply only to some enum or boolean values");
  * - a field its `input_type_rule` shows `readonly` while no `computed_fields` rule of its entity fills it;
  * - a `computed_fields` entry that fills neither a field of the model nor the label column;
+ * - a `computed_fields` or `validation_rules` rule that reads `_label` or `<fk>_label`, which the record being written does not hold;
+ * - an entity whose `edit_permission` is not the write tier of its class (`catalog` at `:admin`, an operational class at `:manage`);
  * - a `workflow_state` whose states the access record does not cover, and every problem of the record itself;
  * - a `parent` field without an entry in the relationship record whose facts make it a parent, an entry whose format
  *   is not its field's, and every other problem of that record (`relationship-rules.ts`).
@@ -304,7 +306,8 @@ export function modelProblems(entities: ReadonlyArray<any>, fields: ReadonlyArra
       if (!own.has(name)) out.push(`${e.table_name}: computed_fields fills ${c?.name}, which is neither a field of this model nor the label column; add the field or fix the name.`);
     }
   }
-  out.push(...entityPermissionProblems(entities));
+  out.push(...labelReadProblems(entities, fields));
+  out.push(...entityPermissionProblems(entities), ...writeTierProblems(entities));
   out.push(...accessProblems(entities, fields, access));
   out.push(...relationshipProblems(fields, relationships, access, "relationships (writeModel)"));
   return out;

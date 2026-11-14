@@ -355,6 +355,7 @@ Every entity exposes a read-only **`_label`** — its composed, human-readable l
 - **Select them explicitly by name** — `select=id,_label,customer_id_label`. They are not authored fields (absent from the `fields` catalog; `read_field` never returns them) and are **not** included in `select=*`.
 - **Names are deterministic, so no discovery call is needed:** `_label` on the entity, and `<fk>_label` on each `reference`/`parent` FK (the FK field name + `_label`). (`get_schema` is a verbose database function, `POST /rpc/get_schema` with `p_table_name`, not a skill tool — don't use it to find these; a token-optimized tool is planned.)
 - **Read-only.** Never `create_field`, write, or import into `_label` / `<fk>_label`; the platform owns them and computes them at read time.
+- **Not inside a rule.** A read adds them, so a `computed_fields` or `validation_rules` rule that reads one gets null. A rule reads a related record's stored label column with `set_record` (`jsonlogic.md`).
 
 **Displaying a parent's label — prefer `select=X_label` over embedding.** To show a parent's name beside a child row, select the FK companion (`select=id,interview_id_label`) rather than PostgREST resource embedding (`select=id,interviews(label)`). The companion returns the parent's *composed* `_label`, respects the caller's row-level read permissions, and avoids the join.
 

@@ -226,6 +226,90 @@ export function keyProblems(tool: string, items: ReadonlyArray<any>): string[] {
   return out;
 }
 
+/** The names a rule reads with `var`: `{"var": "a"}` and `{"var": ["a", fallback]}`; a name that is itself an expression is not one. */
+function varNames(logic: unknown, out: string[] = []): string[] {
+  if (Array.isArray(logic)) for (const x of logic) varNames(x, out);
+  else if (logic && typeof logic === "object") {
+    for (const [key, value] of Object.entries(logic as Record<string, unknown>)) {
+      if (key !== "var") { varNames(value, out); continue; }
+      const [name, ...fallback] = Array.isArray(value) ? value : [value];
+      if (typeof name === "string") out.push(name); else varNames(name, out);
+      varNames(fallback, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * The `computed_fields` and `validation_rules` of `entities` (`create_entity` / `update_entity` items) that read `_label`
+ * or `<fk>_label`. Those are projections a read adds, not columns of the record being written, so inside a write-side rule
+ * they read as null and a `concat` renders them as "" (data-modeling.md → "Choosing the label"). A name is one when its
+ * last segment is `_label`, ends in `_id_label`, or is a relationship field of the entity (a `reference` or `parent` field
+ * among `fields`) plus `_label`. A plain `status_label` is a stored column and passes.
+ * One problem per rule, naming every such read. When a read is `<fk>_label` of the entity's own relationship field, the
+ * message gives the `composedLabel` call that reads that related record's stored label column: with the table from the
+ * field's `reference_table` and the column from the related entity's `label_column` when `fields` and `entities` have
+ * them, otherwise with `<table>` and `<label column>` to fill in.
+ */
+export function labelReadProblems(entities: ReadonlyArray<any>, fields: ReadonlyArray<any> = []): string[] {
+  const relationships = new Map<string, Map<string, any>>();
+  for (const f of fields) {
+    if (!["reference", "parent"].includes(f?.format) || typeof f.table_name !== "string" || typeof f.field_name !== "string") continue;
+    relationships.set(f.table_name, (relationships.get(f.table_name) ?? new Map<string, any>()).set(f.field_name, f));
+  }
+  const labelColumnOf = (table: unknown): string | undefined => entities.find((x) => x?.table_name === table)?.label_column;
+  const out: string[] = [];
+  for (const e of entities) {
+    const own = relationships.get(String(e?.table_name));
+    for (const [kind, noun] of [["computed_fields", "computed_fields rule"], ["validation_rules", "validation rule"]] as const) {
+      for (const rule of Array.isArray(e?.[kind]) ? e[kind] : []) {
+        const reads = [...new Set(varNames(rule?.jsonlogic).filter((path) => {
+          const last = path.split(".").pop() ?? "";
+          if (last === "_label" || last.endsWith("_id_label")) return true;
+          const ownRecord = !path.includes(".") || path.startsWith("$old.");
+          return ownRecord && last.endsWith("_label") && !!own?.has(last.slice(0, -"_label".length));
+        }))];
+        if (!reads.length) continue;
+        const parts = [...new Set(reads.filter((p) => !p.includes(".") || p.startsWith("$old.")).map((p) => (p.split(".").pop() ?? "").slice(0, -"_label".length)).filter(Boolean))].map((via) => {
+          const table = own?.get(via)?.reference_table ?? "<table>";
+          return `{ via: "${via}", table: "${table}", column: "${labelColumnOf(table) ?? "<label column>"}" }`;
+        });
+        const call = parts.length ? `composedLabel("${rule?.name}", [${parts.join(", ")}])` : "composedLabel(field, [{ via, table, column }])";
+        const instead = kind === "computed_fields"
+          ? `jsonlogic-kit.ts builds that rule: ${call} (data-modeling.md, "Choosing the label")`
+          : `in jsonlogic-kit.ts, setRecord(name, table, id, body) reads a related record, and the body reads \`<name>.<column>\` (jsonlogic.md, "Cross-entity lookups inside JsonLogic")`;
+        out.push(
+          `${e.table_name}: the ${noun} ${rule?.name} reads ${reads.map((p) => `"${p}"`).join(", ")}, which a read adds and the record being written does not hold: inside a rule ` +
+          `${reads.length > 1 ? "they read" : "it reads"} as null, and a concat renders ${reads.length > 1 ? "them" : "it"} as "". Read the related record's stored column with set_record; ${instead}.`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/** The write tier of each class that has exactly one (rbac.md → "Choosing an entity's permissions"); a junction follows the entities it relates, so it has none here. */
+const WRITE_TIER: Readonly<Record<string, string>> = { catalog: "admin", operational_record: "manage", operational_workflow: "manage" };
+
+/**
+ * The `create_entity` / `update_entity` items whose `edit_permission` is a tier of the module (`<slug>:read`, `<slug>:manage`
+ * or `<slug>:admin`) other than the one their class is written at. An item with no `entity_type`, a class without a single
+ * tier, or a permission that is no tier (a `<slug>:write_<entity>` the access pass makes) is not checked here.
+ */
+export function writeTierProblems(entities: ReadonlyArray<any>): string[] {
+  const out: string[] = [];
+  for (const e of entities) {
+    const tier = WRITE_TIER[String(e?.entity_type)];
+    const permission = e?.edit_permission;
+    if (!tier || typeof permission !== "string" || !permission.includes(":")) continue;
+    const cut = permission.lastIndexOf(":");
+    const [slug, level] = [permission.slice(0, cut), permission.slice(cut + 1)];
+    if (!["read", "manage", "admin"].includes(level) || level === tier) continue;
+    out.push(`${e.table_name}: edit_permission is ${permission}, but the ${e.entity_type} class is written at the ${tier} tier: ${slug}:${tier} (rbac.md, "Choosing an entity's permissions").`);
+  }
+  return out;
+}
+
 /**
  * The `create_field` items for fields that already exist on the host (`existing` holds their ids), other than those
  * `create_entity` made: such a payload was most likely sent before, and one of its rows fails the whole call with 23505.
@@ -671,6 +755,7 @@ export async function main(
   const fields = fieldItems(tool, payload);
   problems.push(...keyProblems(tool, [...fields, ...entityItems(tool, payload)]));
   problems.push(...iconProblems(entityItems(tool, payload), fields));
+  problems.push(...labelReadProblems(entityItems(tool, payload), fields), ...writeTierProblems(entityItems(tool, payload)));
   const prefixed = entityItems(tool, payload).filter((e) => typeof e.id_prefix === "string" && e.id_prefix !== "");
   if (prefixed.length) {
     const taken = await readPrefixes([...new Set(prefixed.map((e) => e.id_prefix as string))]);

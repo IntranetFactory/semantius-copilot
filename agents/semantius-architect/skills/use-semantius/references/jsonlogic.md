@@ -33,7 +33,7 @@ Both are first-class entity properties: read with `read_entity`, set on `create_
 ```
 
 - `name` (string, required) — the scalar field of the same entity that receives the result. It is not checked when the rule is saved: a rule may name a field that does not exist yet, and it fills the field in once the field is added. May reference a JSONB sub-property via dotted notation (e.g. `"metadata.rice"`).
-- `jsonlogic` (object, required) — evaluated against the merged record (caller payload + values written by earlier `computed_fields` entries).
+- `jsonlogic` (object, required) — evaluated against the merged record (caller payload + values written by earlier `computed_fields` entries). That record holds stored columns only: `_label` and every `<fk>_label` are added by a read, so a rule that reads one gets null. `writeModel` and `call-file.ts` refuse such a rule; to use a related record's label, read its stored label column with `set_record` (below), as `composedLabel` does.
 - `description` (string, optional) — human note for future readers and agents.
 
 #### `validation_rules` element shape
@@ -393,6 +393,8 @@ composedLabel("enrollment_name", [
   { via: "course_id", table: "courses", column: "course_title" },
 ]);
 ```
+
+Do not write the label by hand over `<fk>_label`: `{"concat": [{"var": "student_id_label"}, " – ", {"var": "course_id_label"}]}` stores only the separator on every record, because the record being written has no `student_id_label`. `writeModel` and `call-file.ts` refuse it.
 
 The `computed_fields` entry of `enrollments` it returns:
 

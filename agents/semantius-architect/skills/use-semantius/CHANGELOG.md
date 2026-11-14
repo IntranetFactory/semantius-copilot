@@ -2,6 +2,16 @@
 
 This file is history, not contract: it is **not** loaded into context at runtime. The body of `SKILL.md` is always the current contract. Newest entries first.
 
+## A rule that reads a read-time label and an entity at the wrong write tier are refused
+
+2026-11-14. Asked for by Martin Amm after a run that built a recruiting module. Three label columns were filled by a hand-written `concat` over `<fk>_label`, so they stored the separators and little else, and a `catalog` entity was created at `:manage` and repaired by hand afterward. Both are now refused before anything is sent.
+
+- `call-file.ts` and `writeModel`: a `computed_fields` or `validation_rules` rule that reads `_label`, a name ending in `_id_label`, or the `<fk>_label` of one of the entity's own relationship fields (known to `writeModel` from `fields`) is refused. One message per rule names every such read. For a `computed_fields` rule it gives the `composedLabel` call to use, with the table and label column filled in when the model has them; for a `validation_rules` rule it points to `setRecord`. A stored `status_label` passes. `select_rule` and `input_type_rule` are not checked.
+- `call-file.ts` and `writeModel`: an entity whose `edit_permission` is `<slug>:read`, `<slug>:manage` or `<slug>:admin` but not the tier of its `entity_type` (`catalog` at `:admin`, `operational_record` and `operational_workflow` at `:manage`) is refused, and the message names the permission to use. A `junction`, a `computed` entity, an item without `entity_type` and a `<slug>:write_<entity>` are not checked.
+- `jsonlogic.md` ("`computed_fields` element shape" and the `composedLabel` example), `data-modeling.md` ("Choosing the label" and the `call-file.ts` list), `crud-tools.md` ("Composed labels"), `rbac.md` ("Choosing an entity's permissions") and `SKILL.md` (the `call-file.ts` row) say so.
+- `scripts/call-file.test.ts` and `scripts/jsonlogic-kit.test.ts` cover both checks.
+- `flows.md` has no row about these checks: a search of the whole file for `writeModel`, `call-file`, `computed`, `composedLabel`, `jsonlogic` and `edit_permission` found nothing, and no question, step, order or flow changed. The file format is unchanged; `version` stays `3.1`.
+
 ## Typeid only for a family or on request, and the key prefix is the singular
 
 2026-11-14. Asked for by Martin Amm, who wanted `typeid` kept to `is_a` / `has_a` families and to what a human asks for, and the entity's singular as the prefix again. This replaces "every new entity takes `typeid`, except a junction and a based entity" and the 2 to 6 letter prefix of the entries of 2026-11-12. The label rule ("Choosing the label") is unchanged.
